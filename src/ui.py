@@ -185,6 +185,25 @@ def print_reasoning(text: str, is_chunk: bool = False):
             print(f"\n--- [Düşünme] ---\n{text}\n-----------------\n")
 
 
+def print_command_output(line: str, stream: str = "stdout"):
+    """Prints a single line of live command output (stdout/stderr).
+
+    stderr lines are dimmed/red-tinted so they stand out from normal output.
+    The trailing newline is preserved so output flows naturally.
+    """
+    text = line.rstrip("\n")
+    if HAVE_RICH:
+        if stream == "stderr":
+            console.print(f"[dim red]{text}[/dim red]", highlight=False)
+        else:
+            console.print(text, highlight=False)
+    else:
+        if stream == "stderr":
+            print(f"\033[2;31m{text}\033[0m")
+        else:
+            print(text)
+
+
 def print_tool_call(tool_name: str, arguments: dict):
     """Displays a tool invocation block."""
     arg_summary = ", ".join(f"{k}={repr(v)}" for k, v in arguments.items())

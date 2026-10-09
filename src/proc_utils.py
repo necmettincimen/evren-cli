@@ -14,10 +14,13 @@ This module provides a cross-platform process-tree kill, mirroring the C#
 from __future__ import annotations
 
 import os
+import queue
 import signal
 import subprocess
 import sys
-from typing import Any
+import threading
+import time
+from typing import Any, Generator
 
 
 def _kill_tree_windows(pid: int) -> None:
@@ -117,3 +120,137 @@ def run_with_tree_kill(
         except Exception:
             out, err = "", ""
         return -1, out or "", err or "", True
+
+
+def _reader_thread(stream, sink: "queue.Queue[tuple[str, str | None]]", tag: str) -> None:
+    """Reads lines from `stream` and pushes (tag, line) tuples into `sink`.
+
+    A final (tag, None) sentinel is pushed when the stream reaches EOF so the
+    consumer knows this stream is finished.
+    """
+    try:
+        for line in iter(stream.readline, ""):
+            sink.put((tag, line))
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+        sink.put((tag, None))
+
+
+def stream_with_tree_kill(
+    command: str | list[str],
+    *,
+    cwd: str | None = None,
+    timeout: float | None = None,
+    shell: bool = False,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> Generator[tuple[str, str], None, tuple[int, str, str, bool]]:
+    """Runs a command and yields output lines live as they are produced.
+
+    Yields ``(stream_name, line)`` tuples where ``stream_name`` is ``"stdout"``
+    or ``"stderr"`` and ``line`` includes its trailing newline. This lets the
+    caller render command output in real time instead of waiting for the whole
+    process to finish.
+
+    The generator's return value (via ``StopIteration.value``) is the same
+    ``(returncode, stdout, stderr, timed_out)`` tuple as ``run_with_tree_kill``,
+    so callers can still capture the full output and exit status.
+
+    On timeout the whole process tree is killed (grandchildren included).
+    """
+    kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": encoding,
+        "errors": errors,
+        "shell": shell,
+        "bufsize": 1,  # line-buffered so output arrives promptly
+    }
+    kwargs.update(_popen_kwargs_for_group())
+
+    proc = subprocess.Popen(command, **kwargs)
+
+    sink: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
+    threads = [
+        threading.Thread(target=_reader_thread, args=(proc.stdout, sink, "stdout"), daemon=True),
+        threading.Thread(target=_reader_thread, args=(proc.stderr, sink, "stderr"), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    open_streams = 2
+    timed_out = False
+    deadline = (time.monotonic() + timeout) if timeout else None
+
+    try:
+        while open_streams > 0:
+            # Compute how long we may block waiting for the next line.
+            wait = 0.2
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                wait = min(wait, remaining)
+
+            try:
+                tag, line = sink.get(timeout=wait)
+            except queue.Empty:
+                # No output yet; check whether the process already exited.
+                if proc.poll() is not None and sink.empty():
+                    break
+                continue
+
+            if line is None:
+                open_streams -= 1
+                continue
+
+            if tag == "stdout":
+                stdout_parts.append(line)
+            else:
+                stderr_parts.append(line)
+            yield tag, line
+
+        if timed_out:
+            kill_process_tree(proc.pid)
+
+        # Wait for the process to finish (or be reaped after the kill).
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc.pid)
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+        # Drain any remaining buffered lines so nothing is lost.
+        while True:
+            try:
+                tag, line = sink.get_nowait()
+            except queue.Empty:
+                break
+            if line is None:
+                continue
+            if tag == "stdout":
+                stdout_parts.append(line)
+            else:
+                stderr_parts.append(line)
+            yield tag, line
+
+    finally:
+        for t in threads:
+            t.join(timeout=1)
+
+    if timed_out:
+        return -1, "".join(stdout_parts), "".join(stderr_parts), True
+    return proc.returncode, "".join(stdout_parts), "".join(stderr_parts), False

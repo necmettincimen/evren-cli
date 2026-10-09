@@ -9,7 +9,7 @@ falling back to a hardcoded value when the package is not installed
 import re
 from pathlib import Path
 
-_FALLBACK_VERSION = "0.9.0"
+_FALLBACK_VERSION = "0.10.0"
 
 # CHANGELOG.md lives at the repository root (one level above the src package).
 _CHANGELOG_PATH = Path(__file__).resolve().parents[1] / "CHANGELOG.md"

@@ -94,6 +94,58 @@ def save_api_keys(keys: list[str]) -> Path:
     return path
 
 
+def prompt_for_api_key() -> str | None:
+    """Interactively prompts the user for an EVREN API key and persists it.
+
+    Used as a fallback when no key is found in the environment, .env or
+    ~/.evren-cli/config.json. The entered key is saved to config.json and
+    exported to the environment so the current process (and future runs) can
+    use it immediately.
+
+    Returns the key on success, or None if the user aborts / no TTY is present.
+    """
+    import sys
+
+    # Only prompt when we have an interactive terminal; otherwise the caller
+    # should surface a clear configuration error instead of hanging.
+    if not sys.stdin.isatty():
+        return None
+
+    try:
+        from src.ui import print_info, print_warning
+    except Exception:  # pragma: no cover - UI is optional
+        def print_info(msg):  # type: ignore
+            print(f"[*] {msg}")
+
+        def print_warning(msg):  # type: ignore
+            print(f"[!] {msg}")
+
+    print_warning("EVREN_API_KEY bulunamadı.")
+    print_info(
+        "EVREN LLM API anahtarınızı girin (format: evren_llm_...). "
+        "Anahtar ~/.evren-cli/config.json dosyasına kaydedilecek."
+    )
+    try:
+        key = input("EVREN API Anahtarı: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return None
+
+    if not key:
+        return None
+
+    # Persist for future runs and export for the current process.
+    try:
+        save_api_keys([key])
+    except Exception as e:  # pragma: no cover - disk errors are non-fatal
+        print_warning(f"Anahtar kaydedilemedi ({e}); yalnızca bu oturum için kullanılacak.")
+
+    os.environ["EVREN_API_KEY"] = key
+    os.environ["EVREN_API_KEYS"] = key
+    print_info("API anahtarı ayarlandı.")
+    return key
+
+
 def _load_legacy_evren_cli_config():
     """Surfaces ApiKeys / BaseUrl from config.json into env when unset."""
     data = load_legacy_config()

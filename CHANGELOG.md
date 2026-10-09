@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.10.0] - 2026-10-09
+
+### Eklendi
+- **Canlı komut çıktısı (streaming):** `run_command` aracı ve REPL `/run` komutu artık çıktıyı satır satır, üretildiği anda gösterir (stdout normal, stderr soluk kırmızı). Uzun süren test/derleme komutlarında ilerleme anbean izlenir.
+- Yeni `stream_with_tree_kill()` (`src/proc_utils.py`): stdout/stderr'i ayrı okuyucu thread'lerle canlı akıtır; timeout'ta tüm süreç ağacını yine sonlandırır ve tam çıktı + çıkış kodunu döndürür.
+- Yeni `print_command_output()` (`src/ui.py`): komut çıktısı satırlarını akışa uygun biçimde renklendirir.
+- `tests/test_proc_utils.py`: canlı akış ve timeout davranışı için yeni testler.
+
+### Düzeltildi
+- **API anahtarı yoksa çökme giderildi:** `EVREN_API_KEY` bulunamadığında `ValueError` fırlatmak yerine kullanıcıdan interaktif olarak anahtar sorulur ve `~/.evren-cli/config.json` dosyasına kaydedilir; diğer ayarlar (base_url, model, max_tokens, temperature) varsayılan değerlerine düşer.
+
 ## [0.9.0] - 2026-10-08
 
 ### Eklendi

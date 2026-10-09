@@ -16,12 +16,13 @@ from src.file_ops import (
     is_safe_path,
 )
 from src.diff_viewer import generate_unified_diff, apply_replacement, apply_edits
-from src.proc_utils import run_with_tree_kill
+from src.proc_utils import run_with_tree_kill, stream_with_tree_kill
 from src.ui import (
     print_diff,
     prompt_confirm,
     print_warning,
     print_info,
+    print_command_output,
 )
 
 # OpenAI Function Calling Tools Specification
@@ -503,14 +504,24 @@ def tool_run_command(
             return "İPTAL EDİLDİ: Kullanıcı terminal komutunun çalıştırılmasını reddetti."
 
     try:
-        # run_with_tree_kill guarantees grandchildren (msbuild/node) are killed
-        # on timeout, not just the direct shell child.
-        code, out, err, timed_out = run_with_tree_kill(
+        # stream_with_tree_kill yields output lines live (so the user can watch
+        # progress) and guarantees grandchildren (msbuild/node) are killed on
+        # timeout, not just the direct shell child. Its return value carries the
+        # full captured output + exit status.
+        gen = stream_with_tree_kill(
             command,
             cwd=str(root),
             timeout=timeout,
             shell=True,
         )
+        code, out, err, timed_out = -1, "", "", False
+        try:
+            while True:
+                stream_name, line = next(gen)
+                print_command_output(line, stream=stream_name)
+        except StopIteration as stop:
+            code, out, err, timed_out = stop.value
+
         out = out.strip()
         err = err.strip()
 

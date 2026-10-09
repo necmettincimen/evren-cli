@@ -98,6 +98,16 @@ class EvrenClient:
         else:
             self.key_pool = ApiKeyPool(base_url=self.base_url)
 
+        # No key found anywhere: prompt the user interactively (and persist it)
+        # instead of crashing. Other settings (base_url, model, max_tokens,
+        # temperature) already fall back to their defaults above.
+        if self.key_pool.is_empty():
+            from src.config import prompt_for_api_key
+
+            entered = prompt_for_api_key()
+            if entered:
+                self.key_pool = ApiKeyPool([entered], base_url=self.base_url)
+
         if self.key_pool.is_empty():
             raise ValueError(
                 "EVREN_API_KEY bulunamadı. Lütfen .env dosyanızı veya ortam değişkeninizi ayarlayın."
