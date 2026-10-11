@@ -176,6 +176,39 @@ class TestAgentLoop(unittest.TestCase):
         self.assertTrue(self.session.continue_task().startswith("HATA:"))
         self.client.chat_stream_assembled.assert_not_called()
 
+    def test_execute_followup_uses_completed_turn_history_and_original_goal(self):
+        self.client.chat_stream_assembled.return_value = response("Discovery done; approval required")
+        self.session.run_step("configure databases")
+        history = deepcopy(self.session.messages)
+        self.client.chat_stream_assembled.return_value = response("done")
+        self.assertEqual(self.session.execute_followup("hepsine onay veriyorum"), "done")
+        self.assertEqual(self.session.messages[:len(history)], history)
+        self.assertEqual(self.session.task_goal, "configure databases")
+        request = self.client.chat_stream_assembled.call_args.kwargs["messages"]
+        self.assertIn("hepsine onay veriyorum", request[-2]["content"])
+        self.assertIn("configure databases", request[-2]["content"])
+
+    def test_execute_without_prior_task_never_calls_model(self):
+        self.assertTrue(self.session.execute_followup("yap artık").startswith("HATA:"))
+        self.client.chat_stream_assembled.assert_not_called()
+
+    def test_execute_followup_does_not_override_read_only_mode(self):
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call('{"command":"hostname"}')],
+        )
+        with patch("src.agent.execute_tool_call", return_value="local"):
+            self.session.run_step("ask: inspect", max_steps=1)
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call('{"path":"a.py","content":"x"}', "write_file")],
+        )
+        approval = self.session.auto_approve
+        with patch("src.agent.execute_tool_call") as execute:
+            self.session.execute_followup("hepsine onay veriyorum", max_steps=1)
+        execute.assert_not_called()
+        self.assertEqual(self.session.pending_mode, AgentMode.ASK)
+        self.assertEqual(self.session.auto_approve, approval)
+        self.assertEqual(self.session.mode, AgentMode.NORMAL)
+
     def test_continue_retains_read_only_turn_mode_and_can_pause_again(self):
         self.client.chat_stream_assembled.return_value = response(
             "", "tool_calls", [tool_call('{"command": "hostname"}')],

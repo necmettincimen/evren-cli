@@ -33,9 +33,16 @@ Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞT
 ZORUNLU NETLEŞTİRME (CLARIFY) ADIMI — HER PROMPT İÇİN İLK ADIM:
 0. Her kullanıcı isteğinde, işe başlamadan ÖNCE bir netleştirme adımı çalıştır. İsteği analiz et ve belirsiz/eksik/çok anlamlı noktaları tespit et.
    - Belirsizlik varsa (amaç, kapsam, hedef dosya/modül, beklenen çıktı, riskli işlem, eksik girdi/kısıt) MUTLAKA 'ask_user' aracıyla kullanıcıya sor. Tahmin etme, varsayımda bulunma.
-   - Netleştirme tamamlanmadan yazma işlemlerine (edit_file/write_file/run_command) BAŞLAMA.
+   - Netleştirme tamamlanmadan dosya veya ortamı değiştiren işlemlere BAŞLAMA.
+     Salt-okuma run_command/view_file/list_directory ile keşif yapabilirsin.
    - İstek zaten tamamen açık, tek anlamlı ve düşük riskliyse veya kullanıcı açıkça "soru sorma, doğrudan yap" dediyse bu adımı atlayabilirsin; ancak emin olmadığın bir nokta kalırsa yine sor.
    - Netleştirme sonrası anlaşılan işi kısa bir özetle teyit et; gerekirse kind=confirm ile onay al.
+   - Bu kontrol her turda soru sormak değildir. Önceki görev, form yanıtları ve verilmiş onayları kullan.
+     "Yap artık", "hepsine onay veriyorum" gibi takip yanıtlarında asıl görevi tekrar sorma.
+     Yanıtlanmış kararı yeniden onaylatma; salt-okuma araçlarıyla bulunabilecek ayrıntıları keşfet.
+     Yalnızca yeni ve gerçekten bloklayıcı belirsizlik veya kapsam dışı risk için soru sor.
+     Kullanıcının son açık onayı eski "onay bekliyor" durumunu günceller; ancak araç izinlerini,
+     salt-okuma kipini, SSH allow_write ayarını veya komut onay mekanizmasını geçersiz kılmaz.
 
 TEMEL ÇALIŞMA KURALLARI:
 1. İncelemeden değiştirme: Bir dosyayı değiştirmeden önce mutlaka 'view_file' veya 'list_directory' ile dosyanın güncel halini oku.
@@ -208,6 +215,30 @@ class AgentSession:
             self.workspace_root, self.messages, self.pending_mode, self.model, vars(self.frame),
             self.task_goal,
         )
+
+    def execute_followup(self, text: str, max_steps: int = 30) -> str:
+        """Use existing task context without preparing a new brief or changing permissions."""
+        if not self.task_goal or not any(m.get("role") == "user" for m in self.messages):
+            error = "HATA: Uygulanacak önceki görev yok; önce somut bir Brief yazın."
+            print_warning(error)
+            return error
+        goal = self.task_goal
+        mode = self.mode
+        self.mode = self.pending_mode or self.mode
+        try:
+            return self.run_step(
+                f"Asıl görev:\n{goal}\n\nKullanıcının takip yanıtı:\n{text}\n\n"
+                "Mevcut geçmiş, netleştirme yanıtları ve kullanıcı onaylarıyla ilerle. "
+                "Görevin ne olduğunu tekrar sorma; aynı formu veya onayları tekrarlama. "
+                "Son onayı geçmişteki onay bekleyen maddelerle eşleştir; kapsam dışı "
+                "iş veya eksik araç izni için onay varsayma. Salt-okuma kipini ve "
+                "SSH yazma izinlerini koru. Yeni gerçek engel yoksa sıradaki uygulama "
+                "adımını yap; engel varsa somut nedeni ve gereken tek eylemi bildir.",
+                max_steps=max_steps,
+            )
+        finally:
+            self.task_goal = goal
+            self.mode = mode
 
     def restore_checkpoint(self) -> bool:
         from src.workflow_state import load_checkpoint

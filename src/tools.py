@@ -289,7 +289,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ask_user",
-            "description": "Belirsizlikleri netleştirmek (clarify) veya onay almak için kullanıcıya soru sorar. Her promptta işe başlamadan önce belirsiz noktaları bu araçla netleştir; tahmin etme. kind=confirm ise olumlu yanıt plan→normal geçişini tetikler.",
+            "description": "Yalnızca geçmiş/form yanıtlarında çözülmemiş, gerçekten bloklayıcı belirsizlik veya yeni risk için soru sorar. Verilmiş onayı ya da yanıtlanmış soruyu tekrarlama; araçlarla keşfedilebilecek ayrıntıları kullanıcıya sorma. kind=confirm ise olumlu yanıt plan→normal geçişini tetikler.",
             "parameters": {
                 "type": "object",
                 "properties": {

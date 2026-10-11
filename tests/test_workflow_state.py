@@ -213,6 +213,31 @@ def test_decision_corruption_is_explicit_not_silent(tmp_path):
     with pytest.raises(ValueError, match="Karar günlüğü"):
         load_decisions(tmp_path)
 
+def test_followup_wrapper_routes_without_form_or_automatic_approval(tmp_path):
+    from src.repl import _run_agent
+
+    session = paused_session(tmp_path)
+    with patch.object(session, "execute_followup") as execute, \
+         patch.object(session, "run_step") as run, \
+         patch("src.repl.prompt_confirm", return_value=False):
+        _run_agent(session, "yap artık", followup=True)
+    execute.assert_called_once_with("yap artık")
+    run.assert_not_called()
+    assert not checkpoint_path(tmp_path).exists()
+
+
+def test_followup_without_in_memory_task_keeps_saved_checkpoint(tmp_path):
+    from src.repl import _run_agent
+
+    session = paused_session(tmp_path)
+    session.save_checkpoint()
+    saved = checkpoint_path(tmp_path).read_bytes()
+    session.clear_history()
+    with patch.object(session.client, "chat_stream_assembled") as request:
+        _run_agent(session, "yap artık", followup=True)
+    request.assert_not_called()
+    assert checkpoint_path(tmp_path).read_bytes() == saved
+
 
 def test_all_blocker_routes_use_registered_diagnostics():
     from src.diagnostics import get_diagnostic

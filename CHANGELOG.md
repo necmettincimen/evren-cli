@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.12.1] - 2026-10-11
+
+### Eklendi
+- `/execute <yanıt>` mevcut görev geçmişine form hazırlamadan onay veya takip yanıtı gönderir.
+
+### Düzeltildi
+- Brief satırındaki "yap artık", "uygula" ve "onay veriyorum" gibi kısa takip yanıtları yeni görev sayılmaz; mevcut hedef ve konuşma geçmişi korunur.
+- Netleştirme sırasında "yap artık", "soru sorma" veya "devam" yanıtı kalan form ve önerileri atlar; Brief, önceki yanıtlar ve çözülemeyen sorular korunarak salt-okuma keşfine geçilir.
+- Ajan talimatları verilmiş onayların ve yanıtlanmış soruların tekrarını önler; salt-okuma keşfi netleştirme öncesinde de yapılabilir. SSH yazma izinleri, kip kısıtlamaları ve komut onayları korunur.
+- Önceki görev bulunmadığında açık uyarı verilir; diskteki checkpoint silinmez. Takip yönlendirmesi, sıfır hazırlık API çağrısı ve izin sınırları için regresyon testleri eklendi.
+
 ## [0.12.0] - 2026-10-11
 
 ### Eklendi

@@ -133,6 +133,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-global.ps1 -Venv
 
 ## 💻 Kullanım Biçimleri
 
+Mevcut göreve “yap artık”, “uygula” veya “hepsine onay veriyorum” yanıtı
+verdiğinizde yeni Brief/form hazırlığı yapılmaz; yanıt mevcut görev geçmişine
+aktarılır. Diğer takip yanıtları için `/execute <yanıt>` kullanabilirsiniz.
+Önceki görev yoksa açık uyarı verilir. Bu kısa yol otomatik onayı açmaz,
+salt-okuma/plan kipini veya SSH yazma izinlerini değiştirmez.
+Netleştirme sorusunun yanıtına “yap artık”, “soru sorma” veya “devam”
+yazarsanız kalan form/öneri adımları atlanır; mevcut Brief ve önceki yanıtlar
+korunarak önce salt-okuma keşfine geçilir. Eksik mimari kararlar uydurulmaz.
+
 Ajan adım sınırında durduğunda Brief satırına `devam` veya `/continue` yazın.
 Form ve netleştirme tekrarlanmaz; mevcut sohbet/araç sonuçları ve görev kipi
 korunarak yeni 30 adımlık bütçe başlatılır. Her yeni sınırda tekrar devam

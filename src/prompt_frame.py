@@ -9,6 +9,7 @@ itself, so they ride on the user message. Blank lines are omitted.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Callable, TYPE_CHECKING
 
@@ -31,6 +32,7 @@ FORM_INTRO = (
     "Her öneride Enter=kabul, yeni metin=düzenle, -=boş bırak. "
     "Rol ve Çerçeve system mesajına, Brief / Kısıt / Çıktı user mesajına gider. "
     "Tümü boşsa serbest isteğe düşersin. Slash komutunu Brief satırına yaz."
+    " Mevcut görevde yap artık/onay veriyorum formu atlar; diğer takip yanıtları: /execute <yanıt>."
 )
 
 _ROLE_NOTE = "Rol, hangi kimlikten yazacağını belirler ve genel asistan sesinin önüne geçer."
@@ -45,6 +47,20 @@ def field_prompt(label: str, hint: str, default: str = "") -> str:
         shown = default if len(default) <= 40 else default[:37] + "..."
         return f"  {label:<12} [{hint}] (Enter=önceki: {shown}) > "
     return f"  {label:<12} [{hint}] > "
+
+
+def is_execution_followup(text: str) -> bool:
+    """Recognize short execution/approval replies, not arbitrary new task briefs."""
+    normalized = " ".join(re.sub(r"[.!?,;]+", " ", text.casefold()).split())
+    return normalized in {
+        "yap", "yap artık", "artık yap", "doğrudan yap", "soru sorma doğrudan yap",
+        "uygula", "başla", "tüm görevleri yap", "hepsini yap",
+        "soru sorma", "onay veriyorum", "kabul ediyorum",
+    } or bool(re.fullmatch(
+        r"(?:hepsi|hepsine|hepsi için|tüm görevler için|tüm görevleri yap hepsine|"
+        r"tümüne|tamamını) (?:için )?onay veriyorum(?: kabul ediyorum)?",
+        normalized,
+    ))
 
 
 @dataclass
@@ -200,6 +216,8 @@ def collect_guided_prompt_frame(
     brief = (read_line(field_prompt("01 Brief", "yapılacak iş", previous.brief if previous else "")) or "").strip()
     if brief.casefold() == "devam":
         return "/continue"
+    if is_execution_followup(brief):
+        return "/execute " + brief
     if brief.startswith("/"):
         return brief
     if not brief and previous:
@@ -241,6 +259,15 @@ def collect_guided_prompt_frame(
                 return answer
             if not answer:
                 raise ValueError("Netleştirme yanıtı boş; görev başlatılmadı.")
+            if answer.casefold() == "devam" or is_execution_followup(answer):
+                frame.clarifications += (
+                    f"\nÇözülemeyen soru: {question}\nKullanıcının takip yanıtı: {answer}"
+                    "\nHazırlık kararı: Formu ve önerileri atla; mevcut bilgilerle ilerle. "
+                    "Çözülemeyen noktaları varsayma; önce salt-okuma keşfi yap. "
+                    "Bu yanıt eksik mimari kararların veya araç izinlerinin yerine geçmez."
+                )
+                frame.clarifications = frame.clarifications.strip()
+                return frame
             frame.clarifications += f"\nSoru: {question}\nYanıt: {answer}"
 
     suggestions = {}

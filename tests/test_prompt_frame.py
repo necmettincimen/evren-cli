@@ -264,6 +264,39 @@ class TestGuidedFrame(unittest.TestCase):
                 self.assertEqual(self.collect([text], guidance), "/continue")
                 guidance.assert_not_called()
 
+    def test_execution_approval_skips_entire_preparation(self):
+        for text in (
+            "yap artık", "uygula", "hepsi için onay veriyorum kabul ediyorum",
+            "hepsine onay veriyorum kabul ediyorum",
+            "tüm görevleri yap hepsine onay veriyorum",
+            "soru sorma, doğrudan yap!", "onay veriyorum", "kabul ediyorum",
+        ):
+            with self.subTest(text=text):
+                guidance = MagicMock()
+                self.assertEqual(self.collect([text], guidance), "/execute " + text)
+                guidance.assert_not_called()
+
+    def test_new_task_with_execution_words_is_not_followup(self):
+        from src.prompt_frame import is_execution_followup
+
+        for text in ("postgres cluster yap", "yap artık postgres migration", "yeni uygulama başla"):
+            self.assertFalse(is_execution_followup(text))
+
+    def test_execution_reply_during_clarification_preserves_brief_and_answers(self):
+        for answer in ("yap artık", "soru sorma", "devam", "hepsine onay veriyorum"):
+            with self.subTest(answer=answer):
+                guidance = MagicMock(side_effect=[
+                    FrameGuidance(question="Tek yazarlı mı çok yazarlı mı?"),
+                    FrameGuidance(question="Hangi sürüm?"),
+                ])
+                frame = self.collect(["iki düğümü bağla", "çok yazarlı", answer], guidance)
+                self.assertEqual(guidance.call_count, 2)
+                self.assertEqual(frame.brief, "iki düğümü bağla")
+                self.assertIn("Yanıt: çok yazarlı", frame.clarifications)
+                self.assertIn("Çözülemeyen soru: Hangi sürüm?", frame.clarifications)
+                self.assertIn("salt-okuma", frame.clarifications)
+                self.assertEqual(frame.rol, "")
+
     def test_slash_during_clarify_aborts_preparation(self):
         guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
         self.assertEqual(self.collect(["iş", "/clear"], guidance), "/clear")

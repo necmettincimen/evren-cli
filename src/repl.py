@@ -93,11 +93,17 @@ def _collect_frame(session: AgentSession, pt_session, previous=None):
     )
 
 
-def _run_agent(session: AgentSession, prompt: str | None = None) -> None:
+def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bool = False) -> None:
     """Run or continue, then offer opt-in persistence outside auto-approval."""
     from src.workflow_state import clear_checkpoint
 
-    if prompt is None:
+    if followup:
+        if prompt is None:
+            raise ValueError("Takip yanıtı boş olamaz.")
+        session.execute_followup(prompt)
+        if not session.task_goal:
+            return
+    elif prompt is None:
         session.continue_task()
     else:
         clear_checkpoint(session.workspace_root)
@@ -307,6 +313,7 @@ HELP_TEXT = """
   [green]/update[/green]               En son sürümü GitHub'dan çeker ve CLI'ı yeniden başlatır
   [green]/clear[/green]                Mevcut sohbet ve bağlam geçmişini sıfırlar
   [green]/continue[/green]             Adım sınırında duraklayan görevi geçmişle sürdürür (Brief: devam)
+  [green]/execute <yanıt>[/green]       Formu atlayarak mevcut göreve onay/takip yanıtı gönderir
   [green]/checkpoint [save|clear][/green]  Onaylı kalıcı görev kaydı
   [green]/blockers[/green]             Engelleri ve çözüm yönlendirmelerini gösterir
   [green]/check-in [update][/green]     Açık/gecikmiş/duraklamış görevleri gözden geçirir
@@ -594,6 +601,12 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                 parts = user_input.split(maxsplit=1)
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else ""
+                if cmd == "/execute":
+                    if not arg:
+                        print_warning("Kullanım: /execute <onay veya takip yanıtı>")
+                    else:
+                        _run_agent(session, arg, followup=True)
+                    continue
                 if _handle_workflow_command(cmd, arg, session, lambda label: _read_line(pt_session, label)):
                     continue
 
