@@ -150,6 +150,10 @@ Etkileşimli kalıpta önce **Brief** yazılır. Yeni Brief, önceki turun Rol,
 Çerçeve, Kısıt ve Çıktı alanlarını temizler; Brief'te Enter önceki kalıbı korur.
 Model önce gerçek belirsizlikleri tek tek sorar (en fazla üç soru), ardından
 boş alanları Brief ve netleştirme yanıtlarına göre önerir.
+Aynı soru tekrarlandığında veya üç soru sonunda belirsizlik sürdüğünde yanıtlar
+atılmaz: asıl hedefi düzeltebilir, `devam` ile önce salt-okuma keşfini seçebilir
+veya `iptal` yazabilirsiniz. Çözülemeyen sorular ve son hedef açıklaması görevle
+birlikte aktarılır; mimari ve izinler netleşmeden riskli değişiklik yapılmaması istenir.
 Uzun netleştirme soruları ve öneriler giriş satırından ayrı, terminal genişliğine
 göre sarılarak gösterilir; yanıt yazarken metnin tamamı görünür kalır. Her alan için
 **Enter** öneriyi kabul eder, yazdığınız metin önerinin yerine geçer,

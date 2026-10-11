@@ -271,10 +271,65 @@ class TestGuidedFrame(unittest.TestCase):
             self.collect(["iş", ""], lambda *_: FrameGuidance(question="Hedef?"))
 
     def test_clarification_loop_is_bounded(self):
-        guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
-        with self.assertRaisesRegex(ValueError, "Üç netleştirme"):
-            self.collect(["iş", "bir", "iki", "üç"], guidance)
-        self.assertEqual(guidance.call_count, 4)
+        guidance = MagicMock(side_effect=[
+            FrameGuidance(question=f"Karar {index}?") for index in range(4)
+        ] + [FrameGuidance(suggestions=self.suggestions)])
+        frame = self.collect(["iş", "bir", "iki", "üç", "devam", "", "", "", ""], guidance)
+        self.assertEqual(guidance.call_count, 5)
+        self.assertIn("Yanıt: üç", frame.clarifications)
+        self.assertIn("Çözülemeyen soru: Karar 3?", frame.clarifications)
+        self.assertIn("salt-okuma", build_user_content(frame))
+
+    def test_repeated_question_offers_intent_correction_and_preserves_answers(self):
+        guidance = MagicMock(side_effect=[
+            FrameGuidance(question="Hedef?"),
+            FrameGuidance(question=" HEDEF? "),
+            FrameGuidance(suggestions=self.suggestions),
+        ])
+        frame = self.collect([
+            "iki sunucudaki uygulamaları postgres ile bağla",
+            "yerel ve bursa3-k8s",
+            "uygulamalar değil, iki sunucuda PostgreSQL aktif-aktif olsun",
+            "", "", "", "",
+        ], guidance)
+        content = build_user_content(frame)
+        self.assertIn("yerel ve bursa3-k8s", content)
+        self.assertIn("PostgreSQL aktif-aktif", content)
+        self.assertIn("Çözülemeyen soru", content)
+        self.assertEqual(guidance.call_count, 3)
+
+    def test_limit_decision_can_cancel_or_run_slash_command(self):
+        for decision in ("iptal", "", "/clear"):
+            with self.subTest(decision=decision):
+                guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
+                if decision.startswith("/"):
+                    self.assertEqual(self.collect(["iş", "yanıt", decision], guidance), decision)
+                else:
+                    with self.assertRaisesRegex(ValueError, "iptal"):
+                        self.collect(["iş", "yanıt", decision], guidance)
+                self.assertEqual(guidance.call_count, 2)
+
+    def test_three_server_questions_keep_both_endpoints_and_corrected_intent(self):
+        guidance = MagicMock(side_effect=[
+            FrameGuidance(question="Hangi uygulamalar ve hangi ortam?"),
+            FrameGuidance(question="Uygulamaların adları?"),
+            FrameGuidance(question="Uygulama ve bağlantı adresleri?"),
+            FrameGuidance(question="Hangi uygulamalar?"),
+            FrameGuidance(suggestions=self.suggestions),
+        ])
+        frame = self.collect([
+            "bu host ve bursa3-k8s uygulamaları postgres ile bağla",
+            "ilki bu hostta diğeri bursa3-k8s",
+            "bu sunucuda ve bursa3-k8s üzerinde",
+            "postgresql://test-user:test-secret@192.0.2.30:30432/postgres\n"
+            "postgresql://test-user:test-secret@198.51.100.30:30432/postgres",
+            "aslında iki sunucu arasında aktif aktif PostgreSQL istiyorum",
+            "", "", "", "",
+        ], guidance)
+        self.assertIn("192.0.2.30", frame.clarifications)
+        self.assertIn("198.51.100.30", frame.clarifications)
+        self.assertIn("aktif aktif PostgreSQL", frame.clarifications)
+        self.assertIn("izinler netleşmeden", frame.clarifications)
 
     def test_keyboard_interrupt_propagates(self):
         def read(_):
@@ -293,6 +348,10 @@ class TestGuidedFrame(unittest.TestCase):
         kwargs = client.chat_complete.call_args.kwargs
         self.assertNotIn("tools", kwargs)
         self.assertEqual(kwargs["model"], "test-model")
+        instruction = kwargs["messages"][0]["content"]
+        self.assertIn("ASIL HEDEF", instruction)
+        self.assertIn("eşzamanlı yazma", instruction)
+        self.assertIn("tek karar", instruction)
 
     def test_invalid_api_payloads_fail_explicitly(self):
         for payload in ('not json', '[]', '{"question": 2}', '{"question": "", "rol": "x"}'):

@@ -5,6 +5,14 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.11.2] - 2026-10-11
+
+### Düzeltildi
+- Netleştirme sınırında yanıtların kaybolması önlendi: kullanıcı asıl hedefini düzeltebilir, mevcut bilgilerle salt-okuma keşfine geçebilir veya iptal edebilir.
+- Aynı netleştirme sorusunun tekrarı yakalanır; çözülemeyen sorular ve son hedef açıklaması görevle birlikte aktarılır.
+- Prompt hazırlığı asıl niyete ve tek karar sorularına öncelik verir; araçlarla keşfedilebilecek ayrıntılar için soru döngüsünden kaçınır. PostgreSQL aktif-aktif taleplerinde eşzamanlı yazma ve failover ayrımı vurgulanır.
+- İki sunuculu senaryo, hedef düzeltme ve yanıtların korunması için regresyon testleri eklendi.
+
 ## [0.11.1] - 2026-10-11
 
 ### Düzeltildi
