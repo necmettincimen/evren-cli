@@ -18,6 +18,10 @@
 3. **Otonom Ajan Döngüsü (Agentic Loop):**
    - Kullanıcının verdiği çok adımlı geliştirme veya hata ayıklama görevini kendi başına analiz eder.
    - Dosyaları `view_file` ile okur, `edit_file` ile cerrahi blok değişiklikleri yapar, `write_file` ile yeni dosyalar üretir, `run_command` ile testleri çalıştırır.
+   - Karmaşık işler için 3–7 kısa alt adım ve her turda tek doğrulanabilir adım talimatı verilir; bağımlı işlemler araç sonucundan sonra yürütülür.
+   - “Bu host”, “bu hosts”, “bu makine” ve “localhost” yerel hedef olarak tanımlanır. SSH yalnızca açık uzak hedef istekleri içindir; önceki SSH işlemi sonraki isteğin varsayılan hedefini değiştirmez.
+   - Gerçek işletim sistemi, kabuk ve çalışma dizini modele aktarılır. `run_command` CLI'nin çalıştığı makinede çalışır; Windows'ta varsayılan kabuk cmd.exe, PowerShell için açık çağrı gerekir.
+   - Token sınırında kesilen veya boş yanıt bir kez küçük adıma yönlendirilir. İkinci ardışık kesilme/boş yanıt veya adım sınırı açık “görev tamamlanmadı” hatası üretir; yarım araç çağrıları çalıştırılmaz.
 
 4. **EVREN LLM API Entegrasyonu:**
    - OpenAI SDK ve HTTP/SSE uyumluluğu.
@@ -136,6 +140,17 @@ Herhangi bir argüman vermeden çalıştırdığınızda doğrudan etkileşimli 
 ```powershell
 evren
 ```
+
+Etkileşimli kalıpta önce **Brief** yazılır. Yeni Brief, önceki turun Rol,
+Çerçeve, Kısıt ve Çıktı alanlarını temizler; Brief'te Enter önceki kalıbı korur.
+Model önce gerçek belirsizlikleri tek tek sorar (en fazla üç soru), ardından
+boş alanları Brief ve netleştirme yanıtlarına göre önerir. Her alan için
+**Enter** öneriyi kabul eder, yazdığınız metin önerinin yerine geçer,
+**`-`** alanı boş bırakır. Dolu alanlara öneri uygulanmaz.
+Netleştirme yanıtları görevle birlikte gönderilir; hazırlık sırasında araç veya
+terminal komutu çalıştırılmaz. API/yanıt hatasında görev başlatılmaz.
+Slash komutlarını ilk **Brief** satırına yazabilirsiniz. Tek seferlik
+`evren agent --brief ...` kullanımı bu etkileşimli öneri akışını başlatmaz.
 
 ```text
 ═════════════════════════════════════════════════════════════════

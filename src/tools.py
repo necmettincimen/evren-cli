@@ -163,7 +163,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Windows PowerShell/Terminal ortamında güvenli komut çalıştırır (test, derleme, lint vb.). Çalıştırmadan önce kullanıcı onayı istenir.",
+            "description": "EVREN CLI'nin çalıştığı YEREL makinede, aktif çalışma alanını cwd kullanarak komut çalıştırır (test, derleme, sistem kontrolü vb.). Bu host/bu hosts/bu makine/localhost isteklerinde bunu kullan; SSH gerekmez. Windows'ta kabuk cmd.exe'dir; PowerShell gerekiyorsa açıkça powershell -NoProfile -Command çağır. Çalıştırmadan önce onay ayarları uygulanır.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -206,7 +206,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_list_hosts",
-            "description": "Kayıtlı SSH host'larını (alias'ları) listeler. Uzak işlem yapmadan önce hangi host'ların tanımlı olduğunu görmek için kullanın.",
+            "description": "Yalnızca kullanıcı açıkça UZAK sunucu/SSH işlemi veya kayıtlı host listesini istediğinde SSH alias'larını listeler. Bu host/bu hosts/bu makine/localhost yereldir; bu istekler için kullanma.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -217,7 +217,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_run",
-            "description": "Kayıtlı bir uzak sunucuda (alias ile) komut çalıştırır. ask/plan modunda yalnızca salt-okuma komutlarına izin verilir. Çalıştırmadan önce kullanıcı onayı istenir.",
+            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucuda (alias ile) komut çalıştırır. Yerel/bu host/bu hosts/localhost isteğinde run_command kullan. ask/plan modunda yalnızca salt-okuma komutlarına izin verilir. Çalıştırmadan önce kullanıcı onayı istenir.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -243,7 +243,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_read_file",
-            "description": "Kayıtlı bir uzak sunucudaki bir dosyayı okur (salt-okuma). Her modda izinlidir.",
+            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucudaki dosyayı okur (salt-okuma). Yerel dosya için view_file kullan. Her modda izinlidir.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -264,7 +264,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_write_file",
-            "description": "Kayıtlı bir uzak sunucudaki bir dosyaya yazar. Host'ta allow_write=true olmalı ve kullanıcı onayı gerekir. ask/plan modunda devre dışıdır.",
+            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucudaki dosyaya yazar. Yerel dosya için edit_file/write_file kullan. Host'ta allow_write=true olmalı ve kullanıcı onayı gerekir. ask/plan modunda devre dışıdır.",
             "parameters": {
                 "type": "object",
                 "properties": {

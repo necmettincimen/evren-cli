@@ -10,7 +10,7 @@ from typing import Any
 
 from src.api_client import EvrenClient
 from src.tools import TOOLS_SCHEMA, execute_tool_call
-from src.config import get_workspace_dir, EVREN_DEFAULT_MAX_TOKENS
+from src.config import get_workspace_dir, execution_context_block, EVREN_DEFAULT_MAX_TOKENS
 from src.token_manager import TokenManager
 from src.history_compactor import HistoryCompactor
 from src.modes import AgentMode, parse_mode_prefix
@@ -27,7 +27,8 @@ from src.ui import (
 )
 
 SYSTEM_PROMPT = """Sen Antigravity felsefesiyle çalışan, EVREN LLM API destekli uzman bir yazılım mühendisi asistanısın.
-Windows ortamında kullanıcının aktif proje çalışma alanında geliştirme, hata ayıklama, refactoring ve test yaparsın.
+Kullanıcının aktif proje çalışma alanında geliştirme, hata ayıklama, refactoring ve test yaparsın.
+Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞTIRMA BAĞLAMI ile belirtilir.
 
 ZORUNLU NETLEŞTİRME (CLARIFY) ADIMI — HER PROMPT İÇİN İLK ADIM:
 0. Her kullanıcı isteğinde, işe başlamadan ÖNCE bir netleştirme adımı çalıştır. İsteği analiz et ve belirsiz/eksik/çok anlamlı noktaları tespit et.
@@ -39,16 +40,32 @@ ZORUNLU NETLEŞTİRME (CLARIFY) ADIMI — HER PROMPT İÇİN İLK ADIM:
 TEMEL ÇALIŞMA KURALLARI:
 1. İncelemeden değiştirme: Bir dosyayı değiştirmeden önce mutlaka 'view_file' veya 'list_directory' ile dosyanın güncel halini oku.
 2. Cerrahi değişiklikler yap: Tüm dosyayı baştan yazmak yerine 'edit_file' aracını kullanarak yalnızca değişmesi gereken kod bloğunu hedefle. Mevcut yorum satırlarını, kod stilini ve girintileri koru.
-3. Windows uyumluluğu: Yolları doğru formatta işle, PowerShell/cmd uyumlu komutlar öner.
+3. Ortam uyumluluğu: Komutları ve yolları gerçek yerel işletim sistemi ve kabuğa göre üret; uzak sunucunun ortamını yerelle karıştırma.
 4. Güvenlik ve yedekleme: Kritik değişikliklerden önce kullanıcıya diff gösterileceğini ve otomatik yedek alınacağını bil.
 5. Doğrulama: Kod değişikliklerinden sonra 'run_command' ile ilgili testleri veya sözdizimi kontrollerini çalıştır.
 
-HIZ VE VERİMLİLİK (ÖNEMLİ):
-- Önce netleştir (yukarıdaki clarify adımı), sonra uzun uzun düşünmeden doğrudan harekete geç ve KOD YAZ. Gereksiz açıklama, tekrar veya uzun analiz yapma.
-- Her turda mümkün olduğunca ÇOK iş bitir: birden çok dosyayı tek turda oku/düzenle, ilgisiz araç çağrılarını birleştir.
-- Aynı dosyayı tekrar tekrar okuma; bir kez oku, sonra düzenle. Gereksiz doğrulama turlarından kaçın.
-- Kısa ve öz konuş; asıl çıktın çalışan koddur. Açıklamayı en fazla birkaç cümleyle sınırla.
-- Bir görev tamamlandığında ekstra iş uydurma; sonucu özetle ve bitir.
+KÜÇÜK ADIMLARLA YÜRÜTME (ÖNEMLİ):
+- Netleştirme tamamlanınca karmaşık işi 3-7 kısa, doğrulanabilir alt adıma böl. Basit işte doğrudan uygula.
+- Her alt adımda hedef, gerekli araç ve tamamlanma kontrolü belli olsun. Kısa kontrol listesini yanıtta tut;
+  normal modda kullanıcı istemedikçe plan dosyası oluşturma. plan modunun create_plan davranışını koru.
+- Her model turunda yalnızca sıradaki küçük alt adımı uygula. Sadece aynı alt adıma ait bağımsız okumaları birlikte çağır;
+  sonucu bilinmeyen bir komuta/düzenlemeye bağlı işlemi aynı araç paketine koyma.
+- Tüm projeyi tek yanıtta tasarlama/yazma. Uzun düzenlemeyi dosya veya işlev bazında böl; büyük komut yerine hedefli test kullan.
+- Araç sonucunu değerlendir, tamamlanan adımı kısa belirt ve sıradakine geç. Başarıyı yalnızca doğrulanmış sonuca göre bildir.
+- Aynı analiz veya başarısız araç çağrısını yeni kanıt olmadan tekrarlama. Bir yaklaşım iki kez başarısızsa farklı yöntem dene;
+  hâlâ engelliyse somut engeli ve kalan işi bildir veya ask_user ile eksik bilgiyi sor.
+- Gereksiz uzun düşünme ve açıklama yerine ilk yararlı aracı çağır. Token bütçesini tek alt adım için kullan.
+- Son yanıt: yapılan iş, doğrulama sonucu ve varsa kalan engel. İş tamamlanınca kapsam dışı iş ekleme.
+
+YEREL / UZAK HEDEF AYRIMI:
+- Varsayılan hedef EVREN CLI'nin çalıştığı yerel makinedir; önceki turda SSH kullanılmış olması bu varsayılanı değiştirmez.
+- "bu host", "bu hosts", "bu hostta", "bu makine", "bu sunucu", "burada", "lokal", "local",
+  "localhost", "127.0.0.1" ve "::1" açıkça başka hedef belirtilmedikçe mevcut yerel makineyi ifade eder.
+- Yerel komut için run_command, yerel dosya için view_file/edit_file/write_file kullan.
+  Yerel istek için ssh_list_hosts çağırma, SSH alias/IP/şifre isteme ve komutu ssh ile sarmalama.
+- "host" kelimesi tek başına uzak bağlantı talebi değildir. Kullanıcı açıkça uzak sunucu/SSH veya kayıtlı alias hedefliyorsa SSH kullan.
+  Uzak hedef gerekli fakat eksikse ask_user ile yalnızca hedefi netleştir; rastgele sunucu seçme.
+- Hem yerel hem uzak iş istenirse her alt adımın hedefini belirt ve uygun aracı ayrı çağır.
 
 ÇALIŞMA KİPLERİ:
 - normal: Tüm araçlar açık (oku + yaz + çalıştır).
@@ -58,7 +75,7 @@ Bir araç reddedilirse ("REDDEDİLDİ: ..."), kip kısıtlaması nedeniyle engel
 
 UZAK SUNUCU (SSH) İŞLEMLERİ:
 - Yalnızca 'ssh_list_hosts' ile listelenen kayıtlı alias'lara bağlanabilirsin; rastgele host/IP kullanma.
-- Önce 'ssh_list_hosts' ile mevcut host'ları gör, sonra 'ssh_read_file' veya 'ssh_run' ile durum tespiti yap.
+- Yalnızca açık uzak işlem isteğinde önce 'ssh_list_hosts' ile mevcut host'ları gör, sonra belirtilen hedefte 'ssh_read_file' veya 'ssh_run' ile durum tespiti yap.
 - 'ssh_run' ask/plan modunda yalnızca salt-okuma komutlarıyla sınırlıdır; yazma gerektiren işler için normal mod gerekir.
 - 'ssh_write_file' yalnızca host'ta allow_write=true ise çalışır ve kullanıcı onayı ister; üretim sunucularında önce salt-okuma ile doğrula.
 - Tüm uzak işlemler .evren/logs/ssh_audit.log dosyasına kaydedilir.
@@ -99,8 +116,8 @@ class AgentSession:
         self.mode: AgentMode = AgentMode.NORMAL
 
     def _compose_system(self, base: str) -> str:
-        """Appends persistent memory and language-mode blocks to a base prompt."""
-        blocks: list[str] = []
+        """Appends runtime environment, persistent memory and language blocks."""
+        blocks: list[str] = [execution_context_block(self.workspace_root)]
         try:
             from src.memory import memory_context_block
             mem = memory_context_block(self.workspace_root)
@@ -115,8 +132,6 @@ class AgentSession:
                 blocks.append(lang)
         except Exception:
             pass
-        if not blocks:
-            return base
         return base.rstrip() + "\n\n" + "\n\n".join(blocks)
 
     def refresh_context(self):
@@ -147,13 +162,18 @@ class AgentSession:
         self.active_context_files.clear()
         self.last_usage = None
 
-    def apply_frame(self, frame: PromptFrame, extra: str = "") -> str:
+    def apply_frame(
+        self, frame: PromptFrame, extra: str = "", *, replace_identity: bool = False,
+    ) -> str:
         """Merges Rol/Çerçeve into the system message and returns the user text.
 
         Identity fields persist across turns until /clear. Blank fields on this
         turn do not erase a previously set Rol or Çerçeve. Brief, Kısıt, and
-        Çıktı belong only to this turn.
+        Çıktı belong only to this turn. The guided form uses replace_identity
+        to respect explicitly rejected or cleared identity fields.
         """
+        if replace_identity:
+            self.frame = PromptFrame()
         if frame.rol:
             self.frame.rol = frame.rol
         if frame.cerceve:
@@ -232,6 +252,9 @@ class AgentSession:
         The model can inspect files, produce code diffs, run tests, and iterate
         until the task is fully accomplished or max_steps is reached.
         """
+        if max_steps < 1:
+            raise ValueError("max_steps en az 1 olmalıdır.")
+
         # Per-turn mode override via "ask:" / "plan:" prefix.
         turn_mode, cleaned_input = parse_mode_prefix(user_input)
         effective_mode = turn_mode or self.mode
@@ -246,7 +269,7 @@ class AgentSession:
         self.messages.append({"role": "user", "content": prompt_with_context})
 
         step_count = 0
-        final_answer = ""
+        stalled_steps = 0
 
         while step_count < max_steps:
             step_count += 1
@@ -300,9 +323,23 @@ class AgentSession:
                     print(text, end="", flush=True)
 
                 try:
+                    step_instruction = (
+                        f"YÜRÜTME ADIMI {step_count}/{max_steps}. "
+                        f"Bu turdaki kip: {effective_mode.value}. "
+                        "Yalnızca sıradaki küçük, doğrulanabilir alt adımı uygula; "
+                        "araç sonucuna bağlı sonraki adımı sonraki tura bırak. "
+                        "Görev doğrulandıysa sonucu bildir ve bitir."
+                    )
+                    if stalled_steps:
+                        step_instruction += (
+                            "\nÖnceki yanıt kesildi veya boş kaldı; tamamlanmış sayılmadı. "
+                            "Uzun analizi tekrarlama. Tek küçük adım için gerekli aracı "
+                            "tam ve geçerli argümanlarla çağır veya somut engeli kısa bildir."
+                        )
                     response = self.client.chat_stream_assembled(
-                        messages=self.messages,
+                        messages=[*self.messages, {"role": "system", "content": step_instruction}],
                         model=self.model,
+                        max_tokens=output_budget,
                         tools=TOOLS_SCHEMA,
                         on_reasoning=_on_reasoning,
                         on_content=_on_content,
@@ -322,6 +359,27 @@ class AgentSession:
 
             choice = response.choices[0]
             message = choice.message
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason == "content_filter":
+                error = "HATA: Model yanıtı içerik filtresi nedeniyle durdu; görev tamamlanmadı."
+                print_error(error)
+                self.messages.append({"role": "assistant", "content": error})
+                return error
+
+            # A length-limited stream can include incomplete tool arguments.
+            # Never persist or execute that partial response.
+            if finish_reason == "length" or (
+                not (message.content or "").strip() and not getattr(message, "tool_calls", None)
+            ):
+                stalled_steps += 1
+                if stalled_steps >= 2:
+                    error = "HATA: Model iki ardışık turda kesilmiş veya boş yanıt verdi; görev tamamlanmadı."
+                    print_error(error)
+                    self.messages.append({"role": "assistant", "content": error})
+                    return error
+                print_warning("Yanıt kesildi veya boş kaldı; sıradaki küçük adım için yeniden yönlendiriliyor.")
+                continue
+            stalled_steps = 0
 
             # Reasoning was already streamed live via the callback; only print
             # it here if the server returned it without streaming deltas.
@@ -361,8 +419,16 @@ class AgentSession:
                     fn_name = tc.function.name
                     try:
                         args = json.loads(tc.function.arguments)
-                    except Exception:
-                        args = {}
+                        if not isinstance(args, dict):
+                            raise ValueError("Araç argümanları bir JSON nesnesi olmalıdır.")
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
+                        print_tool_result(fn_name, result, is_error=True)
+                        self.messages.append({
+                            "role": "tool", "tool_call_id": tc.id,
+                            "name": fn_name, "content": result,
+                        })
+                        continue
 
                     print_tool_call(fn_name, args)
 
@@ -413,14 +479,13 @@ class AgentSession:
             # No tool calls: model has provided its final response
             final_content = message.content or ""
             self.messages.append({"role": "assistant", "content": final_content})
-            final_answer = final_content
             # Content was already streamed live; only render markdown if it
             # never arrived as stream deltas (e.g. empty stream).
             if final_content and not stream_state["in_content"]:
                 print_markdown(final_content)
-            break
+            return final_content
 
-        if step_count >= max_steps:
-            print_warning(f"Ajan maksimum adım sınırına ({max_steps}) ulaştı.")
-
-        return final_answer
+        error = f"HATA: Ajan maksimum adım sınırına ({max_steps}) ulaştı; görev tamamlanmadı."
+        print_warning(error)
+        self.messages.append({"role": "assistant", "content": error})
+        return error

@@ -4,6 +4,7 @@ Loads settings from .env and manages project-level configuration directories.
 """
 
 import os
+import platform
 from pathlib import Path
 try:
     from dotenv import load_dotenv
@@ -249,6 +250,21 @@ def get_evren_dir(workspace_root: Path | None = None) -> Path:
     root = workspace_root or get_workspace_dir()
     evren_dir = root / ".evren"
     return evren_dir
+
+
+def execution_context_block(workspace_root: Path) -> str:
+    """Describes the actual local command environment, without probing hosts."""
+    shell = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
+    return (
+        "YEREL ÇALIŞTIRMA BAĞLAMI\n"
+        f"İşletim sistemi: {platform.system()}\n"
+        f"Çalışma alanı ve run_command çalışma dizini: {workspace_root.resolve()}\n"
+        f"run_command kabuğu: {shell}\n"
+        "run_command, EVREN CLI sürecinin çalıştığı makinede çalışır; SSH bağlantısı kurmaz.\n"
+        "Windows'ta PowerShell sözdizimi gerekiyorsa powershell -NoProfile -Command "
+        "ile açıkça çağır; run_command kabuğunu PowerShell varsayma.\n"
+        "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir."
+    )
 
 
 def get_backup_dir(workspace_root: Path | None = None) -> Path:

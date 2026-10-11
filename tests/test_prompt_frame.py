@@ -1,5 +1,7 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from src.prompt_frame import (
     PromptFrame,
@@ -8,6 +10,9 @@ from src.prompt_frame import (
     compose_system,
     delivery_summary,
     identity_block,
+    FrameGuidance,
+    collect_guided_prompt_frame,
+    request_frame_guidance,
 )
 from src.agent import AgentSession
 from src.cli import load_frame
@@ -175,8 +180,162 @@ class TestAgentFrame(unittest.TestCase):
         session = AgentSession(client=_Client(), workspace_root=None, model="test-model")
         session.apply_frame(PromptFrame(rol="kimlik", brief="iş"))
         session.clear_history()
-        self.assertEqual(session.messages[0]["content"], session.base_system_prompt)
+        self.assertIn(session.base_system_prompt, session.messages[0]["content"])
+        self.assertIn("YEREL ÇALIŞTIRMA BAĞLAMI", session.messages[0]["content"])
+        self.assertNotIn("GÖREV KALIBI", session.messages[0]["content"])
         self.assertTrue(session.frame.is_empty())
+
+    def test_guided_frame_replaces_identity_instead_of_restoring_rejected_role(self):
+        session = AgentSession(client=_Client())
+        session.apply_frame(PromptFrame(rol="eski rol", cerceve="eski kalıp"))
+        session.apply_frame(PromptFrame(brief="yeni iş", cerceve="yeni kalıp"), replace_identity=True)
+        self.assertNotIn("eski rol", session.messages[0]["content"])
+        self.assertNotIn("eski kalıp", session.messages[0]["content"])
+        self.assertIn("yeni kalıp", session.messages[0]["content"])
+        self.assertEqual(session.frame.rol, "")
+
+
+class TestGuidedFrame(unittest.TestCase):
+    suggestions = {"rol": "mühendis", "cerceve": "küçük adımlar", "kisit": "cerrahi yama", "cikti": "test sonucu"}
+
+    def collect(self, answers, guidance, previous=None):
+        inputs = iter(answers)
+        return collect_guided_prompt_frame(lambda _: next(inputs), guidance, previous)
+
+    def test_clarify_before_suggestions_and_individual_accept_edit_reject(self):
+        phases = []
+
+        def guidance(frame, clarify):
+            phases.append(clarify)
+            if len(phases) == 1:
+                return FrameGuidance(question="Hangi dosya?")
+            if clarify:
+                self.assertIn("src/config.py", frame.clarifications)
+                return FrameGuidance()
+            return FrameGuidance(suggestions=self.suggestions)
+
+        frame = self.collect(["timeout düzelt", "src/config.py", "", "hedefli test", "-", ""], guidance)
+        self.assertEqual(phases, [True, True, False])
+        self.assertEqual(frame.brief, "timeout düzelt")
+        self.assertEqual(frame.rol, "mühendis")
+        self.assertEqual(frame.cerceve, "hedefli test")
+        self.assertEqual(frame.kisit, "")
+        self.assertEqual(frame.cikti, "test sonucu")
+        self.assertIn("Hangi dosya?", build_user_content(frame))
+        self.assertIn("src/config.py", build_user_content(frame))
+        self.assertNotIn("src/config.py", identity_block(frame))
+
+    def test_new_brief_discards_previous_fields_and_clarifications(self):
+        prev = PromptFrame(brief="eski", rol="eski rol", clarifications="eski yanıt")
+
+        def guidance(frame, clarify):
+            self.assertEqual(frame.rol, "")
+            self.assertEqual(frame.clarifications, "")
+            return FrameGuidance() if clarify else FrameGuidance(suggestions=self.suggestions)
+
+        frame = self.collect(["yeni", "", "", "", ""], guidance, prev)
+        self.assertEqual(frame.rol, "mühendis")
+        self.assertEqual(prev.rol, "eski rol")
+
+    def test_enter_retains_previous_frame_without_overwriting_populated_fields(self):
+        prev = PromptFrame(brief="iş", rol="benim rolüm", cerceve="kalıp", kisit="sınır", cikti="kod")
+        guidance = MagicMock(return_value=FrameGuidance())
+        frame = self.collect(["", "", "", "", ""], guidance, prev)
+        self.assertEqual(frame, prev)
+        guidance.assert_called_once()
+        self.assertTrue(guidance.call_args.args[1])
+
+    def test_blank_brief_skips_api_and_uses_manual_fields(self):
+        guidance = MagicMock()
+        frame = self.collect(["", "rol", "", "", ""], guidance)
+        guidance.assert_not_called()
+        self.assertEqual(frame.rol, "rol")
+
+    def test_slash_command_skips_api(self):
+        guidance = MagicMock()
+        self.assertEqual(self.collect(["/help"], guidance), "/help")
+        guidance.assert_not_called()
+
+    def test_slash_during_clarify_aborts_preparation(self):
+        guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
+        self.assertEqual(self.collect(["iş", "/clear"], guidance), "/clear")
+        self.assertEqual(guidance.call_count, 1)
+
+    def test_slash_during_suggestions_aborts_preparation(self):
+        guidance = MagicMock(side_effect=[FrameGuidance(), FrameGuidance(suggestions=self.suggestions)])
+        self.assertEqual(self.collect(["iş", "/exit"], guidance), "/exit")
+
+    def test_empty_clarification_answer_blocks_task(self):
+        with self.assertRaisesRegex(ValueError, "görev başlatılmadı"):
+            self.collect(["iş", ""], lambda *_: FrameGuidance(question="Hedef?"))
+
+    def test_clarification_loop_is_bounded(self):
+        guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
+        with self.assertRaisesRegex(ValueError, "Üç netleştirme"):
+            self.collect(["iş", "bir", "iki", "üç"], guidance)
+        self.assertEqual(guidance.call_count, 4)
+
+    def test_keyboard_interrupt_propagates(self):
+        def read(_):
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            collect_guided_prompt_frame(read, MagicMock())
+
+    def test_api_request_is_tool_free_and_validates_shape(self):
+        client = MagicMock()
+        client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content='{"question": "Hedef?"}'),
+        )])
+        result = request_frame_guidance(client, "test-model", PromptFrame(brief="iş"), True)
+        self.assertEqual(result.question, "Hedef?")
+        kwargs = client.chat_complete.call_args.kwargs
+        self.assertNotIn("tools", kwargs)
+        self.assertEqual(kwargs["model"], "test-model")
+
+    def test_invalid_api_payloads_fail_explicitly(self):
+        for payload in ('not json', '[]', '{"question": 2}', '{"question": "", "rol": "x"}'):
+            with self.subTest(payload=payload):
+                client = MagicMock()
+                client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+                    finish_reason="stop", message=SimpleNamespace(content=payload),
+                )])
+                with self.assertRaises(ValueError):
+                    request_frame_guidance(client, "test-model", PromptFrame(brief="iş"), True)
+
+    def test_suggestions_only_cover_empty_fields(self):
+        client = MagicMock()
+        client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop",
+            message=SimpleNamespace(content='{"cerceve":"adımlar","kisit":"sınır","cikti":"test"}'),
+        )])
+        frame = PromptFrame(brief="iş", rol="koru")
+        result = request_frame_guidance(client, "test-model", frame, False)
+        self.assertNotIn("rol", result.suggestions)
+        self.assertEqual(frame.rol, "koru")
+
+    def test_missing_suggestions_or_truncated_response_block_task(self):
+        for content, reason in (('{"rol":"x"}', "stop"), ('{}', "length"), ('{}', "content_filter")):
+            with self.subTest(reason=reason):
+                client = MagicMock()
+                client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+                    finish_reason=reason, message=SimpleNamespace(content=content),
+                )])
+                with self.assertRaises(ValueError):
+                    request_frame_guidance(client, "test-model", PromptFrame(brief="iş"), False)
+
+    def test_repl_wrapper_passes_current_model_and_local_context(self):
+        from src.repl import _collect_frame
+
+        session = SimpleNamespace(client=MagicMock(), model="active-model", workspace_root=Path.cwd())
+        with patch("src.repl._read_line", side_effect=["iş", "", "", "", ""]), \
+             patch("src.repl.request_frame_guidance", side_effect=[
+                 FrameGuidance(), FrameGuidance(suggestions=self.suggestions),
+             ]) as request:
+            frame = _collect_frame(session, None)
+        self.assertEqual(frame.rol, "mühendis")
+        self.assertEqual(request.call_args.args[1], "active-model")
+        self.assertIn("YEREL ÇALIŞTIRMA BAĞLAMI", request.call_args.args[4])
 
 
 if __name__ == "__main__":

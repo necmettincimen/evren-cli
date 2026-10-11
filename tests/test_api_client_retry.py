@@ -180,12 +180,13 @@ class TestChatStreamAssembled(unittest.TestCase):
                 self.tool_calls = tool_calls
 
         class _Choice:
-            def __init__(self, delta):
+            def __init__(self, delta, finish_reason=None):
                 self.delta = delta
+                self.finish_reason = finish_reason
 
         class _Chunk:
-            def __init__(self, delta, usage=None):
-                self.choices = [_Choice(delta)] if delta is not None else []
+            def __init__(self, delta, usage=None, finish_reason=None):
+                self.choices = [_Choice(delta, finish_reason)] if delta is not None else []
                 self.usage = usage
 
         result = []
@@ -198,8 +199,26 @@ class TestChatStreamAssembled(unittest.TestCase):
                 reasoning=spec.get("reasoning"),
                 tool_calls=tcs,
             )
-            result.append(_Chunk(delta, usage=spec.get("usage")))
+            result.append(_Chunk(
+                delta, usage=spec.get("usage"), finish_reason=spec.get("finish_reason"),
+            ))
         return result
+
+    def test_preserves_finish_reason(self):
+        for reason in ("stop", "length", "tool_calls", "content_filter"):
+            with self.subTest(reason=reason):
+                client = _make_client(keys=["k1"])
+                fake = MagicMock()
+                fake.chat.completions.create.return_value = self._make_stream([
+                    {"reasoning": "thinking"},
+                    {"finish_reason": reason},
+                    {"usage": MagicMock()},
+                ])
+                with patch.object(client.key_pool, "get_client", return_value=fake):
+                    response = client.chat_stream_assembled(
+                        messages=[{"role": "user", "content": "hi"}],
+                    )
+                self.assertEqual(response.choices[0].finish_reason, reason)
 
     def test_assembles_content_and_calls_callbacks(self):
         client = _make_client(keys=["k1"])

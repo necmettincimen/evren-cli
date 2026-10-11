@@ -62,15 +62,18 @@ class _StreamedMessage:
 
 
 class _StreamedChoice:
-    def __init__(self, message: _StreamedMessage):
+    def __init__(self, message: _StreamedMessage, finish_reason: str | None = None):
         self.message = message
+        self.finish_reason = finish_reason
 
 
 class _StreamedResponse:
     """Mimics the OpenAI response shape so callers can stay unchanged."""
 
-    def __init__(self, message: _StreamedMessage, usage: Any = None):
-        self.choices = [_StreamedChoice(message)]
+    def __init__(
+        self, message: _StreamedMessage, usage: Any = None, finish_reason: str | None = None,
+    ):
+        self.choices = [_StreamedChoice(message, finish_reason)]
         self.usage = usage
 
 
@@ -587,6 +590,7 @@ class EvrenClient:
 
             message = _StreamedMessage()
             usage: Any = None
+            finish_reason: str | None = None
             # Tool calls arrive as deltas keyed by index; accumulate them in order.
             tool_calls_by_index: dict[int, _StreamedToolCall] = {}
             streamed_any = False
@@ -623,7 +627,10 @@ class EvrenClient:
                 if not chunk.choices:
                     continue
 
-                delta = chunk.choices[0].delta
+                choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None) is not None:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
 
                 reasoning = (
                     getattr(delta, "reasoning", None)
@@ -660,7 +667,7 @@ class EvrenClient:
 
             message.tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)]
             self.key_pool.report_success(current_key)
-            return _StreamedResponse(message, usage=usage)
+            return _StreamedResponse(message, usage=usage, finish_reason=finish_reason)
 
         except Exception as e:
             typed = map_sdk_exception(e, failed_key=current_key)

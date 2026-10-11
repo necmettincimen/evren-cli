@@ -19,7 +19,9 @@ from src.config import (
     get_workspace_dir,
     get_evren_dir,
     RECOMMENDED_MODELS,
+    execution_context_block,
 )
+from src.errors import EvrenApiError
 from src.api_client import EvrenClient
 from src.agent import AgentSession
 from src.project_scanner import scan_workspace, generate_tree
@@ -27,7 +29,8 @@ from src.file_ops import rollback_last_backup, resolve_workspace_path
 from src.terms import ensure_terms_accepted, ensure_terms_for_keys, get_terms_status
 from src.prompt_frame import (
     FORM_INTRO,
-    collect_prompt_frame,
+    collect_guided_prompt_frame,
+    request_frame_guidance,
     delivery_summary,
 )
 from src.ui import (
@@ -46,6 +49,20 @@ def _read_line(pt_session, label: str) -> str:
     if pt_session:
         return pt_session.prompt(label).strip()
     return input(label).strip()
+
+
+def _collect_frame(session: AgentSession, pt_session, previous=None):
+    def guidance(frame, clarify):
+        label = "Brief netleştiriliyor..." if clarify else "Boş alanlar için öneriler hazırlanıyor..."
+        with status_spinner(label):
+            return request_frame_guidance(
+                session.client, session.model, frame, clarify,
+                execution_context_block(session.workspace_root),
+            )
+
+    return collect_guided_prompt_frame(
+        lambda label: _read_line(pt_session, label), guidance, previous,
+    )
 
 
 def _fmt_quota_num(value) -> str:
@@ -130,11 +147,13 @@ HELP_TEXT = """
 
 [bold]Beş satırlık kalıp (her tur):[/bold]
   Rol ve Çerçeve system mesajına, Brief / Kısıt / Çıktı user mesajına gider.
-  Boş satır gönderilmez. Beşi de boşsa tek satırlık [green]İstek >[/green] sorulur.
-  Slash komutunu ilk satıra (Rol) yaz. Örnek:
-    01 Rol      kıdemli Windows mühendisi
-    02 Çerçeve  cerrahi yama, mevcut stili koru
-    03 Brief    timeout süresini 45 saniyeye çıkar
+  Önce Brief, sonra netleştirme, ardından boş alan önerileri.
+  Yeni Brief önceki alanları temizler; Brief'te Enter önceki kalıbı korur.
+  Öneride Enter=kabul, metin=düzenle, -=boş bırak. Tümü boşsa [green]İstek >[/green] sorulur.
+  Slash komutunu ilk satıra (Brief) yaz. Örnek kalıp:
+    01 Brief    timeout süresini 45 saniyeye çıkar
+    02 Rol      kıdemli Windows mühendisi
+    03 Çerçeve  cerrahi yama, mevcut stili koru
     04 Kısıt    yalnız src/api_client.py
     05 Çıktı    çalışan kod ve pytest
 
@@ -368,15 +387,17 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             mode_tag = "" if session.mode.value == "normal" else f" ({session.mode.value})"
             print(f"evren [{session.model}]{mode_tag}")
 
-            collected = collect_prompt_frame(
-                lambda label: _read_line(pt_session, label), previous=last_frame
-            )
+            try:
+                collected = _collect_frame(session, pt_session, last_frame)
+            except (EvrenApiError, ValueError) as e:
+                print_error(f"Prompt hazırlama başarısız; görev başlatılmadı: {e}")
+                continue
             if isinstance(collected, str):
                 user_input = collected
             elif not collected.is_empty():
                 last_frame = collected
                 print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
-                session.run_step(session.apply_frame(collected))
+                session.run_step(session.apply_frame(collected, replace_identity=True))
                 continue
             else:
                 user_input = _read_line(pt_session, "İstek > ")

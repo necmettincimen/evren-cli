@@ -5,6 +5,22 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.11.0] - 2026-10-11
+
+### Eklendi
+- **Brief odaklı prompt hazırlama:** Etkileşimli form önce Brief'i alır, gerçek belirsizlikleri tek tek netleştirir ve boş Rol, Çerçeve, Kısıt, Çıktı alanlarını önerir. Her öneri ayrı kabul edilebilir, düzenlenebilir veya boş bırakılabilir.
+- Yerel işletim sistemi, komut kabuğu ve çalışma dizini ajan bağlamına eklenir.
+- Prompt hazırlama, küçük adımlı yürütme ve kesilmiş yanıt davranışları için regresyon testleri.
+
+### Değişti
+- Yeni Brief önceki alanları temizler; Brief'te Enter önceki kalıbı korur. Netleştirme yanıtları görevle birlikte gönderilir; hazırlık hatalarında görev başlatılmaz.
+- Karmaşık görevler 3-7 doğrulanabilir alt adıma yönlendirilir; her turda sıradaki küçük adım uygulanır.
+
+### Düzeltildi
+- “Bu host”, “bu hosts”, “bu makine” ve “localhost” için yerel araç kullanımı netleştirildi; SSH yalnızca açık uzak hedef istekleri için önerilir.
+- Akış yanıtının bitiş nedeni korunur; token sınırında kesilen veya boş yanıt bir kez toparlanır. Tekrarlayan kesilme ve adım sınırı açık tamamlanmama hatası üretir.
+- Kesilmiş/geçersiz araç argümanlarının çalıştırılması ve reddedilen kimlik alanlarının önceki kalıptan geri gelmesi önlendi.
+
 ## [0.10.0] - 2026-10-09
 
 ### Eklendi
