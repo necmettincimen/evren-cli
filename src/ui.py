@@ -5,6 +5,19 @@ tool execution banners, reasoning stream blocks, and diffs.
 """
 
 import sys
+from src.config import get_ui_theme
+
+FORM_PALETTES = {
+    "light": {"question": "#005a9c", "suggestion": "#146b32", "decision": "#8a4400"},
+    "dark": {"question": "#66d9ef", "suggestion": "#8fdf8f", "decision": "#ffd166"},
+}
+
+
+def form_palette() -> dict[str, str]:
+    """Colors for form borders and labels on the user's selected terminal theme."""
+    return FORM_PALETTES[get_ui_theme()]
+
+
 try:
     from rich.console import Console
     from rich.panel import Panel

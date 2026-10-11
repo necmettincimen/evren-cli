@@ -181,6 +181,15 @@ EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
 
+
+def get_ui_theme() -> str:
+    """Returns the explicitly selected terminal theme, without guessing its background."""
+    theme = os.getenv("EVREN_UI_THEME", "dark").strip().lower()
+    if theme not in ("light", "dark"):
+        raise ValueError("EVREN_UI_THEME yalnızca light veya dark olabilir.")
+    return theme
+
+
 # Reasoning (akıl yürütme) yoğunluğu. Reasoning modelleri (deepseek-v4.1-flash,
 # glm-5.3) görünmez bir "düşünme" akışı üretir ve bu token'lar kod çıktısıyla
 # aynı max_tokens bütçesini paylaşır. Düşük değer = daha hızlı yanıt + koda daha

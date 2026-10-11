@@ -155,7 +155,13 @@ atılmaz: asıl hedefi düzeltebilir, `devam` ile önce salt-okuma keşfini seç
 veya `iptal` yazabilirsiniz. Çözülemeyen sorular ve son hedef açıklaması görevle
 birlikte aktarılır; mimari ve izinler netleşmeden riskli değişiklik yapılmaması istenir.
 Uzun netleştirme soruları ve öneriler giriş satırından ayrı, terminal genişliğine
-göre sarılarak gösterilir; yanıt yazarken metnin tamamı görünür kalır. Her alan için
+göre sarılarak gösterilir; yanıt yazarken metnin tamamı görünür kalır. Sorular
+varsayılan koyu temada camgöbeği, öneriler yeşil, karar uyarıları sarı panellerde
+gösterilir; giriş etiketleri de aynı renkle vurgulanır. Beyaz/açık terminal için
+`.env` dosyasında `EVREN_UI_THEME=light` seçin; form koyu mavi, koyu yeşil ve
+koyu turuncu kullanır. `dark` varsayılandır; arka plan otomatik tahmin edilmez
+ve terminalin arka planı değiştirilmez. Bu ayar form panelleri ve giriş
+etiketleri içindir. Rich yoksa düz metin kullanılır. Her alan için
 **Enter** öneriyi kabul eder, yazdığınız metin önerinin yerine geçer,
 **`-`** alanı boş bırakır. Dolu alanlara öneri uygulanmaz.
 Netleştirme yanıtları görevle birlikte gönderilir; hazırlık sırasında araç veya

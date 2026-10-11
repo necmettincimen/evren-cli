@@ -42,18 +42,39 @@ from src.ui import (
     status_spinner,
     console,
     HAVE_RICH,
+    form_palette,
 )
 
 
 def _read_line(pt_session, label: str) -> str:
+    color = ""
     if "\n" in label:
         text, label = label.rsplit("\n", 1)
         if HAVE_RICH and console:
-            console.print(text, markup=False, highlight=False, overflow="fold", crop=False)
+            from rich.panel import Panel
+            from rich.text import Text
+
+            palette = form_palette()
+            if label == "Karar > ":
+                title, color = "Netleştirme kararı", palette["decision"]
+            elif label == "Yanıt > ":
+                title, color = "Netleştirme", palette["question"]
+            else:
+                title, color = "Alan önerisi", palette["suggestion"]
+            console.print(Panel(
+                Text(text, overflow="fold"), title=title,
+                border_style=color, padding=(1, 2),
+            ))
         else:
             print(text)
     if pt_session:
-        return pt_session.prompt(label).strip()
+        prompt = [(f"bold fg:{color}", label)] if color else label
+        return pt_session.prompt(prompt).strip()
+    if color:
+        from rich.text import Text
+
+        console.print(Text(label, style=f"bold {color}"), end="")
+        return input().strip()
     return input(label).strip()
 
 

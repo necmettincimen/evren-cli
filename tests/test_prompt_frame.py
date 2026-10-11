@@ -420,14 +420,104 @@ class TestFormPromptDisplay(unittest.TestCase):
         narrow_console = Console(file=capture, width=24, color_system=None)
         terminal = MagicMock()
         terminal.prompt.return_value = ""
-        with patch("src.repl.console", narrow_console), patch("src.repl.HAVE_RICH", True):
+        with patch("src.repl.console", narrow_console), patch("src.repl.HAVE_RICH", True), \
+             patch.dict("os.environ", {"EVREN_UI_THEME": "dark"}):
             _read_line(terminal, text + "\nEnter=kabul > ")
         rendered = capture.getvalue()
         self.assertIn("[bold]", rendered)
         self.assertIn("SON", rendered)
         self.assertGreater(len(rendered.splitlines()), 3)
-        self.assertEqual("".join(rendered.split()), "".join(text.split()))
-        terminal.prompt.assert_called_once_with("Enter=kabul > ")
+        content = "".join(rendered.split())
+        for word in ("literal", "SON", "önerisi"):
+            self.assertIn(word, content)
+        terminal.prompt.assert_called_once_with([("bold fg:#8fdf8f", "Enter=kabul > ")])
+
+    def test_colored_panels_and_matching_prompt_labels(self):
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+        from src.repl import _read_line
+
+        for label, title, color in (
+            ("Yanıt > ", "Netleştirme", "#66d9ef"),
+            ("Karar > ", "Netleştirme kararı", "#ffd166"),
+            ("Enter=kabul > ", "Alan önerisi", "#8fdf8f"),
+        ):
+            with self.subTest(label=label):
+                terminal = MagicMock()
+                terminal.prompt.return_value = "yanıt"
+                capture = StringIO()
+                colored_console = Console(file=capture, width=50, force_terminal=True)
+                with patch("src.repl.console", colored_console), patch("src.repl.HAVE_RICH", True), \
+                     patch.dict("os.environ", {"EVREN_UI_THEME": "dark"}), \
+                     patch.object(colored_console, "print", wraps=colored_console.print) as render:
+                    self.assertEqual(_read_line(terminal, "[bold]soru[/bold]\n" + label), "yanıt")
+                panel = render.call_args.args[0]
+                self.assertIsInstance(panel, Panel)
+                self.assertEqual(panel.title, title)
+                self.assertEqual(panel.border_style, color)
+                self.assertIsInstance(panel.renderable, Text)
+                self.assertEqual(panel.renderable.plain, "[bold]soru[/bold]")
+                self.assertIn("\x1b[", capture.getvalue())
+                terminal.prompt.assert_called_once_with([(f"bold fg:{color}", label)])
+
+    def test_light_palette_is_shared_by_panel_and_input(self):
+        from rich.console import Console
+        from src.repl import _read_line
+        from src.ui import FORM_PALETTES
+
+        for label, kind in (("Yanıt > ", "question"), ("Karar > ", "decision"),
+                            ("Enter=kabul > ", "suggestion")):
+            with self.subTest(label=label):
+                terminal = MagicMock()
+                terminal.prompt.return_value = ""
+                output = MagicMock(spec=Console)
+                with patch("src.repl.console", output), patch("src.repl.HAVE_RICH", True), \
+                     patch.dict("os.environ", {"EVREN_UI_THEME": "light"}):
+                    _read_line(terminal, "metin\n" + label)
+                color = FORM_PALETTES["light"][kind]
+                self.assertEqual(output.print.call_args.args[0].border_style, color)
+                terminal.prompt.assert_called_once_with([(f"bold fg:{color}", label)])
+
+    def test_palette_contrast_is_at_least_four_point_five(self):
+        from src.ui import FORM_PALETTES
+
+        def luminance(color):
+            channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+            linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                      for c in channels]
+            return sum(c * weight for c, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        for theme, background in (("light", "#ffffff"), ("dark", "#1e1e1e")):
+            for kind, color in FORM_PALETTES[theme].items():
+                with self.subTest(theme=theme, kind=kind):
+                    values = sorted((luminance(color), luminance(background)))
+                    contrast = (values[1] + 0.05) / (values[0] + 0.05)
+                    self.assertGreaterEqual(contrast, 4.5)
+
+    def test_theme_validation_and_default(self):
+        from src.config import get_ui_theme
+
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(get_ui_theme(), "dark")
+        with patch.dict("os.environ", {"EVREN_UI_THEME": " LIGHT "}):
+            self.assertEqual(get_ui_theme(), "light")
+        with patch.dict("os.environ", {"EVREN_UI_THEME": "automatic"}):
+            with self.assertRaisesRegex(ValueError, "EVREN_UI_THEME"):
+                get_ui_theme()
+
+    def test_rich_without_prompt_toolkit_colors_label_and_reads_answer(self):
+        from rich.console import Console
+        from src.repl import _read_line
+
+        capture = StringIO()
+        colored_console = Console(file=capture, width=50, force_terminal=True)
+        with patch("src.repl.console", colored_console), patch("src.repl.HAVE_RICH", True), \
+             patch("builtins.input", return_value="yanıt") as read:
+            self.assertEqual(_read_line(None, "Netleştirme: soru?\nYanıt > "), "yanıt")
+        self.assertIn("Yanıt >", capture.getvalue())
+        self.assertIn("\x1b[", capture.getvalue())
+        read.assert_called_once_with()
 
     def test_plain_input_also_separates_question(self):
         from src.repl import _read_line

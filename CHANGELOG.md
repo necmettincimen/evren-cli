@@ -5,6 +5,15 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.11.3] - 2026-10-11
+
+### Eklendi
+- Netleştirme soruları, alan önerileri ve karar uyarıları ayrı renkli panellerde; giriş etiketleri aynı renklerle vurgulanır.
+- `EVREN_UI_THEME=light|dark` ile form renk paleti açıkça seçilir; varsayılan `dark`. Açık temada koyu mavi, koyu yeşil ve koyu turuncu kullanılır; terminal arka planı değiştirilmez.
+
+### Düzeltildi
+- Uzun metinlerin sarılması ve Rich olmadan düz metin gösterimi korunur. Paletlerin beyaz ve koyu referans arka planlarında en az 4.5:1 kontrastı, panel/giriş renk uyumu ve tema doğrulaması test edilir.
+
 ## [0.11.2] - 2026-10-11
 
 ### Düzeltildi
