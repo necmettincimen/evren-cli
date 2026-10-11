@@ -5,6 +5,13 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.11.1] - 2026-10-11
+
+### Düzeltildi
+- Uzun netleştirme soruları ve alan önerileri giriş satırından ayrı, terminal genişliğine göre sarılarak gösterilir; metin kırpılmaz ve Rich işaretleri düz metin olarak korunur.
+- `evren update` sonrasında yeniden başlatma `update` komutunu tekrar çalıştırmaz; güncelleme döngüsü önlendi. Çalışma dizini, çalışma alanı ve model seçenekleri korunur.
+- Dar terminalde soru/öneri gösterimi ve güncellemenin yalnızca bir kez çalışması için regresyon testleri eklendi.
+
 ## [0.11.0] - 2026-10-11
 
 ### Eklendi

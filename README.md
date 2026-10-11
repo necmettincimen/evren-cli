@@ -133,6 +133,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-global.ps1 -Venv
 
 ## 💻 Kullanım Biçimleri
 
+`evren update` güncellemeyi bir kez yapar ve ardından etkileşimli CLI'ı açar;
+yeniden başlatmada `update` komutu tekrar çalıştırılmaz. Çalışma dizini,
+`--workspace` ve `--model` seçenekleri korunur. Yeniden başlatmadan yalnızca
+güncellemek için `evren update --no-restart` kullanabilirsiniz.
+
 ### A. Etkileşimli Antigravity TUI Modu
 
 Herhangi bir argüman vermeden çalıştırdığınızda doğrudan etkileşimli terminal asistanı açılır:
@@ -144,7 +149,9 @@ evren
 Etkileşimli kalıpta önce **Brief** yazılır. Yeni Brief, önceki turun Rol,
 Çerçeve, Kısıt ve Çıktı alanlarını temizler; Brief'te Enter önceki kalıbı korur.
 Model önce gerçek belirsizlikleri tek tek sorar (en fazla üç soru), ardından
-boş alanları Brief ve netleştirme yanıtlarına göre önerir. Her alan için
+boş alanları Brief ve netleştirme yanıtlarına göre önerir.
+Uzun netleştirme soruları ve öneriler giriş satırından ayrı, terminal genişliğine
+göre sarılarak gösterilir; yanıt yazarken metnin tamamı görünür kalır. Her alan için
 **Enter** öneriyi kabul eder, yazdığınız metin önerinin yerine geçer,
 **`-`** alanı boş bırakır. Dolu alanlara öneri uygulanmaz.
 Netleştirme yanıtları görevle birlikte gönderilir; hazırlık sırasında araç veya

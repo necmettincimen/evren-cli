@@ -176,14 +176,22 @@ def perform_update(restart: bool = True) -> tuple[bool, str]:
 
 def restart_process() -> None:
     """Mevcut süreci yeni kodla yeniden başlatır (os.execv ile yerinde)."""
-    root = get_project_root()
-    try:
-        os.chdir(root)
-    except OSError:
-        pass
-
-    # Orijinal argümanları koru (ör. --workspace, --model).
+    # Preserve global options, but never replay the update subcommand.
+    # Option values can themselves be "update", so do not filter by value.
     forwarded = sys.argv[1:]
+    index = 0
+    while index < len(forwarded):
+        token = forwarded[index]
+        if token in ("--workspace", "-w", "--model", "-m"):
+            index += 2
+        elif token.startswith(("--workspace=", "--model=")) or (
+            token.startswith(("-w", "-m")) and len(token) > 2
+        ):
+            index += 1
+        else:
+            if token == "update":
+                forwarded = forwarded[:index]
+            break
     args = [sys.executable, "-m", "src.cli", *forwarded]
     _log(f"RESTART: {' '.join(args)}")
 

@@ -1,4 +1,5 @@
 import unittest
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -336,6 +337,57 @@ class TestGuidedFrame(unittest.TestCase):
         self.assertEqual(frame.rol, "mühendis")
         self.assertEqual(request.call_args.args[1], "active-model")
         self.assertIn("YEREL ÇALIŞTIRMA BAĞLAMI", request.call_args.args[4])
+
+
+class TestFormPromptDisplay(unittest.TestCase):
+    def test_long_question_prints_outside_input_prompt(self):
+        from src.repl import _read_line
+
+        question = "Netleştirme: " + "uzun soru " * 30 + "[hedef]\nİkinci satır?"
+        terminal = MagicMock()
+        terminal.prompt.return_value = " yanıt "
+        with patch("src.repl.HAVE_RICH", False), patch("builtins.print") as output:
+            answer = _read_line(terminal, question + "\nYanıt > ")
+        output.assert_called_once_with(question)
+        terminal.prompt.assert_called_once_with("Yanıt > ")
+        self.assertEqual(answer, "yanıt")
+
+    def test_suggestion_is_printed_without_rich_markup_or_truncation(self):
+        from rich.console import Console
+        from src.repl import _read_line
+
+        text = "02 Rol önerisi: [bold]literal[/bold] " + "uzun öneri " * 20 + "SON"
+        capture = StringIO()
+        narrow_console = Console(file=capture, width=24, color_system=None)
+        terminal = MagicMock()
+        terminal.prompt.return_value = ""
+        with patch("src.repl.console", narrow_console), patch("src.repl.HAVE_RICH", True):
+            _read_line(terminal, text + "\nEnter=kabul > ")
+        rendered = capture.getvalue()
+        self.assertIn("[bold]", rendered)
+        self.assertIn("SON", rendered)
+        self.assertGreater(len(rendered.splitlines()), 3)
+        self.assertEqual("".join(rendered.split()), "".join(text.split()))
+        terminal.prompt.assert_called_once_with("Enter=kabul > ")
+
+    def test_plain_input_also_separates_question(self):
+        from src.repl import _read_line
+
+        with patch("src.repl.HAVE_RICH", False), \
+             patch("builtins.print") as output, patch("builtins.input", return_value="evet") as read:
+            self.assertEqual(_read_line(None, "Netleştirme: hedef?\nYanıt > "), "evet")
+        output.assert_called_once_with("Netleştirme: hedef?")
+        read.assert_called_once_with("Yanıt > ")
+
+    def test_single_line_prompt_is_unchanged(self):
+        from src.repl import _read_line
+
+        terminal = MagicMock()
+        terminal.prompt.return_value = "brief"
+        with patch("builtins.print") as output:
+            self.assertEqual(_read_line(terminal, "01 Brief > "), "brief")
+        output.assert_not_called()
+        terminal.prompt.assert_called_once_with("01 Brief > ")
 
 
 if __name__ == "__main__":

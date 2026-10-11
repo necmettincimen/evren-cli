@@ -46,6 +46,12 @@ from src.ui import (
 
 
 def _read_line(pt_session, label: str) -> str:
+    if "\n" in label:
+        text, label = label.rsplit("\n", 1)
+        if HAVE_RICH and console:
+            console.print(text, markup=False, highlight=False, overflow="fold", crop=False)
+        else:
+            print(text)
     if pt_session:
         return pt_session.prompt(label).strip()
     return input(label).strip()

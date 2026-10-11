@@ -1,6 +1,7 @@
 """Tests for the self-update mechanism (src/updater.py)."""
 
 import sys
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,52 @@ def test_restart_process_execv(monkeypatch):
     assert captured["exe"] == sys.executable
     assert captured["args"][:3] == [sys.executable, "-m", "src.cli"]
     assert "--workspace" in captured["args"]
+
+
+@pytest.mark.parametrize("arguments, expected", [
+    (["update"], []),
+    (["update", "--no-restart"], []),
+    (["--workspace", r"C:\proj", "--model", "test-model", "update"],
+     ["--workspace", r"C:\proj", "--model", "test-model"]),
+    (["-w", "update", "-m", "update", "update"], ["-w", "update", "-m", "update"]),
+    (["--workspace=update", "update"], ["--workspace=update"]),
+    (["--workspace", r"C:\proj"], ["--workspace", r"C:\proj"]),
+])
+def test_restart_does_not_replay_update(monkeypatch, arguments, expected):
+    captured = {}
+    monkeypatch.setattr(updater.os, "execv", lambda exe, args: captured.update(args=args))
+    monkeypatch.setattr(updater, "_log", lambda _: None)
+    monkeypatch.setattr(sys, "argv", ["evren", *arguments])
+    with patch.object(updater.os, "chdir") as chdir:
+        updater.restart_process()
+    assert captured["args"] == [sys.executable, "-m", "src.cli", *expected]
+    chdir.assert_not_called()
+
+
+def test_cli_update_runs_once_then_restart_enters_repl(monkeypatch, tmp_path):
+    from src import cli
+
+    captured = {}
+    monkeypatch.setattr(sys, "argv", ["evren", "--workspace", str(tmp_path), "update"])
+    monkeypatch.setattr(updater, "_log", lambda _: None)
+    monkeypatch.setattr(updater.os, "execv", lambda exe, args: captured.update(args=args))
+    update = MagicMock(return_value=(True, "ok"))
+    monkeypatch.setattr(updater, "perform_update", update)
+    cli.main()
+    assert captured["args"]
+    monkeypatch.setattr(sys, "argv", ["evren", *captured["args"][3:]])
+    with patch("src.repl.start_repl") as repl:
+        cli.main()
+    update.assert_called_once_with(restart=False)
+    repl.assert_called_once()
+    assert repl.call_args.kwargs["workspace_path"] == str(tmp_path)
+
+
+def test_no_restart_does_not_exec(monkeypatch):
+    from src import cli
+
+    monkeypatch.setattr(sys, "argv", ["evren", "update", "--no-restart"])
+    monkeypatch.setattr(updater, "perform_update", lambda **_: (True, "ok"))
+    with patch.object(updater, "restart_process") as restart:
+        cli.main()
+    restart.assert_not_called()
