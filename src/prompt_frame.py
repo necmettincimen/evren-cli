@@ -198,6 +198,8 @@ def collect_guided_prompt_frame(
 ) -> PromptFrame | str:
     """Brief -> bounded clarification -> individually accepted empty-field suggestions."""
     brief = (read_line(field_prompt("01 Brief", "yapılacak iş", previous.brief if previous else "")) or "").strip()
+    if brief.casefold() == "devam":
+        return "/continue"
     if brief.startswith("/"):
         return brief
     if not brief and previous:

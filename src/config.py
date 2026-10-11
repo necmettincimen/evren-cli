@@ -291,7 +291,7 @@ def ensure_evren_dirs(workspace_root: Path | None = None):
     # Create a gitignore in .evren if it doesn't exist
     gi = evren_dir / ".gitignore"
     if not gi.exists():
-        gi.write_text("backups/\nlogs/\nhistory.json\n", encoding="utf-8")
+        gi.write_text("backups/\nlogs/\nhistory.json\ncheckpoint.json\ndecisions.json\n", encoding="utf-8")
 
 
 def check_api_key_configured() -> bool:

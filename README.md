@@ -133,6 +133,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-global.ps1 -Venv
 
 ## 💻 Kullanım Biçimleri
 
+Ajan adım sınırında durduğunda Brief satırına `devam` veya `/continue` yazın.
+Form ve netleştirme tekrarlanmaz; mevcut sohbet/araç sonuçları ve görev kipi
+korunarak yeni 30 adımlık bütçe başlatılır. Her yeni sınırda tekrar devam
+edebilirsiniz. `/clear` veya yeni görev bu devam durumunu temizler.
+Adım sınırında kalıcı checkpoint kaydı için ayrıca onay istenir (otomatik onay
+ayarından bağımsız). Kayıt yaptıysanız sonraki oturumda `/continue` yükleme
+onayı ister; salt-okuma/plan kipi ve araç geçmişi korunur. Yükleme tek başına
+eski araç çağrılarını çalıştırmaz. `/checkpoint` kayıt bilgisini gösterir,
+`/checkpoint save` onayla kaydeder, `/checkpoint clear` onayla siler.
+Checkpoint yerel `.evren/checkpoint.json` dosyasında tutulur; sistem promptu
+yeni kurulumdan oluşturulur. URL parolaları, yaygın secret/token alanları ve
+özel anahtar blokları maskelenir. Bu filtre tam gizlilik garantisi değildir:
+hassas görevlerde kaydı reddedin; maskelenen kimlik bilgilerini güvenli yoldan
+yeniden sağlayın. Dosya şifrelenmez; Windows erişimi dizin ACL'lerine bağlıdır.
+
 `evren update` güncellemeyi bir kez yapar ve ardından etkileşimli CLI'ı açar;
 yeniden başlatmada `update` komutu tekrar çalıştırılmaz. Çalışma dizini,
 `--workspace` ve `--model` seçenekleri korunur. Yeniden başlatmadan yalnızca
@@ -327,6 +342,18 @@ kalıcı bir geliştirme ortağına dönüştürür:
   konvansiyonlar, hedef) ve notlar saklanır; her oturumda sistem istemine eklenir.
 - **Uygulama takibi (`/track`, `/task`, `/progress`):** `.evren/tasks.json` altında
   altı durumlu görevler; öneri ile gerçekleşen iş arasındaki boşluğu kapatır.
+  `/blockers` engellenmiş veya 14 gündür ilerlemeyen işleri, kayıtlı kanıt ve çözüm
+  yönlendirmesiyle gösterir. `/blockers add <id> <kategori> <kanıt>` ve
+  `/blockers resolve <id> <not>` onayla kayıt değiştirir. Kategoriler:
+  `dns`, `auth`, `dependency`, `knowledge`, `external`, `permission`.
+  Nedenler otomatik tahmin edilmez; onaylı görev kayıtlarından okunur.
+- **Gözden geçirme (`/check-in`):** Açık, gecikmiş ve 14 gündür duraklamış görevleri
+  gösterir. `/check-in update` her görev için durum, ilerleme ve not sorar;
+  değişiklikleri ayrı onayla kaydeder.
+- **Karar günlüğü (`/decisions`):** `/decisions add` karar, gerekçe ve risk/sınır
+  sorar; onayla `.evren/decisions.json` dosyasına kaydeder. Son 10 karar ajan
+  bağlamına eklenir; bunlar geçmiş bilgidir, yürütme izni değildir. Karar kaydı
+  mevcut Rol/Çerçeve alanlarını silmez.
 - **Playbook'lar (`/playbook`, `/resume`):** Release, hotfix, onboarding ve migration
   gibi çok adımlı reçeteler; `.evren/playbook.json` checkpoint'i ile kaldığı yerden devam.
 - **Dil modu (`/language`):** Kod İngilizce kalır, kullanıcıya dönük düzyazı seçilen

@@ -160,6 +160,39 @@ class TestAgentLoop(unittest.TestCase):
             result = self.session.run_step("uygula", max_steps=1)
         self.assertTrue(result.startswith("HATA:"))
 
+    def test_continue_preserves_tool_history_and_finishes(self):
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call('{"command": "echo local"}')],
+        )
+        with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0"):
+            self.session.run_step("uygula", max_steps=1)
+        history = deepcopy(self.session.messages)
+        self.client.chat_stream_assembled.return_value = response("done")
+        self.assertEqual(self.session.continue_task(max_steps=1), "done")
+        self.assertEqual(self.session.messages[:len(history)], history)
+        self.assertIsNone(self.session.pending_mode)
+
+    def test_continue_without_pending_task_does_not_call_model(self):
+        self.assertTrue(self.session.continue_task().startswith("HATA:"))
+        self.client.chat_stream_assembled.assert_not_called()
+
+    def test_continue_retains_read_only_turn_mode_and_can_pause_again(self):
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call('{"command": "hostname"}')],
+        )
+        with patch("src.agent.execute_tool_call", return_value="local"):
+            self.session.run_step("ask: incele", max_steps=1)
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call('{"path":"a.py","content":"x"}', "write_file")],
+        )
+        with patch("src.agent.execute_tool_call") as execute:
+            self.session.continue_task(max_steps=1)
+        execute.assert_not_called()
+        self.assertEqual(self.session.pending_mode, AgentMode.ASK)
+        self.assertEqual(self.session.mode, AgentMode.NORMAL)
+        self.session.clear_history()
+        self.assertIsNone(self.session.pending_mode)
+
     def test_final_answer_on_last_step_is_not_reported_as_limit(self):
         self.client.chat_stream_assembled.return_value = response("done")
         with patch("src.agent.print_warning") as warning:

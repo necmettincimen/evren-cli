@@ -114,10 +114,21 @@ class AgentSession:
         # Working mode (normal / ask / plan). Persisted across turns; can be
         # overridden per-turn via an "ask:" / "plan:" message prefix.
         self.mode: AgentMode = AgentMode.NORMAL
+        self.pending_mode: AgentMode | None = None
+        self.task_goal = ""
 
     def _compose_system(self, base: str) -> str:
         """Appends runtime environment, persistent memory and language blocks."""
         blocks: list[str] = [execution_context_block(self.workspace_root)]
+        from src.workflow_state import decision_context
+
+        try:
+            decisions = decision_context(self.workspace_root)
+        except (OSError, ValueError) as e:
+            print_warning(f"Karar günlüğü bağlama yüklenemedi: {e}")
+        else:
+            if decisions:
+                blocks.append(decisions)
         try:
             from src.memory import memory_context_block
             mem = memory_context_block(self.workspace_root)
@@ -136,7 +147,7 @@ class AgentSession:
 
     def refresh_context(self):
         """Rebuilds the system prompt from base + memory + language blocks."""
-        self.system_prompt = self._compose_system(self.base_system_prompt)
+        self.system_prompt = compose_system(self._compose_system(self.base_system_prompt), self.frame)
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0]["content"] = self.system_prompt
 
@@ -161,6 +172,58 @@ class AgentSession:
         self.messages = [{"role": "system", "content": self.system_prompt}]
         self.active_context_files.clear()
         self.last_usage = None
+        self.pending_mode = None
+        self.task_goal = ""
+
+    def continue_task(self, max_steps: int = 30) -> str:
+        """Resumes a step-limited task with history intact and its mode preserved."""
+        if self.pending_mode is None:
+            error = "HATA: Devam edilecek adım sınırında duraklamış görev yok."
+            print_warning(error)
+            return error
+        mode = self.mode
+        goal = self.task_goal
+        self.mode = self.pending_mode
+        try:
+            return self.run_step(
+                f"Asıl görev (geçmiş bağlam):\n{goal}\n\n"
+                "Önceki adım sınırında duraklayan göreve mevcut geçmiş ve son araç "
+                "sonuçlarından devam et. Brief/netleştirme formunu tekrar başlatma. "
+                "Tamamlanan işleri tekrarlama; önce kalan işi ve son engeli değerlendir, "
+                "kaydedilmiş durum eski olabileceği için değişiklikten önce canlı ortamı "
+                "salt-okuma ile doğrula; sonra sıradaki küçük doğrulanabilir adımı uygula. Eksik izin veya "
+                "kimlik bilgilerini varsayma; gerekli engeli açıkça bildir.",
+                max_steps=max_steps,
+            )
+        finally:
+            self.mode = mode
+            self.task_goal = goal
+
+    def save_checkpoint(self) -> Path:
+        from src.workflow_state import save_checkpoint
+
+        if self.pending_mode is None:
+            raise ValueError("Kaydedilecek duraklamış görev yok.")
+        return save_checkpoint(
+            self.workspace_root, self.messages, self.pending_mode, self.model, vars(self.frame),
+            self.task_goal,
+        )
+
+    def restore_checkpoint(self) -> bool:
+        from src.workflow_state import load_checkpoint
+
+        state = load_checkpoint(self.workspace_root)
+        if state is None:
+            return False
+        frame = PromptFrame(**state["frame"])
+        system = compose_system(self._compose_system(self.base_system_prompt), frame)
+        self.frame = frame
+        self.system_prompt = system
+        self.messages = [{"role": "system", "content": system}, *state["messages"]]
+        self.model = state["model"]
+        self.pending_mode = AgentMode(state["mode"])
+        self.task_goal = state["goal"]
+        return True
 
     def apply_frame(
         self, frame: PromptFrame, extra: str = "", *, replace_identity: bool = False,
@@ -258,6 +321,8 @@ class AgentSession:
         # Per-turn mode override via "ask:" / "plan:" prefix.
         turn_mode, cleaned_input = parse_mode_prefix(user_input)
         effective_mode = turn_mode or self.mode
+        self.pending_mode = None
+        self.task_goal = cleaned_input
 
         # Inject active context files if any
         prompt_with_context = cleaned_input
@@ -485,7 +550,11 @@ class AgentSession:
                 print_markdown(final_content)
             return final_content
 
-        error = f"HATA: Ajan maksimum adım sınırına ({max_steps}) ulaştı; görev tamamlanmadı."
+        self.pending_mode = effective_mode
+        error = (
+            f"HATA: Ajan maksimum adım sınırına ({max_steps}) ulaştı; görev tamamlanmadı. "
+            "Geçmiş korunuyor; devam veya /continue ile sürdürebilirsiniz."
+        )
         print_warning(error)
         self.messages.append({"role": "assistant", "content": error})
         return error

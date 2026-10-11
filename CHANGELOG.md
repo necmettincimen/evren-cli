@@ -5,6 +5,19 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.12.0] - 2026-10-11
+
+### Eklendi
+- **Göreve devam:** Brief satırında `devam` veya `/continue`, adım sınırında duraklayan görevi formu tekrarlamadan yeni adım bütçesiyle sürdürür; geçmiş ve görev kipi korunur.
+- **Onaylı kalıcı checkpoint:** Adım sınırında kayıt onayı; sonraki oturumda `/continue` ile onaylı geri yükleme. `/checkpoint [save|clear]` ile kayıt yönetimi. Yaygın kimlik bilgileri maskelenir; kayıt şifrelenmez ve hassas görevlerde reddedilebilir.
+- **Engel takibi:** `/blockers`, onaylı engel kanıtlarını ve çözüm yönlendirmelerini gösterir; `add` ve `resolve` ile görev engelleri yönetilir.
+- **Görev gözden geçirme:** `/check-in [update]`, açık, gecikmiş ve 14 gündür duraklamış görevleri gösterir; değişiklikler ayrı kullanıcı onayıyla kaydedilir.
+- **Karar günlüğü:** `/decisions [add]`, karar, gerekçe ve riskleri onayla saklar; son 10 karar yürütme izni sayılmadan ajan bağlamına eklenir.
+
+### Düzeltildi
+- Asıl görev hedefi geçmiş sıkıştırmasından bağımsız korunur. Checkpoint yükleme eski araç çağrılarını otomatik yürütmez; devam sırasında canlı durumun doğrulanması istenir.
+- Bağlam yenileme mevcut Rol/Çerçeve alanlarını korur; checkpoint biçimi, araç eşleşmeleri, parola maskeleme ve onay sınırları için regresyon testleri eklendi.
+
 ## [0.11.3] - 2026-10-11
 
 ### Eklendi

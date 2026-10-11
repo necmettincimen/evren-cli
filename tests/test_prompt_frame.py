@@ -257,6 +257,13 @@ class TestGuidedFrame(unittest.TestCase):
         self.assertEqual(self.collect(["/help"], guidance), "/help")
         guidance.assert_not_called()
 
+    def test_continue_skips_form_and_guidance(self):
+        for text in ("devam", " DEVAM ", "/continue"):
+            with self.subTest(text=text):
+                guidance = MagicMock()
+                self.assertEqual(self.collect([text], guidance), "/continue")
+                guidance.assert_not_called()
+
     def test_slash_during_clarify_aborts_preparation(self):
         guidance = MagicMock(return_value=FrameGuidance(question="Hedef?"))
         self.assertEqual(self.collect(["iş", "/clear"], guidance), "/clear")

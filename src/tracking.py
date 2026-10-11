@@ -185,6 +185,50 @@ def remove_task(task_id: str, workspace_root: Path | None = None) -> bool:
     return True
 
 
+def set_blocker(task_id: str, category: str, evidence: str, workspace_root: Path) -> dict:
+    """Records a user-confirmed blocker; no inferred failure classification."""
+    from src.workflow_state import BLOCKER_ROUTES, redact_text
+
+    if category not in BLOCKER_ROUTES:
+        raise ValueError(f"Geçersiz engel kategorisi: {', '.join(BLOCKER_ROUTES)}")
+    if not evidence.strip():
+        raise ValueError("Engel kanıtı boş olamaz.")
+    state = load_tasks(workspace_root)
+    item = _find(state, task_id)
+    if item is None:
+        raise ValueError(f"Görev bulunamadı: {task_id}")
+    if item.get("status") in ("completed", "abandoned"):
+        raise ValueError("Tamamlanmış veya bırakılmış görev engellenemez.")
+    item["blocker"] = {
+        "category": category, "evidence": redact_text(evidence.strip()),
+        "route": BLOCKER_ROUTES[category], "at": _now(),
+    }
+    item["status"] = "blocked"
+    item["updated_at"] = _now()
+    item.setdefault("history", []).append({"at": _now(), "event": "blocked", "category": category})
+    save_tasks(state, workspace_root)
+    return item
+
+
+def resolve_blocker(task_id: str, note: str, workspace_root: Path) -> dict:
+    if not note.strip():
+        raise ValueError("Çözüm notu boş olamaz.")
+    state = load_tasks(workspace_root)
+    item = _find(state, task_id)
+    if item is None:
+        raise ValueError(f"Görev bulunamadı: {task_id}")
+    if item.get("status") != "blocked":
+        raise ValueError("Görev engellenmiş durumda değil.")
+    from src.workflow_state import redact_text
+
+    item.pop("blocker", None)
+    item["status"] = "in-progress"
+    item["updated_at"] = _now()
+    item.setdefault("history", []).append({"at": _now(), "event": "unblocked", "note": redact_text(note)})
+    save_tasks(state, workspace_root)
+    return item
+
+
 def progress_summary(workspace_root: Path | None = None) -> dict:
     """Returns counts per status plus overall completion percentage."""
     state = load_tasks(workspace_root)

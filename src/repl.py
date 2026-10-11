@@ -43,6 +43,7 @@ from src.ui import (
     console,
     HAVE_RICH,
     form_palette,
+    prompt_confirm,
 )
 
 
@@ -90,6 +91,141 @@ def _collect_frame(session: AgentSession, pt_session, previous=None):
     return collect_guided_prompt_frame(
         lambda label: _read_line(pt_session, label), guidance, previous,
     )
+
+
+def _run_agent(session: AgentSession, prompt: str | None = None) -> None:
+    """Run or continue, then offer opt-in persistence outside auto-approval."""
+    from src.workflow_state import clear_checkpoint
+
+    if prompt is None:
+        session.continue_task()
+    else:
+        clear_checkpoint(session.workspace_root)
+        session.run_step(prompt)
+
+    if session.pending_mode is None:
+        clear_checkpoint(session.workspace_root)
+    elif prompt_confirm(
+        "Duraklayan görevi diske kaydedelim mi? Yaygın sırlar maskelenir fakat tam "
+        "gizlilik garantisi yoktur; hassas görevde reddedin.", default=False,
+    ):
+        session.save_checkpoint()
+        print_success("Checkpoint kaydedildi. Sonraki oturumda /continue ile onaylı yüklenebilir.")
+
+
+def _handle_workflow_command(cmd: str, arg: str, session: AgentSession, read_line) -> bool:
+    """Interactive workflow actions. Mutations always require explicit confirmation."""
+    if cmd not in ("/checkpoint", "/blockers", "/check-in", "/decisions"):
+        return False
+    from src.workflow_state import (
+        BLOCKER_ROUTES, clear_checkpoint, load_checkpoint,
+        add_decision, load_decisions, review_tasks,
+    )
+    from src.tracking import list_tasks, set_blocker, resolve_blocker, update_task, STATUSES
+
+    root = session.workspace_root
+    try:
+        if cmd == "/checkpoint":
+            if arg == "save":
+                if prompt_confirm("Görev geçmişini maskeleyerek diske kaydet? Hassas içerikte reddedin.", default=False):
+                    session.save_checkpoint()
+                    print_success("Checkpoint kaydedildi.")
+            elif arg == "clear":
+                if prompt_confirm("Kalıcı checkpoint silinsin mi?", default=False):
+                    clear_checkpoint(root)
+                    print_success("Kalıcı checkpoint silindi.")
+            elif not arg:
+                state = load_checkpoint(root)
+                if state is None:
+                    print_info("Kalıcı checkpoint yok.")
+                else:
+                    print_info(f"Checkpoint: {state['saved_at']} | {state['model']} | {state['mode']}")
+                print_info("Komutlar: /checkpoint save | /checkpoint clear | /continue")
+            else:
+                raise ValueError("Kullanım: /checkpoint [save|clear]")
+        elif cmd == "/decisions":
+            if arg == "add":
+                decision = read_line("Karar > ")
+                reason = read_line("Gerekçe > ")
+                risk = read_line("Risk ve sınırlar > ")
+                if not all(value.strip() for value in (decision, reason, risk)):
+                    raise ValueError("Karar, gerekçe ve risk boş olamaz.")
+                if prompt_confirm("Bu karar günlüğe kaydedilsin ve ajan bağlamına eklensin mi?", default=False):
+                    item = add_decision(root, decision, reason, risk)
+                    session.refresh_context()
+                    print_success(f"Karar kaydedildi: {item['id']}")
+            elif not arg:
+                items = load_decisions(root)
+                print_info(f"Onaylı kararlar ({len(items)}):")
+                for item in items:
+                    print(f"  {item['id']}: {item['decision']}\n    Gerekçe: {item['reason']}\n    Risk: {item['risk']}")
+                print_info("Yeni kayıt: /decisions add")
+            else:
+                raise ValueError("Kullanım: /decisions [add]")
+        elif cmd == "/blockers":
+            parts = arg.split(maxsplit=3)
+            if parts and parts[0] == "add":
+                if len(parts) != 4:
+                    raise ValueError("Kullanım: /blockers add <görev-id> <kategori> <kanıt>")
+                if prompt_confirm("Bu engeli görev kaydına ekle?", default=False):
+                    set_blocker(parts[1], parts[2], parts[3], root)
+                    print_success("Engel kaydedildi.")
+            elif parts and parts[0] == "resolve":
+                pieces = arg.split(maxsplit=2)
+                if len(pieces) != 3:
+                    raise ValueError("Kullanım: /blockers resolve <görev-id> <çözüm notu>")
+                if prompt_confirm("Engeli çözüldü olarak işaretle?", default=False):
+                    resolve_blocker(pieces[1], pieces[2], root)
+                    print_success("Engel çözüldü; görev devam ediyor.")
+            else:
+                if arg and arg not in BLOCKER_ROUTES:
+                    raise ValueError(f"Kategoriler: {', '.join(BLOCKER_ROUTES)}")
+                items = review_tasks(list_tasks("all", root))
+                for item in items:
+                    blocker = item.get("blocker", {}) if item.get("status") == "blocked" else {}
+                    if not ({"blocked", "stalled"} & set(item["flags"])):
+                        continue
+                    if arg and blocker.get("category") != arg:
+                        continue
+                    print_info(f"{item['id']} [{', '.join(item['flags'])}]")
+                    print(f"  Kanıt: {blocker.get('evidence', 'Kayıtlı kanıt yok; neden varsayılmadı.')}")
+                    print(f"  Öneri: {blocker.get('route', 'Görev durumunu gözden geçir; /check-in kullan.')}")
+                print_info(f"Kategoriler: {', '.join(BLOCKER_ROUTES)}")
+                print_info("/blockers add <id> <kategori> <kanıt> | /blockers resolve <id> <not>")
+        else:
+            if arg not in ("", "update"):
+                raise ValueError("Kullanım: /check-in [update]")
+            items = review_tasks(list_tasks("all", root))
+            print_info(f"Açık görev gözden geçirmesi ({len(items)}):")
+            for item in items:
+                print(f"  {item['id']} [{item['status']}] %{item['progress']} "
+                      f"| {', '.join(item['flags']) or 'open'} | {item['description']}")
+                if arg != "update":
+                    continue
+                status = read_line(f"{item['id']} durum ({', '.join(STATUSES)}; Enter=koru) > ").strip()
+                raw_progress = read_line("İlerleme 0-100 (Enter=koru) > ").strip()
+                note = read_line("Gözden geçirme notu (Enter=atla) > ").strip()
+                if status and status not in STATUSES:
+                    raise ValueError("Geçersiz görev durumu.")
+                if raw_progress and (not raw_progress.isdigit() or not 0 <= int(raw_progress) <= 100):
+                    raise ValueError("İlerleme 0-100 arasında tam sayı olmalıdır.")
+                if raw_progress and (
+                    (status == "completed" and int(raw_progress) != 100)
+                    or (status and status != "completed" and int(raw_progress) == 100)
+                ):
+                    raise ValueError("Durum ve ilerleme çelişiyor: completed yalnızca %100 olmalıdır.")
+                if status or raw_progress or note:
+                    if prompt_confirm(f"{item['id']} güncellensin mi?", default=False):
+                        from src.workflow_state import redact_text
+
+                        update_task(item["id"], status=status or None,
+                                    progress=int(raw_progress) if raw_progress else None,
+                                    note=redact_text(note), workspace_root=root)
+                        print_success(f"Görev güncellendi: {item['id']}")
+            print_info("Onaylı güncelleme: /check-in update")
+    except (OSError, ValueError) as e:
+        print_error(f"İş akışı işlemi başarısız: {e}")
+    return True
 
 
 def _fmt_quota_num(value) -> str:
@@ -170,6 +306,11 @@ HELP_TEXT = """
   [green]/ssh test <alias>[/green]     SSH bağlantısını test eder
   [green]/update[/green]               En son sürümü GitHub'dan çeker ve CLI'ı yeniden başlatır
   [green]/clear[/green]                Mevcut sohbet ve bağlam geçmişini sıfırlar
+  [green]/continue[/green]             Adım sınırında duraklayan görevi geçmişle sürdürür (Brief: devam)
+  [green]/checkpoint [save|clear][/green]  Onaylı kalıcı görev kaydı
+  [green]/blockers[/green]             Engelleri ve çözüm yönlendirmelerini gösterir
+  [green]/check-in [update][/green]     Açık/gecikmiş/duraklamış görevleri gözden geçirir
+  [green]/decisions [add][/green]       Onaylı mimari karar günlüğü
   [green]/exit[/green] veya [green]/quit[/green]       Uygulamadan çıkar
 
 [bold]Beş satırlık kalıp (her tur):[/bold]
@@ -398,6 +539,9 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         quota_info=quota_str,
     )
     print_info(FORM_INTRO)
+    from src.workflow_state import checkpoint_path
+    if checkpoint_path(workspace_root).exists():
+        print_info("Kalıcı checkpoint bulundu. İncelemek için /checkpoint, onaylı yükleme için /continue.")
 
     # History setup
     history_file = evren_dir / "history.txt"
@@ -424,7 +568,9 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             elif not collected.is_empty():
                 last_frame = collected
                 print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
-                session.run_step(session.apply_frame(collected, replace_identity=True))
+                from src.workflow_state import clear_checkpoint
+                clear_checkpoint(workspace_root)
+                _run_agent(session, session.apply_frame(collected, replace_identity=True))
                 continue
             else:
                 user_input = _read_line(pt_session, "İstek > ")
@@ -432,10 +578,24 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                     continue
 
             # Check slash commands
+            if user_input.strip().casefold() in ("devam", "/continue"):
+                if session.pending_mode is None:
+                    from src.workflow_state import checkpoint_path
+                    if checkpoint_path(workspace_root).exists():
+                        if not prompt_confirm(
+                            "Kalıcı checkpoint yüklensin mi? Maskelenmiş bilgiler yeniden sağlanmalıdır.",
+                            default=False,
+                        ):
+                            continue
+                        session.restore_checkpoint()
+                _run_agent(session)
+                continue
             if user_input.startswith("/"):
                 parts = user_input.split(maxsplit=1)
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else ""
+                if _handle_workflow_command(cmd, arg, session, lambda label: _read_line(pt_session, label)):
+                    continue
 
                 if cmd in ("/exit", "/quit", "/q"):
                     print_info("EVREN CLI sonlandırılıyor. İyi çalışmalar!")
@@ -566,7 +726,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                             print_error(str(e))
                         else:
                             print_info(f"Beceri uygulanıyor: {arg}")
-                            session.run_step(content)
+                            _run_agent(session, content)
 
                 elif cmd == "/diagnose":
                     from src.diagnostics import list_diagnostics, get_diagnostic, match_by_symptom
@@ -587,7 +747,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                                 print_error(f"Triyaj bulunamadı: {arg}")
                         else:
                             print_info(f"Triyaj başlatılıyor: {diag.title}")
-                            session.run_step(session.apply_diagnostic(diag.name))
+                            _run_agent(session, session.apply_diagnostic(diag.name))
 
                 elif cmd == "/template":
                     from src.templates import list_templates, get_template, audiences
@@ -603,7 +763,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                             print_error(f"Şablon bulunamadı: {arg}")
                         else:
                             print_info(f"Şablon dolduruluyor: {tmpl.title}")
-                            session.run_step(session.apply_template(tmpl.name))
+                            _run_agent(session, session.apply_template(tmpl.name))
 
                 elif cmd == "/memory":
                     from src.memory import load_memory, set_profile, add_note
@@ -691,7 +851,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                         else:
                             save_checkpoint(pb.name, 0, workspace_root)
                             print_info(f"Playbook başlatıldı: {pb.title} (adım 1/{len(pb.steps)})")
-                            session.run_step(session.apply_playbook_step(pb.name, 0))
+                            _run_agent(session, session.apply_playbook_step(pb.name, 0))
 
                 elif cmd == "/resume":
                     from src.playbooks import load_checkpoint, get_playbook, save_checkpoint
@@ -705,7 +865,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                             print_info("Playbook tamamlanmış görünüyor.")
                         else:
                             print_info(f"Devam ediliyor: {pb.title} (adım {step + 1}/{len(pb.steps)})")
-                            session.run_step(session.apply_playbook_step(pb.name, step))
+                            _run_agent(session, session.apply_playbook_step(pb.name, step))
                             save_checkpoint(pb.name, step + 1, workspace_root)
 
                 elif cmd == "/language":
@@ -804,6 +964,8 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                         print_error(f"Güncelleme başarısız: {msg}")
 
                 elif cmd == "/clear":
+                    from src.workflow_state import clear_checkpoint
+                    clear_checkpoint(workspace_root)
                     session.clear_history()
                     print_success("Sohbet geçmişi, kalıp ve aktif bağlam temizlendi.")
 
@@ -812,7 +974,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                 continue
 
             # Regular prompt: run autonomous agent loop
-            session.run_step(user_input)
+            _run_agent(session, user_input)
 
         except KeyboardInterrupt:
             print("\nİşlem durduruldu. Çıkmak için /exit yazabilirsiniz.")
