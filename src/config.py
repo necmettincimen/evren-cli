@@ -176,7 +176,7 @@ _load_legacy_evren_cli_config()
 # Core EVREN API Configuration
 EVREN_API_KEY = os.getenv("EVREN_API_KEY", "")
 EVREN_BASE_URL = os.getenv("EVREN_BASE_URL", "https://evren-llmapi.ssyz.org.tr/v1").rstrip("/")
-EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "deepseek-v4.1-flash")
+EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "qwen3.8-flash-next")
 EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -235,9 +235,9 @@ def build_httpx_client(timeout=None):
 
 # Known EVREN Models
 RECOMMENDED_MODELS = {
-    "deepseek-v4.1-flash": "Kodlama ve Ajan İşleri (1M Bağlam, Hızlı, En Çok Önerilen)",
+    "qwen3.8-flash-next": "Varsayılan · Hızlı Yanıtlar, Vibe Coding, Yüksek Eşzamanlılık",
+    "deepseek-v4.1-flash": "Kodlama ve Ajan İşleri (1M Bağlam, Hızlı)",
     "glm-5.3": "Derin Akıl Yürütme ve Çok Adımlı Karmaşık Analiz",
-    "qwen3.8-flash-next": "Hızlı Yanıtlar, Vibe Coding, Yüksek Eşzamanlılık",
     "auto": "Otomatik Model Yönlendirme",
     "dots-ocr": "Belge ve Resim Metin Tanıma (OCR)",
     "deepseek-ocr-2": "Gelişmiş Belge/Görsel Analizi ve OCR",

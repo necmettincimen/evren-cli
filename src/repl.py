@@ -964,11 +964,18 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                     _handle_ssh_command(arg, workspace_root)
 
                 elif cmd == "/update":
-                    from src.updater import perform_update, is_git_checkout, get_project_root
+                    from src.updater import (
+                        perform_update, is_git_checkout, get_project_root, update_is_deferred,
+                    )
                     src_kind = "git checkout" if is_git_checkout(get_project_root()) else "pip paketi"
                     print_info(f"Güncelleme kaynağı: {src_kind} (github.com/necmettincimen/evren-cli)")
+                    deferred = update_is_deferred()
                     with status_spinner("En son sürüm çekiliyor ve kuruluyor..."):
                         ok, msg = perform_update(restart=False)
+                    if ok and deferred:
+                        print_success(msg)
+                        print_info("EVREN CLI güncelleme için kapatılıyor.")
+                        break
                     if ok:
                         print_success("Güncelleme tamamlandı. CLI yeni sürümle yeniden başlatılıyor...")
                         from src.updater import restart_process
