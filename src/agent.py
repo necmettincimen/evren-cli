@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.api_client import EvrenClient
+from src.api_client import EvrenClient, normalize_chat_messages
 from src.tools import TOOLS_SCHEMA, execute_tool_call
 from src.config import get_workspace_dir, execution_context_block, EVREN_DEFAULT_MAX_TOKENS
 from src.token_manager import TokenManager
@@ -433,7 +433,10 @@ class AgentSession:
                             "tam ve geçerli argümanlarla çağır veya somut engeli kısa bildir."
                         )
                     response = self.client.chat_stream_assembled(
-                        messages=[*self.messages, {"role": "system", "content": step_instruction}],
+                        messages=normalize_chat_messages([
+                            *self.messages,
+                            {"role": "system", "content": step_instruction},
+                        ]),
                         model=self.model,
                         max_tokens=output_budget,
                         tools=TOOLS_SCHEMA,

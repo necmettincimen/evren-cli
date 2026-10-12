@@ -386,12 +386,57 @@ class TestGuidedFrame(unittest.TestCase):
         result = request_frame_guidance(client, "test-model", PromptFrame(brief="iş"), True)
         self.assertEqual(result.question, "Hedef?")
         kwargs = client.chat_complete.call_args.kwargs
-        self.assertNotIn("tools", kwargs)
         self.assertEqual(kwargs["model"], "test-model")
+        tool = kwargs["tools"][0]["function"]
+        self.assertEqual(tool["name"], "submit_frame_guidance")
+        self.assertEqual(set(tool["parameters"]["properties"]), {"question"})
+        self.assertEqual(kwargs["tool_choice"]["function"]["name"], "submit_frame_guidance")
+        self.assertNotIn("view_file", str(kwargs["tools"]))
         instruction = kwargs["messages"][0]["content"]
         self.assertIn("ASIL HEDEF", instruction)
         self.assertIn("eşzamanlı yazma", instruction)
         self.assertIn("tek karar", instruction)
+        self.assertEqual(kwargs["messages"][0]["role"], "system")
+        self.assertTrue(all(message["role"] != "system" for message in kwargs["messages"][1:]))
+
+    def test_guidance_accepts_tool_schema_arguments(self):
+        client = MagicMock()
+        client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="tool_calls",
+            message=SimpleNamespace(
+                content="",
+                tool_calls=[SimpleNamespace(function=SimpleNamespace(
+                    name="submit_frame_guidance",
+                    arguments='{"question": "Hangi namespace?"}',
+                ))],
+            ),
+        )])
+        result = request_frame_guidance(client, "test-model", PromptFrame(brief="iş"), True)
+        self.assertEqual(result.question, "Hangi namespace?")
+        sent = client.chat_complete.call_args.kwargs
+        self.assertEqual(sent["messages"][0]["role"], "system")
+        schema = sent["tools"][0]["function"]["parameters"]
+        self.assertEqual(schema["required"], ["question"])
+        self.assertIn("output_schema", sent["messages"][1]["content"])
+
+    def test_suggestion_schema_lists_only_empty_fields(self):
+        client = MagicMock()
+        client.chat_complete.return_value = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="tool_calls",
+            message=SimpleNamespace(
+                content=None,
+                tool_calls=[SimpleNamespace(function=SimpleNamespace(
+                    name="submit_frame_guidance",
+                    arguments='{"cerceve":"adımlar","kisit":"sınır","cikti":"test"}',
+                ))],
+            ),
+        )])
+        result = request_frame_guidance(
+            client, "test-model", PromptFrame(brief="iş", rol="koru"), False,
+        )
+        self.assertEqual(set(result.suggestions), {"cerceve", "kisit", "cikti"})
+        properties = client.chat_complete.call_args.kwargs["tools"][0]["function"]["parameters"]["properties"]
+        self.assertEqual(set(properties), {"cerceve", "kisit", "cikti"})
 
     def test_invalid_api_payloads_fail_explicitly(self):
         for payload in ('not json', '[]', '{"question": 2}', '{"question": "", "rol": "x"}'):

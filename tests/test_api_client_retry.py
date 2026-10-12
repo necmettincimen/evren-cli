@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from src.api_client import EvrenClient
+from src.api_client import EvrenClient, normalize_chat_messages
 from src.api_key_pool import ApiKeyPool
 from src.errors import RateLimitError, QuotaExhaustedError, AuthError, ServerError
 from tests.helpers import FakeClock, make_status_error, FakeCompletion
@@ -25,7 +25,38 @@ def _fake_client_with(side_effect):
     return mock_client
 
 
+class TestNormalizeChatMessages(unittest.TestCase):
+    def test_later_system_messages_merge_into_the_first(self):
+        sent = normalize_chat_messages([
+            {"role": "system", "content": "kimlik"},
+            {"role": "user", "content": "iş"},
+            {"role": "system", "content": "adım"},
+        ])
+        self.assertEqual([message["role"] for message in sent], ["system", "user"])
+        self.assertIn("kimlik", sent[0]["content"])
+        self.assertIn("adım", sent[0]["content"])
+        self.assertLess(sent[0]["content"].find("kimlik"), sent[0]["content"].find("adım"))
+        self.assertEqual(sent[1]["content"], "iş")
+
+    def test_user_only_history_stays_unchanged(self):
+        sent = normalize_chat_messages([{"role": "user", "content": "hi"}])
+        self.assertEqual(sent, [{"role": "user", "content": "hi"}])
+
+
 class TestChatCompleteRetry(unittest.TestCase):
+    def test_complete_sends_system_message_first(self):
+        client = _make_client()
+        fake = _fake_client_with([FakeCompletion("ok")])
+        with patch.object(client.key_pool, "get_client", return_value=fake):
+            client.chat_complete(messages=[
+                {"role": "system", "content": "kimlik"},
+                {"role": "user", "content": "iş"},
+                {"role": "system", "content": "adım"},
+            ])
+        sent = fake.chat.completions.create.call_args.kwargs["messages"]
+        self.assertEqual([message["role"] for message in sent], ["system", "user"])
+        self.assertIn("adım", sent[0]["content"])
+
     def test_success_first_try(self):
         client = _make_client()
         fake = _fake_client_with([FakeCompletion("hello")])

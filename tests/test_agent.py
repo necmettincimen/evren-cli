@@ -54,7 +54,9 @@ class TestAgentLoop(unittest.TestCase):
         self.client.chat_stream_assembled.side_effect = reply
         self.assertEqual(self.session.run_step("bu hostta testleri çalıştır"), "verified")
         self.assertEqual(len(requests), 2)
-        self.assertIn("küçük", requests[1][-1]["content"])
+        self.assertEqual(requests[1][0]["role"], "system")
+        self.assertIn("küçük", requests[1][0]["content"])
+        self.assertTrue(all(message["role"] != "system" for message in requests[1][1:]))
         self.assertNotIn("unfinished", str(requests[1]))
 
     def test_repeated_reasoning_only_responses_stop_explicitly(self):
@@ -185,8 +187,11 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(self.session.messages[:len(history)], history)
         self.assertEqual(self.session.task_goal, "configure databases")
         request = self.client.chat_stream_assembled.call_args.kwargs["messages"]
-        self.assertIn("hepsine onay veriyorum", request[-2]["content"])
-        self.assertIn("configure databases", request[-2]["content"])
+        self.assertEqual(request[0]["role"], "system")
+        self.assertTrue(all(message["role"] != "system" for message in request[1:]))
+        self.assertEqual(request[-1]["role"], "user")
+        self.assertIn("hepsine onay veriyorum", request[-1]["content"])
+        self.assertIn("configure databases", request[-1]["content"])
 
     def test_execute_without_prior_task_never_calls_model(self):
         self.assertTrue(self.session.execute_followup("yap artık").startswith("HATA:"))
