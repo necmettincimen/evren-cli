@@ -112,6 +112,13 @@ def run_with_tree_kill(
     try:
         out, err = proc.communicate(timeout=timeout)
         return proc.returncode, out or "", err or "", False
+    except KeyboardInterrupt:
+        kill_process_tree(proc.pid)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        raise
     except subprocess.TimeoutExpired:
         kill_process_tree(proc.pid)
         # Drain whatever was captured before the kill.
@@ -247,6 +254,13 @@ def stream_with_tree_kill(
                 stderr_parts.append(line)
             yield tag, line
 
+    except KeyboardInterrupt:
+        kill_process_tree(proc.pid)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        raise
     finally:
         for t in threads:
             t.join(timeout=1)

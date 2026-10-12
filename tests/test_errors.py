@@ -74,6 +74,11 @@ class TestSdkMapping(unittest.TestCase):
         self.assertIsInstance(err, NetworkError)
         self.assertTrue(err.retryable)
 
+    def test_map_connection_error_text(self):
+        err = map_sdk_exception(Exception("Connection error."))
+        self.assertIsInstance(err, NetworkError)
+        self.assertTrue(err.retryable)
+
     def test_map_terms_not_accepted(self):
         err = map_sdk_exception(Exception("terms_not_accepted: please accept"))
         self.assertIsInstance(err, TermsNotAcceptedError)

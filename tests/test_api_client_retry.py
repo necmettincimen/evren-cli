@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from src.api_client import EvrenClient, normalize_chat_messages
+from src.api_client import EvrenClient, _TRANSIENT_RETRIES, normalize_chat_messages
 from src.api_key_pool import ApiKeyPool
 from src.errors import RateLimitError, QuotaExhaustedError, AuthError, ServerError
-from tests.helpers import FakeClock, make_status_error, FakeCompletion
+from tests.helpers import FakeClock, make_connection_error, make_status_error, FakeCompletion
 
 
 def _make_client(keys=None):
@@ -296,10 +296,27 @@ class TestChatStreamAssembled(unittest.TestCase):
 
     def test_stream_error_raises_typed(self):
         client = _make_client(keys=["k1"])
+        clock = FakeClock()
         fake = _fake_client_with(make_status_error(503, "down"))
         with patch.object(client.key_pool, "get_client", return_value=fake):
-            with self.assertRaises(ServerError):
-                client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
+            with clock.patch():
+                with self.assertRaises(ServerError):
+                    client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(fake.chat.completions.create.call_count, 1 + _TRANSIENT_RETRIES)
+        self.assertEqual(len(clock.sleeps), _TRANSIENT_RETRIES)
+
+    def test_connection_error_retries_then_succeeds(self):
+        client = _make_client(keys=["k1"])
+        clock = FakeClock()
+        stream = self._make_stream([{"content": "Hello"}])
+        fake = MagicMock()
+        fake.chat.completions.create.side_effect = [make_connection_error(), stream]
+        with patch.object(client.key_pool, "get_client", return_value=fake):
+            with clock.patch():
+                resp = client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.choices[0].message.content, "Hello")
+        self.assertEqual(len(clock.sleeps), 1)
+        self.assertEqual(fake.chat.completions.create.call_count, 2)
 
     def test_stream_quota_failover_before_output(self):
         # Quota 429 before any token -> disable key and failover to next key.
@@ -325,16 +342,19 @@ class TestChatStreamAssembled(unittest.TestCase):
 
 
 class TestChatStreamNoRetry(unittest.TestCase):
-    def test_stream_error_yields_no_retry(self):
-        # Once streaming starts, an error must NOT trigger retry/failover.
+    def test_stream_error_retries_before_tokens_then_yields_once(self):
+        # A 503 before any token is retried, then reported once. A started
+        # stream is still not replayed.
         client = _make_client(keys=["k1", "k2"])
+        clock = FakeClock()
         fake = _fake_client_with(make_status_error(503, "down"))
         with patch.object(client.key_pool, "get_client", return_value=fake):
-            chunks = list(client.chat_stream(messages=[{"role": "user", "content": "hi"}]))
-        # Exactly one error chunk, no retries (create called once).
+            with clock.patch():
+                chunks = list(client.chat_stream(messages=[{"role": "user", "content": "hi"}]))
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0]["type"], "error")
-        self.assertEqual(fake.chat.completions.create.call_count, 1)
+        self.assertEqual(fake.chat.completions.create.call_count, 1 + _TRANSIENT_RETRIES)
+        self.assertEqual(len(clock.sleeps), _TRANSIENT_RETRIES)
 
     def test_stream_success_reports_success(self):
         client = _make_client(keys=["k1"])

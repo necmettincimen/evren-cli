@@ -213,6 +213,33 @@ def test_decision_corruption_is_explicit_not_silent(tmp_path):
     with pytest.raises(ValueError, match="Karar günlüğü"):
         load_decisions(tmp_path)
 
+def test_interrupt_correction_continues_without_a_new_brief(tmp_path):
+    from src.repl import _take_interrupt_followup
+
+    session = paused_session(tmp_path)
+    session.task_goal = "inspect local and remote"
+    session.interrupted = True
+    kind, text = _take_interrupt_followup(session, lambda _label: "portu 8080 yap")
+    assert (kind, text) == ("followup", "portu 8080 yap")
+    assert session.interrupted is False
+    session.interrupted = True
+    assert _take_interrupt_followup(session, lambda _label: "") == ("continue", "")
+    session.interrupted = True
+    assert _take_interrupt_followup(session, lambda _label: "/help") == ("command", "/help")
+    assert session.interrupted is True
+
+
+def test_interrupt_skips_checkpoint_prompt(tmp_path):
+    from src.repl import _run_agent
+
+    session = paused_session(tmp_path)
+    session.task_goal = "inspect local and remote"
+    session.interrupted = True
+    with patch.object(session, "continue_task"), patch("src.repl.prompt_confirm") as confirm:
+        _run_agent(session)
+    confirm.assert_not_called()
+
+
 def test_followup_wrapper_routes_without_form_or_automatic_approval(tmp_path):
     from src.repl import _run_agent
 

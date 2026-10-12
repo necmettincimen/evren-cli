@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.api_client import EvrenClient, normalize_chat_messages
+from src.errors import EvrenApiError
 from src.tools import TOOLS_SCHEMA, execute_tool_call
 from src.config import get_workspace_dir, execution_context_block, EVREN_DEFAULT_MAX_TOKENS
 from src.token_manager import TokenManager
@@ -25,6 +26,28 @@ from src.ui import (
     print_warning,
     print_error,
 )
+
+# Empty or truncated-tool turns. A single miss is normal for thinking models;
+# giving up on the second one aborts real tasks. Budget doubles on each miss.
+_MAX_STALLS = 4
+_STALL_TOKEN_CAP = 32768
+
+
+def _tool_arguments_complete(tool_calls) -> bool:
+    """True when every tool call has a complete JSON object in arguments."""
+    if not tool_calls:
+        return False
+    for call in tool_calls:
+        function = getattr(call, "function", None)
+        raw = getattr(function, "arguments", None) or ""
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed, dict):
+            return False
+    return True
+
 
 SYSTEM_PROMPT = """Sen Antigravity felsefesiyle çalışan, EVREN LLM API destekli uzman bir yazılım mühendisi asistanısın.
 Kullanıcının aktif proje çalışma alanında geliştirme, hata ayıklama, refactoring ve test yaparsın.
@@ -122,6 +145,7 @@ class AgentSession:
         # overridden per-turn via an "ask:" / "plan:" message prefix.
         self.mode: AgentMode = AgentMode.NORMAL
         self.pending_mode: AgentMode | None = None
+        self.interrupted = False
         self.task_goal = ""
 
     def _compose_system(self, base: str) -> str:
@@ -180,7 +204,50 @@ class AgentSession:
         self.active_context_files.clear()
         self.last_usage = None
         self.pending_mode = None
+        self.interrupted = False
         self.task_goal = ""
+
+    def _close_open_tool_calls(self, note: str) -> None:
+        """Adds a tool result for every call the model already sent."""
+        answered = {
+            message.get("tool_call_id")
+            for message in self.messages
+            if message.get("role") == "tool"
+        }
+        for message in reversed(self.messages):
+            if message.get("role") != "assistant":
+                continue
+            calls = message.get("tool_calls") or []
+            if not calls:
+                return
+            for call in calls:
+                call_id = call.get("id")
+                if call_id in answered:
+                    continue
+                function = call.get("function") or {}
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": function.get("name", ""),
+                    "content": note,
+                })
+            return
+
+    def note_interrupt(self, mode: AgentMode) -> None:
+        """Keeps the task history so a short correction can continue it."""
+        self._close_open_tool_calls(
+            "İPTAL: Kullanıcı Ctrl+C ile işlemi durdurdu. Çalışan komut sonlandırıldı. "
+            "Geçmiş korunuyor; aynı komutu yeniden başlatma."
+        )
+        self.messages.append({
+            "role": "assistant",
+            "content": (
+                "Kullanıcı işlemi Ctrl+C ile durdurdu. Konuşma geçmişi ve tamamlanan "
+                "adımlar duruyor. Kullanıcı küçük bir düzeltme ekleyebilir."
+            ),
+        })
+        self.pending_mode = mode
+        self.interrupted = True
 
     def continue_task(self, max_steps: int = 30) -> str:
         """Resumes a step-limited task with history intact and its mode preserved."""
@@ -353,6 +420,7 @@ class AgentSession:
         turn_mode, cleaned_input = parse_mode_prefix(user_input)
         effective_mode = turn_mode or self.mode
         self.pending_mode = None
+        self.interrupted = False
         self.task_goal = cleaned_input
 
         # Inject active context files if any
@@ -366,7 +434,27 @@ class AgentSession:
 
         step_count = 0
         stalled_steps = 0
+        text_continuations = 0
 
+        try:
+            return self._run_steps(
+                max_steps, effective_mode, step_count, stalled_steps, text_continuations,
+            )
+        except KeyboardInterrupt:
+            self.note_interrupt(effective_mode)
+            print_warning(
+                "İşlem Ctrl+C ile durduruldu. Geçmiş duruyor; düzeltme yazarak devam edebilirsiniz."
+            )
+            return "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+
+    def _run_steps(
+        self,
+        max_steps: int,
+        effective_mode: AgentMode,
+        step_count: int,
+        stalled_steps: int,
+        text_continuations: int,
+    ) -> str:
         while step_count < max_steps:
             step_count += 1
 
@@ -375,6 +463,9 @@ class AgentSession:
             output_budget = self.token_manager.resolve_output_budget(
                 self.model, EVREN_DEFAULT_MAX_TOKENS
             )
+            repeats = max(stalled_steps, text_continuations)
+            if repeats:
+                output_budget = min(output_budget * (2 ** repeats), _STALL_TOKEN_CAP)
             self.messages = self.compactor.compact(self.messages, output_budget)
 
             status_msg = (
@@ -453,6 +544,13 @@ class AgentSession:
                 self.token_manager.calibrate_from_response(estimated, response)
                 self._record_usage(response)
             except Exception as e:
+                if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
+                    stalled_steps += 1
+                    print_warning(
+                        "Model çağrısı bağlantı veya sunucu hatasıyla kesildi; "
+                        f"yeniden deneniyor ({stalled_steps}/{_MAX_STALLS})."
+                    )
+                    continue
                 print_error(f"Model çağrısı sırasında hata oluştu: {e}")
                 return f"Hata: {e}"
 
@@ -466,19 +564,47 @@ class AgentSession:
                 return error
 
             # A length-limited stream can include incomplete tool arguments.
-            # Never persist or execute that partial response.
-            if finish_reason == "length" or (
-                not (message.content or "").strip() and not getattr(message, "tool_calls", None)
-            ):
+            # Never persist or execute that partial call. A finished tool call or
+            # a cut-but-usable answer is progress and must not abort the task.
+            content_text = (message.content or "").strip()
+            tool_calls_now = getattr(message, "tool_calls", None) or []
+            arguments_complete = _tool_arguments_complete(tool_calls_now)
+            truncated_answer = (
+                finish_reason == "length" and content_text and not tool_calls_now
+            )
+            stalled = (not arguments_complete) and (
+                finish_reason == "length" or (not content_text and not tool_calls_now)
+            )
+            if truncated_answer:
+                self.messages.append({"role": "assistant", "content": message.content or ""})
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "Önceki yanıt token sınırında kesildi ve tamamlanmış sayılmadı. "
+                        "Kaldığın yerden devam et; yazılmış kısmı tekrarlama. "
+                        "Tek küçük adım için aracı tam argümanlarla çağır veya kısa sonucu yaz."
+                    ),
+                })
+                stalled_steps = 0
+                text_continuations += 1
+                print_warning("Yanıt token sınırında kesildi; kaldığı yerden devam ediliyor.")
+                continue
+            if stalled:
                 stalled_steps += 1
-                if stalled_steps >= 2:
-                    error = "HATA: Model iki ardışık turda kesilmiş veya boş yanıt verdi; görev tamamlanmadı."
+                if stalled_steps >= _MAX_STALLS:
+                    error = (
+                        "HATA: Model art arda kesilmiş veya boş yanıt verdi; görev tamamlanmadı."
+                    )
                     print_error(error)
                     self.messages.append({"role": "assistant", "content": error})
                     return error
-                print_warning("Yanıt kesildi veya boş kaldı; sıradaki küçük adım için yeniden yönlendiriliyor.")
+                print_warning(
+                    "Yanıt kesildi veya boş kaldı; daha geniş token bütçesiyle "
+                    "sıradaki küçük adım için yeniden yönlendiriliyor."
+                )
                 continue
             stalled_steps = 0
+            text_continuations = 0
 
             # Reasoning was already streamed live via the callback; only print
             # it here if the server returned it without streaming deltas.

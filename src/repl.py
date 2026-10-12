@@ -79,6 +79,27 @@ def _read_line(pt_session, label: str) -> str:
     return input(label).strip()
 
 
+def _take_interrupt_followup(session: AgentSession, read_line) -> tuple[str, str] | None:
+    """Reads a correction after Ctrl+C without starting a new brief.
+
+    Returns None when the session is not waiting on an interrupt.
+    ("continue", "") resumes the saved task. ("followup", text) adds a
+    correction. ("command", text) is a slash command and keeps the pause.
+    """
+    if not session.interrupted or not session.task_goal:
+        return None
+    print_info(
+        "Geçmiş duruyor. Düzeltme yazıp Enter'a basın; boş Enter kaldığı yerden devam eder."
+    )
+    text = (read_line("Düzeltme > ") or "").strip()
+    if text.startswith("/"):
+        return ("command", text)
+    session.interrupted = False
+    if text:
+        return ("followup", text)
+    return ("continue", "")
+
+
 def _collect_frame(session: AgentSession, pt_session, previous=None):
     def guidance(frame, clarify):
         label = "Brief netleştiriliyor..." if clarify else "Boş alanlar için öneriler hazırlanıyor..."
@@ -109,6 +130,8 @@ def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bo
         clear_checkpoint(session.workspace_root)
         session.run_step(prompt)
 
+    if session.interrupted:
+        return
     if session.pending_mode is None:
         clear_checkpoint(session.workspace_root)
     elif prompt_confirm(
@@ -565,24 +588,38 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             mode_tag = "" if session.mode.value == "normal" else f" ({session.mode.value})"
             print(f"evren [{session.model}]{mode_tag}")
 
-            try:
-                collected = _collect_frame(session, pt_session, last_frame)
-            except (EvrenApiError, ValueError) as e:
-                print_error(f"Prompt hazırlama başarısız; görev başlatılmadı: {e}")
-                continue
-            if isinstance(collected, str):
-                user_input = collected
-            elif not collected.is_empty():
-                last_frame = collected
-                print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
-                from src.workflow_state import clear_checkpoint
-                clear_checkpoint(workspace_root)
-                _run_agent(session, session.apply_frame(collected, replace_identity=True))
-                continue
-            else:
-                user_input = _read_line(pt_session, "İstek > ")
-                if not user_input:
+            paused = _take_interrupt_followup(session, lambda label: _read_line(pt_session, label))
+            if paused is not None:
+                kind, text = paused
+                if kind == "followup":
+                    _run_agent(session, text, followup=True)
                     continue
+                if kind == "continue":
+                    _run_agent(session)
+                    continue
+                user_input = text
+            else:
+                user_input = None
+
+            if user_input is None:
+                try:
+                    collected = _collect_frame(session, pt_session, last_frame)
+                except (EvrenApiError, ValueError) as e:
+                    print_error(f"Prompt hazırlama başarısız; görev başlatılmadı: {e}")
+                    continue
+                if isinstance(collected, str):
+                    user_input = collected
+                elif not collected.is_empty():
+                    last_frame = collected
+                    print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
+                    from src.workflow_state import clear_checkpoint
+                    clear_checkpoint(workspace_root)
+                    _run_agent(session, session.apply_frame(collected, replace_identity=True))
+                    continue
+                else:
+                    user_input = _read_line(pt_session, "İstek > ")
+                    if not user_input:
+                        continue
 
             # Check slash commands
             if user_input.strip().casefold() in ("devam", "/continue"):
@@ -997,7 +1034,10 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             _run_agent(session, user_input)
 
         except KeyboardInterrupt:
-            print("\nİşlem durduruldu. Çıkmak için /exit yazabilirsiniz.")
+            if session.task_goal:
+                print("\nİşlem durduruldu. Geçmiş duruyor; düzeltme yazarak devam edebilirsiniz.")
+            else:
+                print("\nİşlem durduruldu. Çıkmak için /exit yazabilirsiniz.")
         except EOFError:
             print("\nÇıkış yapılıyor...")
             break

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.agent import AgentSession, SYSTEM_PROMPT
+from src.errors import NetworkError
 from src.config import execution_context_block
 from src.modes import AgentMode
 from src.prompt_frame import PromptFrame
@@ -57,13 +58,80 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(requests[1][0]["role"], "system")
         self.assertIn("küçük", requests[1][0]["content"])
         self.assertTrue(all(message["role"] != "system" for message in requests[1][1:]))
-        self.assertNotIn("unfinished", str(requests[1]))
+        self.assertIn("unfinished", str(requests[1]))
+        self.assertIn("kaldığın yerden", str(requests[1]).casefold())
 
     def test_repeated_reasoning_only_responses_stop_explicitly(self):
         self.client.chat_stream_assembled.return_value = response("", "length")
         result = self.session.run_step("uygula")
         self.assertTrue(result.startswith("HATA:"))
+        self.assertEqual(self.client.chat_stream_assembled.call_count, 4)
+
+    def test_ctrl_c_keeps_goal_and_closes_open_tool_call(self):
+        self.client.chat_stream_assembled.return_value = response(
+            "", "tool_calls", [tool_call(json.dumps({"command": "echo local"}))],
+        )
+        with patch("src.agent.execute_tool_call", side_effect=KeyboardInterrupt):
+            result = self.session.run_step("deploy the service")
+        self.assertIn("Geçmiş", result)
+        self.assertEqual(self.session.task_goal, "deploy the service")
+        self.assertTrue(self.session.interrupted)
+        self.assertEqual(self.session.pending_mode, AgentMode.NORMAL)
+        self.assertIn("deploy the service", self.session.messages[1]["content"])
+        cancelled = [m for m in self.session.messages if m["role"] == "tool"]
+        self.assertTrue(cancelled)
+        self.assertIn("Ctrl+C", cancelled[-1]["content"])
+
+    def test_correction_after_ctrl_c_keeps_original_goal(self):
+        self.client.chat_stream_assembled.side_effect = KeyboardInterrupt
+        self.session.run_step("deploy the service")
+        history = deepcopy(self.session.messages)
+        self.client.chat_stream_assembled.side_effect = None
+        self.client.chat_stream_assembled.return_value = response("done")
+        self.assertEqual(self.session.execute_followup("portu 8080 yap"), "done")
+        self.assertEqual(self.session.task_goal, "deploy the service")
+        self.assertFalse(self.session.interrupted)
+        self.assertEqual(self.session.messages[:len(history)], history)
+        request = self.client.chat_stream_assembled.call_args.kwargs["messages"]
+        self.assertIn("portu 8080 yap", request[-1]["content"])
+        self.assertIn("deploy the service", request[-1]["content"])
+
+    def test_connection_error_retries_the_step(self):
+        self.client.chat_stream_assembled.side_effect = [
+            NetworkError("Connection error."),
+            response("done"),
+        ]
+        self.assertEqual(self.session.run_step("incele"), "done")
         self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
+
+    def test_repeated_connection_errors_stop_explicitly(self):
+        self.client.chat_stream_assembled.side_effect = NetworkError("Connection error.")
+        result = self.session.run_step("incele")
+        self.assertTrue(result.startswith("Hata:"))
+        self.assertIn("Connection error", result)
+        self.assertEqual(self.client.chat_stream_assembled.call_count, 4)
+
+    def test_empty_stall_retries_with_a_larger_budget(self):
+        budgets = []
+
+        def reply(**kwargs):
+            budgets.append(kwargs["max_tokens"])
+            if len(budgets) == 1:
+                return response("", "length")
+            return response("done")
+
+        self.client.chat_stream_assembled.side_effect = reply
+        self.assertEqual(self.session.run_step("incele"), "done")
+        self.assertGreater(budgets[1], budgets[0])
+
+    def test_complete_tool_call_survives_length_limit(self):
+        self.client.chat_stream_assembled.side_effect = [
+            response("", "length", [tool_call(json.dumps({"command": "echo local"}))]),
+            response("done"),
+        ]
+        with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0") as execute:
+            self.assertEqual(self.session.run_step("uygula"), "done")
+        execute.assert_called_once()
 
     def test_empty_response_gets_one_recovery_attempt(self):
         self.client.chat_stream_assembled.side_effect = [response(), response("done")]

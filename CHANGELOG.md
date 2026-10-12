@@ -5,6 +5,13 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.16.0] - 2026-10-12
+
+### Düzeltildi
+- Kesik veya boş model yanıtı ikinci turda görevi düşürmez. `qwen3.8-flash-next` çıktı tabanı 16384 tokendır; boş yanıtta bütçe artar ve vazgeçmeden önce dört deneme yapılır. Yazılmış ama kesilmiş metin saklanır, tamamlanmış araç çağrısı uygulanır.
+- Bağlantı, zaman aşımı ve 5xx hataları token gelmeden önce yeniden denenir. Ajan turu da bu hatalarda hemen bitmez.
+- Ctrl+C çalışan komutu durdurur ve konuşma geçmişini silmez. Sonraki satır aynı göreve küçük bir düzeltme olarak eklenir; boş Enter kaldığı yerden devam eder.
+
 ## [0.15.0] - 2026-10-12
 
 ### Düzeltildi

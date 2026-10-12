@@ -232,5 +232,16 @@ def map_sdk_exception(exc: Exception, failed_key: str | None = None) -> EvrenApi
         return RateLimitError(err_str, failed_key=failed_key)
     if "503" in err_str or "502" in err_str or "500" in err_str:
         return ServerError(err_str, failed_key=failed_key)
+    low = err_str.lower()
+    if any(marker in low for marker in (
+        "connection error",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "timed out",
+        "read timeout",
+        "network is unreachable",
+    )):
+        return NetworkError(err_str, failed_key=failed_key)
 
     return EvrenApiError(err_str, failed_key=failed_key)
