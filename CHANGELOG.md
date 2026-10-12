@@ -5,6 +5,16 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.13.0] - 2026-10-12
+
+### Değiştirildi
+- SSL/TLS sertifika doğrulaması varsayılan olarak kapatıldı (`EVREN_SSL_VERIFY` varsayılanı `false`); self-signed/kurumsal (MITM) sertifikalar tüm HTTP isteklerini artık engellemez. Doğrulamayı geri açmak için `EVREN_SSL_VERIFY=true` ayarlanabilir.
+
+## [0.12.3] - 2026-10-12
+
+### D?zeltildi
+- Windows pip kurulumlar?nda `evren update` / `/update`, ?al??an `evren.exe` kilitliyken (`WinError 32`) pip'i ayn? s?re?te ?al??t?rmaz; g?ncelleme EVREN kapand?ktan sonra ayr? bir pencerede, kilit kalkana kadar yeniden denenerek yap?l?r.
+
 ## [0.12.2] - 2026-10-12
 
 ### Düzeltildi

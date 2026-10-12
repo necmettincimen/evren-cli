@@ -205,7 +205,10 @@ if EVREN_REASONING_EFFORT in ("", "default", "auto", "none", "off"):
 # - EVREN_SSL_VERIFY: "true" (default) verifies certificates; set to "false" to disable
 #   verification entirely (needed for self-signed certs or TLS-inspecting proxies).
 EVREN_CA_BUNDLE = os.getenv("EVREN_CA_BUNDLE", "").strip()
-EVREN_SSL_VERIFY = os.getenv("EVREN_SSL_VERIFY", "true").lower() in ("true", "1", "yes")
+# NOTE: verification is disabled by default so self-signed / corporate (MITM)
+# certificates do not break every HTTP request. Set EVREN_SSL_VERIFY=true to
+# re-enable certificate validation.
+EVREN_SSL_VERIFY = os.getenv("EVREN_SSL_VERIFY", "false").lower() in ("true", "1", "yes")
 
 
 def get_ssl_verify():
