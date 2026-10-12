@@ -109,6 +109,15 @@ UZAK SUNUCU (SSH) İŞLEMLERİ:
 - 'ssh_run' ask/plan modunda yalnızca salt-okuma komutlarıyla sınırlıdır; yazma gerektiren işler için normal mod gerekir.
 - 'ssh_write_file' yalnızca host'ta allow_write=true ise çalışır ve kullanıcı onayı ister; üretim sunucularında önce salt-okuma ile doğrula.
 - Tüm uzak işlemler .evren/logs/ssh_audit.log dosyasına kaydedilir.
+
+HTTP VE ARGO CD (ÖNEMLİ):
+- curl gövdesini JSON sanma. İstek `-sS -w "\\nHTTP:%{http_code}"` ile gitsin. Kod 200 ve gövde JSON değilse parse etme; kodu ve ilk baytları yaz, aynı aileyi uydurma.
+- Argo CD uygulama özeti: `GET /api/v1/applications/{ad}` içindeki `status.resources` (kind, name, sync, health, message).
+- Pod ve canlı ağaç: `GET /api/v1/applications/{ad}/resource-tree`. Pod düğümleri `nodes` içindedir (`kind==Pod`).
+- Tek nesne: `GET /api/v1/applications/{ad}/resource?namespace=&resourceName=&name=&version=&kind=&group=`.
+- Pod logu: `GET /api/v1/applications/{ad}/logs?namespace=&podName=&container=&tailLines=100`. Bu uç metin döner, JSON değildir.
+- Şu yollar yoktur; 404 alınca tekrarlama: `/pods`, `/resource/pods`, `/resource/tree`.
+- `sync: OutOfSync` ve `health: Missing` kaynak henüz uygulanmamıştır; pod arama. `exceeded its progress deadline` yeni ReplicaSet'in hazır olmamasıdır; resource-tree içindeki Pod ve ardından logs ucuna bak.
 """
 
 
