@@ -20,6 +20,7 @@ def form_palette() -> dict[str, str]:
 
 try:
     from rich.console import Console
+    from rich.markup import escape
     from rich.panel import Panel
     from rich.markdown import Markdown
     from rich.table import Table
@@ -29,6 +30,9 @@ try:
     HAVE_RICH = True
 except ImportError:
     HAVE_RICH = False
+
+    def escape(text: str) -> str:
+        return text
 
 custom_theme = None
 if HAVE_RICH:
@@ -61,7 +65,7 @@ class StatusTracker:
         global _ACTIVE_STATUS
         _ACTIVE_STATUS = self
         if HAVE_RICH and console:
-            self._status = console.status(f"[bold cyan]✦ {self.message}[/bold cyan]", spinner="dots")
+            self._status = console.status(f"[bold cyan]✦ {escape(str(self.message))}[/bold cyan]", spinner="dots")
             self._status.start()
         else:
             print(f"[*] {self.message}...", end="", flush=True)
@@ -70,7 +74,7 @@ class StatusTracker:
     def update(self, new_message: str):
         self.message = new_message
         if self._status:
-            self._status.update(f"[bold cyan]✦ {new_message}[/bold cyan]")
+            self._status.update(f"[bold cyan]✦ {escape(str(new_message))}[/bold cyan]")
         else:
             print(f"\n[*] {new_message}...", end="", flush=True)
 
@@ -101,22 +105,25 @@ def print_banner(model: str, workspace_path: str, quota_info: str = ""):
     version = get_version()
     notes = get_changelog_notes(version)
 
+    safe_model = escape(str(model))
+    safe_workspace = escape(str(workspace_path))
+    safe_quota = escape(str(quota_info))
     if HAVE_RICH:
         title = (
             "[bold cyan]✦ EVREN CLI[/bold cyan] "
             f"[dim]v{version} • Antigravity-Style AI Development Assistant[/dim]"
         )
         body = (
-            f"[bold]Model:[/bold] [green]{model}[/green]   "
-            f"[bold]Çalışma Alanı:[/bold] [yellow]{workspace_path}[/yellow]\n"
+            f"[bold]Model:[/bold] [green]{safe_model}[/green]   "
+            f"[bold]Çalışma Alanı:[/bold] [yellow]{safe_workspace}[/yellow]\n"
             f"[dim]EVREN LLM API Tabanlı Otonom Kodlama ve Proje Asistanı[/dim]"
         )
         if quota_info:
-            body += f"\n[bold]Kalan Günlük Kota:[/bold] [cyan]{quota_info}[/cyan]"
+            body += f"\n[bold]Kalan Günlük Kota:[/bold] [cyan]{safe_quota}[/cyan]"
         if notes:
             body += f"\n\n[bold cyan]v{version} Sürüm Notları:[/bold cyan]"
             for note in notes:
-                body += f"\n  [dim]•[/dim] {note}"
+                body += f"\n  [dim]•[/dim] {escape(str(note))}"
 
         panel = Panel(
             body,
@@ -143,28 +150,28 @@ def print_banner(model: str, workspace_path: str, quota_info: str = ""):
 
 def print_info(message: str):
     if HAVE_RICH:
-        console.print(f"[info]ℹ[/info] {message}")
+        console.print(f"[info]ℹ[/info] {escape(str(message))}")
     else:
         print(f"[*] {message}")
 
 
 def print_success(message: str):
     if HAVE_RICH:
-        console.print(f"[success]✔[/success] {message}")
+        console.print(f"[success]✔[/success] {escape(str(message))}")
     else:
         print(f"[+] {message}")
 
 
 def print_warning(message: str):
     if HAVE_RICH:
-        console.print(f"[warning]⚠[/warning] {message}")
+        console.print(f"[warning]⚠[/warning] {escape(str(message))}")
     else:
         print(f"[!] {message}")
 
 
 def print_error(message: str):
     if HAVE_RICH:
-        console.print(f"[error]✖ {message}[/error]")
+        console.print(f"[error]✖ {escape(str(message))}[/error]")
     else:
         print(f"[X] {message}")
 
@@ -182,7 +189,7 @@ def print_reasoning(text: str, is_chunk: bool = False):
     """Prints model reasoning / chain-of-thought tokens."""
     if is_chunk:
         if HAVE_RICH:
-            console.print(f"[reasoning]{text}[/reasoning]", end="", highlight=False)
+            console.print(Text(text, style="reasoning"), end="", highlight=False)
         else:
             print(text, end="", flush=True)
     else:
@@ -207,9 +214,9 @@ def print_command_output(line: str, stream: str = "stdout"):
     text = line.rstrip("\n")
     if HAVE_RICH:
         if stream == "stderr":
-            console.print(f"[dim red]{text}[/dim red]", highlight=False)
+            console.print(Text(text, style="dim red"), highlight=False)
         else:
-            console.print(text, highlight=False)
+            console.print(Text(text), highlight=False)
     else:
         if stream == "stderr":
             print(f"\033[2;31m{text}\033[0m")
@@ -223,7 +230,10 @@ def print_tool_call(tool_name: str, arguments: dict):
     if len(arg_summary) > 100:
         arg_summary = arg_summary[:97] + "..."
     if HAVE_RICH:
-        console.print(f"[tool]⚡ Araç Çağrısı:[/tool] [bold white]{tool_name}[/bold white]([dim]{arg_summary}[/dim])")
+        console.print(
+            f"[tool]⚡ Araç Çağrısı:[/tool] [bold white]{escape(str(tool_name))}[/bold white]"
+            f"([dim]{escape(arg_summary)}[/dim])"
+        )
     else:
         print(f">> [Araç] {tool_name}({arg_summary})")
 
@@ -232,12 +242,15 @@ def print_tool_result(tool_name: str, result_summary: str, is_error: bool = Fals
     """Displays the result of a tool execution."""
     if is_error:
         if HAVE_RICH:
-            console.print(f"  [error]✖ {tool_name} hatası:[/error] {result_summary}")
+            console.print(f"  [error]✖ {escape(str(tool_name))} hatası:[/error] {escape(str(result_summary))}")
         else:
             print(f"  [X] {tool_name} error: {result_summary}")
     else:
         if HAVE_RICH:
-            console.print(f"  [success]✔ {tool_name} tamamlandı:[/success] [dim]{result_summary}[/dim]")
+            console.print(
+                f"  [success]✔ {escape(str(tool_name))} tamamlandı:[/success] "
+                f"[dim]{escape(str(result_summary))}[/dim]"
+            )
         else:
             print(f"  [+] {tool_name} completed: {result_summary}")
 
@@ -252,7 +265,7 @@ def print_diff(diff_text: str, filename: str = ""):
         syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=True)
         panel = Panel(
             syntax,
-            title=f"[bold yellow]Fark Önizleme (Diff): {filename}[/bold yellow]",
+            title=f"[bold yellow]Fark Önizleme (Diff): {escape(str(filename))}[/bold yellow]",
             border_style="yellow",
             padding=(0, 1),
         )

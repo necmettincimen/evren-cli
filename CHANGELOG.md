@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.12.2] - 2026-10-12
+
+### Düzeltildi
+- Komut çıktısı, araç sonuçları ve hata mesajlarındaki `[/path]` gibi köşeli parantezli metinler Rich biçimlendirme etiketi sanılıp CLI'ı çökertmez; metin olduğu gibi gösterilir.
+- Durum göstergesi, akıl yürütme akışı ve diff başlıkları da düz metin olarak işlenir; Kubernetes log satırıyla regresyon testleri eklendi.
+
 ## [0.12.1] - 2026-10-11
 
 ### Eklendi
