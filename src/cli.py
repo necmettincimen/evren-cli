@@ -282,14 +282,17 @@ def cmd_ssh(args):
 
 def cmd_update(args):
     """Pulls the latest version from GitHub and restarts the CLI."""
-    from src.updater import perform_update, is_git_checkout, get_project_root
+    from src.updater import perform_update, is_git_checkout, get_project_root, update_is_deferred
     from src.ui import status_spinner
 
     src_kind = "git checkout" if is_git_checkout(get_project_root()) else "pip paketi"
     print_info(f"Güncelleme kaynağı: {src_kind} (github.com/necmettincimen/evren-cli)")
+    deferred = update_is_deferred()
     with status_spinner("En son sürüm çekiliyor ve kuruluyor..."):
         ok, msg = perform_update(restart=False)
-    if ok:
+    if ok and deferred:
+        print_success(msg)
+    elif ok:
         print_success("Güncelleme tamamlandı.")
         if not args.no_restart:
             print_info("CLI yeni sürümle yeniden başlatılıyor...")

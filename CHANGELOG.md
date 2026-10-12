@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.14.0] - 2026-10-12
+
+### Değiştirildi
+- Varsayılan model `qwen3.8-flash-next` olarak ayarlandı (düşük gecikme, yüksek eşzamanlılık); `EVREN_DEFAULT_MODEL` kod varsayılanı ve `.env` güncellendi, `RECOMMENDED_MODELS` listesinde öne alındı.
+
 ## [0.13.0] - 2026-10-12
 
 ### Değiştirildi

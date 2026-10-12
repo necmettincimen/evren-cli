@@ -67,8 +67,37 @@ def test_update_from_pip_target(monkeypatch):
     assert updater.PIP_TARGET in captured["cmd"]
 
 
+def test_windows_pip_update_is_deferred_without_running_pip(monkeypatch):
+    monkeypatch.setattr(updater.os, "name", "nt")
+    monkeypatch.setattr(updater, "is_git_checkout", lambda root=None: False)
+    monkeypatch.setattr(updater, "_log", lambda _: None)
+    monkeypatch.setattr(updater, "update_from_pip", MagicMock(side_effect=AssertionError))
+    restart = MagicMock()
+    monkeypatch.setattr(updater, "restart_process", restart)
+    with patch.object(updater.subprocess, "Popen") as popen:
+        ok, msg = updater.perform_update(restart=True)
+    assert ok is True
+    assert "kapandıktan sonra" in msg
+    restart.assert_not_called()
+    args = popen.call_args.args[0]
+    assert args[:2] == [sys.executable, "-c"]
+    assert args[3] == str(updater.os.getpid())
+    assert args[5:] == updater._pip_command()
+
+
+def test_deferred_update_script_is_valid_python():
+    compile(updater._DEFERRED_PIP_SCRIPT, "<deferred>", "exec")
+
+
+def test_non_windows_pip_update_runs_in_process(monkeypatch):
+    monkeypatch.setattr(updater.os, "name", "posix")
+    monkeypatch.setattr(updater, "is_git_checkout", lambda root=None: False)
+    assert updater.update_is_deferred() is False
+
+
 def test_perform_update_no_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "is_git_checkout", lambda root=None: False)
+    monkeypatch.setattr(updater, "update_is_deferred", lambda root=None: False)
     monkeypatch.setattr(updater, "update_from_pip", lambda: (True, "ok"))
     ok, msg = updater.perform_update(restart=False)
     assert ok is True
@@ -77,6 +106,7 @@ def test_perform_update_no_restart(monkeypatch, tmp_path):
 
 def test_perform_update_failure_does_not_restart(monkeypatch):
     monkeypatch.setattr(updater, "is_git_checkout", lambda root=None: False)
+    monkeypatch.setattr(updater, "update_is_deferred", lambda root=None: False)
     monkeypatch.setattr(updater, "update_from_pip", lambda: (False, "boom"))
     called = {"restart": False}
     monkeypatch.setattr(updater, "restart_process", lambda: called.__setitem__("restart", True))
@@ -140,11 +170,23 @@ def test_cli_update_runs_once_then_restart_enters_repl(monkeypatch, tmp_path):
     assert repl.call_args.kwargs["workspace_path"] == str(tmp_path)
 
 
+def test_cli_deferred_update_does_not_restart(monkeypatch):
+    from src import cli
+
+    monkeypatch.setattr(sys, "argv", ["evren", "update"])
+    monkeypatch.setattr(updater, "perform_update", lambda **_: (True, "ertelendi"))
+    monkeypatch.setattr(updater, "update_is_deferred", lambda root=None: True)
+    with patch.object(updater, "restart_process") as restart:
+        cli.main()
+    restart.assert_not_called()
+
+
 def test_no_restart_does_not_exec(monkeypatch):
     from src import cli
 
     monkeypatch.setattr(sys, "argv", ["evren", "update", "--no-restart"])
     monkeypatch.setattr(updater, "perform_update", lambda **_: (True, "ok"))
+    monkeypatch.setattr(updater, "update_is_deferred", lambda root=None: False)
     with patch.object(updater, "restart_process") as restart:
         cli.main()
     restart.assert_not_called()

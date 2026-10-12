@@ -128,22 +128,85 @@ def update_from_git(root: Path | None = None) -> tuple[bool, str]:
 
 def update_from_pip() -> tuple[bool, str]:
     """Paketi doğrudan GitHub deposundan yeniden kurar."""
-    code, out = _run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "--force-reinstall",
-            "--no-cache-dir",
-            PIP_TARGET,
-        ],
-        timeout=600,
-    )
+    code, out = _run(_pip_command(), timeout=600)
     if code != 0:
         return False, f"pip kurulumu başarısız oldu:\n{out.strip()}"
     return True, out.strip() or "Paket güncellendi."
+
+
+_DEFERRED_PIP_SCRIPT = r"""
+import ctypes, subprocess, sys, time
+from datetime import datetime
+
+pid, log_path, cmd = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+
+def log(message):
+    try:
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
+    except OSError:
+        pass
+
+kernel32 = ctypes.windll.kernel32
+handle = kernel32.OpenProcess(0x00100000, False, pid)
+if handle:
+    kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+    kernel32.CloseHandle(handle)
+time.sleep(2)
+print("EVREN CLI güncelleniyor...", flush=True)
+code = 1
+for attempt in range(1, 6):
+    code = subprocess.run(cmd).returncode
+    log(f"DEFERRED PIP attempt {attempt}: EXIT {code}")
+    if code == 0:
+        break
+    time.sleep(3)
+print("Güncelleme tamamlandı; evren komutunu yeniden açabilirsiniz."
+      if code == 0 else
+      "Güncelleme başarısız. Ayrıntılar için yukarıdaki pip çıktısına bakın.", flush=True)
+input("Pencereyi kapatmak için Enter'a basın...")
+sys.exit(code)
+"""
+
+
+def update_is_deferred(root: Path | None = None) -> bool:
+    """Windows pip installs cannot replace the running evren.exe in-process."""
+    return os.name == "nt" and not is_git_checkout(root or get_project_root())
+
+
+def _pip_command() -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--no-cache-dir",
+        PIP_TARGET,
+    ]
+
+
+def schedule_deferred_pip_update() -> tuple[bool, str]:
+    """Run pip in a new console after this process releases evren.exe."""
+    args = [
+        sys.executable, "-c", _DEFERRED_PIP_SCRIPT,
+        str(os.getpid()), str(_log_path()), *_pip_command(),
+    ]
+    _log(f"SCHEDULE DEFERRED: {' '.join(_pip_command())}")
+    try:
+        subprocess.Popen(
+            args,
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            close_fds=True,
+        )
+    except OSError as e:
+        _log(f"ERROR: ertelenmiş güncelleme başlatılamadı: {e}")
+        return False, f"Ertelenmiş güncelleme başlatılamadı: {e}"
+    return True, (
+        "Güncelleme ayrı pencerede, EVREN CLI kapandıktan sonra çalışacak. "
+        "Tamamlandığında evren komutunu yeniden açın."
+    )
 
 
 def perform_update(restart: bool = True) -> tuple[bool, str]:
@@ -157,6 +220,10 @@ def perform_update(restart: bool = True) -> tuple[bool, str]:
 
     if is_git_checkout(root):
         ok, msg = update_from_git(root)
+    elif update_is_deferred(root):
+        ok, msg = schedule_deferred_pip_update()
+        _log("=== Güncelleme ertelendi ===" if ok else "=== Güncelleme BAŞARISIZ ===")
+        return ok, msg
     else:
         ok, msg = update_from_pip()
 
