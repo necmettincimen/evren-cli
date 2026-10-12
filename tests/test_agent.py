@@ -324,6 +324,9 @@ class TestExecutionContext(unittest.TestCase):
         self.assertIn("3-7", SYSTEM_PROMPT)
         self.assertIn("Her model turunda yalnızca sıradaki küçük alt adımı", SYSTEM_PROMPT)
         self.assertNotIn("Her turda mümkün olduğunca ÇOK iş bitir", SYSTEM_PROMPT)
+        self.assertIn("/api/v1/applications/{ad}/resource-tree", SYSTEM_PROMPT)
+        self.assertIn("/pods", SYSTEM_PROMPT)
+        self.assertIn("HTTP:%{http_code}", SYSTEM_PROMPT)
 
     def test_context_describes_actual_shell_and_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

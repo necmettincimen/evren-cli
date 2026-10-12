@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.17.0] - 2026-10-12
+
+### Düzeltildi
+- Argo CD pod sorgusu artık olmayan `/pods`, `/resource/pods` ve `/resource/tree` yollarına gitmez. Kaynak ağacı `GET /api/v1/applications/{ad}/resource-tree` ile okunur; HTTP kodu 200 değilse gövde JSON sanılmaz.
+
 ## [0.16.0] - 2026-10-12
 
 ### Düzeltildi
