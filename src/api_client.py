@@ -34,6 +34,27 @@ REQUEST_TIMEOUT = httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)
 STREAM_TIMEOUT = httpx.Timeout(connect=20.0, read=300.0, write=30.0, pool=20.0)
 
 
+def normalize_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keeps a single system message at the start.
+
+    Qwen rejects a request when a system message appears after user, assistant,
+    or tool turns ("System message must be at the beginning."). Later system
+    texts are folded into the leading system message; other turns stay in order.
+    """
+    system_parts: list[str] = []
+    rest: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") == "system":
+            content = str(message.get("content") or "").strip()
+            if content:
+                system_parts.append(content)
+            continue
+        rest.append(message)
+    if not system_parts:
+        return list(rest)
+    return [{"role": "system", "content": "\n\n".join(system_parts)}, *rest]
+
+
 class _StreamedFunction:
     """Accumulates a streamed tool-call function (name + partial arguments)."""
 
@@ -319,6 +340,7 @@ class EvrenClient:
         """
         Sends a standard (non-streaming) chat completion request with retry logic.
         """
+        messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
         tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE
@@ -441,6 +463,7 @@ class EvrenClient:
         
         Handles EVREN SSE keepalive lines (: keep-alive) and token reasoning deltas.
         """
+        messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
         tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE
@@ -559,6 +582,7 @@ class EvrenClient:
 
         Raises the mapped typed error on failure (no partial retry).
         """
+        messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
         tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE

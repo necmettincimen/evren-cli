@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [0.15.0] - 2026-10-12
+
+### Düzeltildi
+- Model isteğinde adım talimatı artık konuşmanın sonuna ikinci bir system mesajı olarak eklenmez; Qwen'in "System message must be at the beginning" reddini önlemek için tüm system metinleri baştaki tek system mesajında birleşir.
+- Prompt hazırlama, serbest metin yerine `submit_frame_guidance` araç JSON şemasını doldurur. Kesilen veya filtrelenen yanıtlar görevi başlatmaz.
+
 ## [0.14.0] - 2026-10-12
 
 ### Değiştirildi
