@@ -55,6 +55,17 @@ class TestProcUtils(unittest.TestCase):
         # Should return promptly after the timeout, not wait for the sleepers.
         self.assertLess(elapsed, 20)
 
+    def test_ctrl_c_kills_running_command(self):
+        script = "import time; print('started', flush=True); time.sleep(60)"
+        gen = stream_with_tree_kill([sys.executable, "-c", script], timeout=30)
+        self.addCleanup(gen.close)
+        line = next(gen)
+        self.assertIn("started", line[1])
+        started = time.time()
+        with self.assertRaises(KeyboardInterrupt):
+            gen.throw(KeyboardInterrupt)
+        self.assertLess(time.time() - started, 4)
+
     def test_kill_process_tree_invalid_pid(self):
         # Should be a no-op and not raise.
         kill_process_tree(0)

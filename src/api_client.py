@@ -27,11 +27,30 @@ from src.errors import (
     map_sdk_exception,
 )
 from src.api_key_pool import ApiKeyPool
+from src.token_manager import floor_output_tokens
 
 # SDK-level timeouts (seconds). Streaming uses a longer read timeout because
 # reasoning models can pause between tokens.
 REQUEST_TIMEOUT = httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)
 STREAM_TIMEOUT = httpx.Timeout(connect=20.0, read=300.0, write=30.0, pool=20.0)
+
+# Extra attempts after the first failure, only before any token is shown.
+_TRANSIENT_RETRIES = 2
+
+
+def _transient_backoff(error: Any, tries: int) -> float:
+    """Seconds to wait before repeating a connection, timeout, or 5xx call."""
+    retry_after = getattr(error, "retry_after", None)
+    if isinstance(retry_after, (int, float)) and retry_after > 0:
+        return float(retry_after)
+    return float(tries * 2)
+
+
+def _can_retry_transient(error: Any, streamed_any: bool, transient_tries: int) -> bool:
+    """True when a failed call produced no tokens and another try may succeed."""
+    if streamed_any or transient_tries >= _TRANSIENT_RETRIES:
+        return False
+    return bool(getattr(error, "retryable", False))
 
 
 def normalize_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -342,12 +361,8 @@ class EvrenClient:
         """
         messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
-        tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
+        tokens = floor_output_tokens(chosen_model, max_tokens or EVREN_DEFAULT_MAX_TOKENS)
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE
-
-        # Ensure reasoning models have enough tokens
-        if chosen_model in ("deepseek-v4.1-flash", "glm-5.3") and tokens < 2048:
-            tokens = 4096
 
         kwargs: dict[str, Any] = {
             "model": chosen_model,
@@ -465,11 +480,8 @@ class EvrenClient:
         """
         messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
-        tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
+        tokens = floor_output_tokens(chosen_model, max_tokens or EVREN_DEFAULT_MAX_TOKENS)
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE
-
-        if chosen_model in ("deepseek-v4.1-flash", "glm-5.3") and tokens < 2048:
-            tokens = 4096
 
         kwargs: dict[str, Any] = {
             "model": chosen_model,
@@ -489,6 +501,7 @@ class EvrenClient:
         # token is emitted, however, a quota/auth failure may failover safely.
         max_attempts = max(1, len(self.key_pool))
         attempt = 0
+        transient_tries = 0
         stream = None
         while True:
             attempt += 1
@@ -520,6 +533,10 @@ class EvrenClient:
                         continue
                     yield {"type": "error", "content": f"API Hatası: {e}"}
                     return
+                if _can_retry_transient(typed, False, transient_tries):
+                    transient_tries += 1
+                    time.sleep(_transient_backoff(typed, transient_tries))
+                    continue
                 yield {"type": "error", "content": f"API Hatası: {e}"}
                 return
 
@@ -584,11 +601,8 @@ class EvrenClient:
         """
         messages = normalize_chat_messages(messages)
         chosen_model = model or self.default_model
-        tokens = max_tokens or EVREN_DEFAULT_MAX_TOKENS
+        tokens = floor_output_tokens(chosen_model, max_tokens or EVREN_DEFAULT_MAX_TOKENS)
         temp = temperature if temperature is not None else EVREN_DEFAULT_TEMPERATURE
-
-        if chosen_model in ("deepseek-v4.1-flash", "glm-5.3") and tokens < 2048:
-            tokens = 4096
 
         kwargs: dict[str, Any] = {
             "model": chosen_model,
@@ -604,10 +618,12 @@ class EvrenClient:
             kwargs["tools"] = tools
 
         # Failover loop: if a key is out of daily quota (or auth-fails) *before*
-        # any token has been streamed, switch to the next key and retry. Once
-        # streaming has produced output we must NOT retry (no duplicate output).
+        # any token has been streamed, switch to the next key and retry.
+        # Connection, timeout, and 5xx errors get a short backoff and another
+        # try. Once streaming has produced output we must NOT retry.
         max_attempts = max(1, len(self.key_pool))
         attempt = 0
+        transient_tries = 0
         while True:
             attempt += 1
             current_key, client = self._acquire_client()
@@ -621,7 +637,57 @@ class EvrenClient:
 
             try:
                 stream = client.chat.completions.create(timeout=STREAM_TIMEOUT, **kwargs)
-                break
+                for chunk in stream:
+                    # Usage may arrive on a final chunk with empty choices.
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        usage = chunk_usage
+
+                    if not chunk.choices:
+                        continue
+
+                    choice = chunk.choices[0]
+                    if getattr(choice, "finish_reason", None) is not None:
+                        finish_reason = choice.finish_reason
+                    delta = choice.delta
+
+                    reasoning = (
+                        getattr(delta, "reasoning", None)
+                        or getattr(delta, "reasoning_content", None)
+                    )
+                    if reasoning:
+                        streamed_any = True
+                        message.reasoning += reasoning
+                        if on_reasoning:
+                            on_reasoning(reasoning)
+
+                    if delta.content:
+                        streamed_any = True
+                        message.content += delta.content
+                        if on_content:
+                            on_content(delta.content)
+
+                    for tc_delta in getattr(delta, "tool_calls", None) or []:
+                        idx = getattr(tc_delta, "index", 0) or 0
+                        acc = tool_calls_by_index.get(idx)
+                        if acc is None:
+                            acc = _StreamedToolCall(idx)
+                            tool_calls_by_index[idx] = acc
+                        if getattr(tc_delta, "id", None):
+                            acc.id = tc_delta.id
+                        if getattr(tc_delta, "type", None):
+                            acc.type = tc_delta.type
+                        fn = getattr(tc_delta, "function", None)
+                        if fn is not None:
+                            if getattr(fn, "name", None):
+                                acc.function.name += fn.name
+                            if getattr(fn, "arguments", None):
+                                acc.function.arguments += fn.arguments
+
+                message.tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)]
+                self.key_pool.report_success(current_key)
+                return _StreamedResponse(message, usage=usage, finish_reason=finish_reason)
+
             except Exception as e:
                 typed = map_sdk_exception(e, failed_key=current_key)
                 if isinstance(typed, TermsNotAcceptedError):
@@ -630,86 +696,17 @@ class EvrenClient:
                 # Daily quota exhausted -> disable this key and failover.
                 if isinstance(typed, QuotaExhaustedError):
                     self.key_pool.report_disabled(current_key, reason="quota_exhausted")
-                    if attempt < max_attempts and self.key_pool.has_available():
+                    if not streamed_any and attempt < max_attempts and self.key_pool.has_available():
                         continue
                     raise typed from e
                 # Auth/payment/forbidden -> disable this key and failover.
                 if typed.failover:
                     self.key_pool.report_disabled(current_key, reason="auth_error")
-                    if attempt < max_attempts and self.key_pool.has_available():
+                    if not streamed_any and attempt < max_attempts and self.key_pool.has_available():
                         continue
                     raise typed from e
-                raise typed from e
-
-        try:
-            for chunk in stream:
-                # Usage may arrive on a final chunk with empty choices.
-                chunk_usage = getattr(chunk, "usage", None)
-                if chunk_usage is not None:
-                    usage = chunk_usage
-
-                if not chunk.choices:
+                if _can_retry_transient(typed, streamed_any, transient_tries):
+                    transient_tries += 1
+                    time.sleep(_transient_backoff(typed, transient_tries))
                     continue
-
-                choice = chunk.choices[0]
-                if getattr(choice, "finish_reason", None) is not None:
-                    finish_reason = choice.finish_reason
-                delta = choice.delta
-
-                reasoning = (
-                    getattr(delta, "reasoning", None)
-                    or getattr(delta, "reasoning_content", None)
-                )
-                if reasoning:
-                    streamed_any = True
-                    message.reasoning += reasoning
-                    if on_reasoning:
-                        on_reasoning(reasoning)
-
-                if delta.content:
-                    streamed_any = True
-                    message.content += delta.content
-                    if on_content:
-                        on_content(delta.content)
-
-                for tc_delta in getattr(delta, "tool_calls", None) or []:
-                    idx = getattr(tc_delta, "index", 0) or 0
-                    acc = tool_calls_by_index.get(idx)
-                    if acc is None:
-                        acc = _StreamedToolCall(idx)
-                        tool_calls_by_index[idx] = acc
-                    if getattr(tc_delta, "id", None):
-                        acc.id = tc_delta.id
-                    if getattr(tc_delta, "type", None):
-                        acc.type = tc_delta.type
-                    fn = getattr(tc_delta, "function", None)
-                    if fn is not None:
-                        if getattr(fn, "name", None):
-                            acc.function.name += fn.name
-                        if getattr(fn, "arguments", None):
-                            acc.function.arguments += fn.arguments
-
-            message.tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)]
-            self.key_pool.report_success(current_key)
-            return _StreamedResponse(message, usage=usage, finish_reason=finish_reason)
-
-        except Exception as e:
-            typed = map_sdk_exception(e, failed_key=current_key)
-            if isinstance(typed, TermsNotAcceptedError):
-                ensure_terms_accepted(interactive=True, api_key=current_key)
                 raise typed from e
-            # Mid-stream quota/auth failure: only failover if nothing was
-            # streamed yet (otherwise a partial response would be duplicated).
-            if not streamed_any and isinstance(typed, QuotaExhaustedError):
-                self.key_pool.report_disabled(current_key, reason="quota_exhausted")
-                if attempt < max_attempts and self.key_pool.has_available():
-                    return self.chat_stream_assembled(
-                        messages=messages,
-                        model=model,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        tools=tools,
-                        on_reasoning=on_reasoning,
-                        on_content=on_content,
-                    )
-            raise typed from e

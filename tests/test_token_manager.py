@@ -1,6 +1,10 @@
 import unittest
 
-from src.token_manager import TokenManager, REASONING_MIN_OUTPUT_TOKENS
+from src.token_manager import (
+    QWEN_FLASH_MIN_OUTPUT_TOKENS,
+    REASONING_MIN_OUTPUT_TOKENS,
+    TokenManager,
+)
 
 
 class TestTokenManager(unittest.TestCase):
@@ -56,8 +60,17 @@ class TestTokenManager(unittest.TestCase):
         )
         # Reasoning model with a large request -> kept.
         self.assertEqual(tm.resolve_output_budget("glm-5.3", 8000), 8000)
+        # qwen3.8 thinking shares max_tokens; a small request is raised.
+        self.assertEqual(
+            tm.resolve_output_budget("qwen3.8-flash-next", 512),
+            QWEN_FLASH_MIN_OUTPUT_TOKENS,
+        )
+        self.assertEqual(
+            tm.resolve_output_budget("qwen3.8-flash-next", 20000),
+            20000,
+        )
         # Non-reasoning model -> unchanged.
-        self.assertEqual(tm.resolve_output_budget("qwen3.8-flash-next", 512), 512)
+        self.assertEqual(tm.resolve_output_budget("gpt-test", 512), 512)
 
     def test_remaining_context_and_fits(self):
         tm = TokenManager(context_window=1000)

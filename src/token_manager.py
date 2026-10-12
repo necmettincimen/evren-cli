@@ -18,13 +18,26 @@ from typing import Any
 DEFAULT_CHARS_PER_TOKEN = 3.5
 
 # Models that emit a hidden reasoning stream sharing the max_tokens budget.
-REASONING_MODELS = {"deepseek-v4.1-flash", "glm-5.3"}
+REASONING_MODELS = {"deepseek-v4.1-flash", "glm-5.3", "qwen3.8-flash-next"}
 
 # Minimum output budget for reasoning models (thinking + answer).
 REASONING_MIN_OUTPUT_TOKENS = 4096
 
+# qwen3.8-flash-next spends the same budget on thinking. 4096 often ends the
+# turn before a tool call or answer, which the agent then treats as a stall.
+QWEN_FLASH_MIN_OUTPUT_TOKENS = 16384
+
 # Default context window assumption when the model is unknown.
 DEFAULT_CONTEXT_WINDOW = 128_000
+
+
+def floor_output_tokens(model: str, requested: int) -> int:
+    """Raises max_tokens when thinking and the answer share one budget."""
+    if model == "qwen3.8-flash-next":
+        return max(requested, QWEN_FLASH_MIN_OUTPUT_TOKENS)
+    if model in REASONING_MODELS:
+        return max(requested, REASONING_MIN_OUTPUT_TOKENS)
+    return requested
 
 
 @dataclass
@@ -115,10 +128,7 @@ class TokenManager:
         Reasoning models need a larger minimum because thinking + answer share
         the same budget.
         """
-        budget = requested or 0
-        if model in REASONING_MODELS:
-            return max(budget, REASONING_MIN_OUTPUT_TOKENS)
-        return budget
+        return floor_output_tokens(model, requested or 0)
 
     # ---- context budget ------------------------------------------------
 
