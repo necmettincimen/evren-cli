@@ -16,6 +16,12 @@ from src.file_ops import (
     is_safe_path,
 )
 from src.diff_viewer import generate_unified_diff, apply_replacement, apply_edits
+from src.tool_args import (
+    ToolArgumentError,
+    normalize_tool_arguments,
+    schema_required_map,
+    schema_type_map,
+)
 from src.proc_utils import run_with_tree_kill, stream_with_tree_kill
 from src.ui import (
     print_diff,
@@ -309,6 +315,11 @@ TOOLS_SCHEMA = [
         },
     },
 ]
+
+# Derived once from TOOLS_SCHEMA: {tool: {param: declared json type}} and
+# {tool: [required params]}. Used to normalize lenient model arguments.
+TOOL_ARGUMENT_TYPES = schema_type_map(TOOLS_SCHEMA)
+TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
 
 
 def tool_view_file(path: str, start_line: int | None = None, end_line: int | None = None, workspace_root: Path | None = None) -> str:
@@ -610,6 +621,19 @@ def execute_tool_call(
 ) -> str:
     """Dispatches a tool call to the respective handler."""
     root = workspace_root or get_workspace_dir()
+
+    # Models sometimes send structured parameters as double-encoded JSON
+    # strings ("edits='[{...}]'") or use aliased key names. Normalize them to
+    # the declared schema types here so handlers always receive dict/list.
+    try:
+        arguments = normalize_tool_arguments(
+            name,
+            arguments,
+            type_map=TOOL_ARGUMENT_TYPES,
+            required_map=TOOL_ARGUMENT_REQUIRED,
+        )
+    except ToolArgumentError as exc:
+        return f"HATA: '{name}' için geçersiz araç argümanları: {exc}"
 
     if name == "view_file":
         return tool_view_file(
