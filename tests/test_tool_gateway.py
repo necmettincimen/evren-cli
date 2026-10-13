@@ -70,6 +70,18 @@ class TestToolGateway(unittest.TestCase):
         ok, _ = check_tool_allowed("create_plan", {}, AgentMode.ASK)
         self.assertFalse(ok)
 
+    def test_non_string_command_does_not_crash(self):
+        # Models may send command as a non-string; must not raise AttributeError.
+        ok, _ = is_read_only_command(None)
+        self.assertFalse(ok)
+        ok2, _ = is_read_only_command(["ls"])
+        self.assertFalse(ok2)
+        ok3, reason = check_tool_allowed(
+            "run_command", {"command": 42}, AgentMode.ASK
+        )
+        self.assertFalse(ok3)
+        self.assertNotIn("AttributeError", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

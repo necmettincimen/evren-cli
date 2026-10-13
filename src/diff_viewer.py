@@ -142,8 +142,22 @@ def apply_edits(
 
     current = original_text
     for idx, edit in enumerate(edits, 1):
+        if not isinstance(edit, dict):
+            return (
+                original_text,
+                False,
+                f"Edit #{idx} bir nesne olmalı (target_snippet/replacement_snippet), "
+                f"gelen tip: {type(edit).__name__}.",
+            )
         target = edit.get("target_snippet", "")
         replacement = edit.get("replacement_snippet", "")
+        if not isinstance(target, str) or not isinstance(replacement, str):
+            return (
+                original_text,
+                False,
+                f"Edit #{idx}: target_snippet ve replacement_snippet metin olmalı "
+                f"(gelen: {type(target).__name__}/{type(replacement).__name__}).",
+            )
         replace_all = bool(edit.get("all", False))
 
         new_text, ok, err = apply_replacement(

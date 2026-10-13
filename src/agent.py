@@ -40,9 +40,11 @@ def _tool_arguments_complete(tool_calls) -> bool:
     for call in tool_calls:
         function = getattr(call, "function", None)
         raw = getattr(function, "arguments", None) or ""
+        if isinstance(raw, dict):
+            continue
         try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return False
         if not isinstance(parsed, dict):
             return False
@@ -635,7 +637,11 @@ class AgentSession:
                             "type": "function",
                             "function": {
                                 "name": tc.function.name,
-                                "arguments": tc.function.arguments,
+                                "arguments": (
+                                    tc.function.arguments
+                                    if isinstance(tc.function.arguments, str)
+                                    else json.dumps(tc.function.arguments or {}, ensure_ascii=False)
+                                ),
                             },
                         }
                         for tc in tool_calls
@@ -651,10 +657,19 @@ class AgentSession:
                 # Execute each tool call
                 for tc in tool_calls:
                     fn_name = tc.function.name
+                    raw_args = tc.function.arguments
                     try:
-                        args = json.loads(tc.function.arguments)
+                        if isinstance(raw_args, dict):
+                            args = raw_args
+                        elif raw_args is None or (isinstance(raw_args, str) and not raw_args.strip()):
+                            args = {}
+                        else:
+                            args = json.loads(raw_args)
                         if not isinstance(args, dict):
-                            raise ValueError("Araç argümanları bir JSON nesnesi olmalıdır.")
+                            raise ValueError(
+                                f"Araç argümanları bir JSON nesnesi olmalı, gelen tip: "
+                                f"{type(args).__name__}."
+                            )
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
                         print_tool_result(fn_name, result, is_error=True)

@@ -87,6 +87,12 @@ def _second_token(command: str) -> str:
 
 def is_read_only_command(command: str) -> tuple[bool, str]:
     """Checks whether a shell command is read-only (safe for ask/plan modes)."""
+    # Models may send non-string values here; normalize instead of crashing.
+    if command is None:
+        command = ""
+    elif not isinstance(command, str):
+        command = str(command)
+
     if not command or not command.strip():
         return False, "Boş komut."
 
