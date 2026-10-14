@@ -201,9 +201,10 @@ EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
 
 # Ajan adım tavanı. Her adım tam sistem prompt'unu + araç şemalarını yeniden
-# gönderdiği için (stateless chat API) taban maliyet doğrusal artar: 30 adım
-# ~162k prompt token. Düşük varsayılan, işi bitmeyince /continue ile uzatılır.
-EVREN_MAX_STEPS = int(os.getenv("EVREN_MAX_STEPS", "12"))
+# gönderir; ancak sistem mesajı artık adımlar arasında sabit (önbellek isabeti) ve
+# bağımsız araç çağrıları tek turda toplanabildiği için 12 adım orta boy işleri
+# yarıda kesiyordu. 20, işi bitmeyince /continue ile uzatılır.
+EVREN_MAX_STEPS = int(os.getenv("EVREN_MAX_STEPS", "20"))
 
 
 # Compaction tetikleme oranı. Compaction yalnızca tahmini kullanım bu oranda
@@ -229,10 +230,10 @@ def default_max_steps() -> int:
     instead of silently reducing every run to a single step.
     """
     try:
-        value = int(os.getenv("EVREN_MAX_STEPS", "12"))
+        value = int(os.getenv("EVREN_MAX_STEPS", "20"))
     except (TypeError, ValueError):
-        return 12
-    return value if 1 <= value <= 100 else 12
+        return 20
+    return value if 1 <= value <= 100 else 20
 
 
 def config_source_report(pool_size: int | None = None) -> dict:
@@ -289,6 +290,77 @@ def get_ui_theme() -> str:
 EVREN_REASONING_EFFORT = os.getenv("EVREN_REASONING_EFFORT", "low").strip().lower()
 if EVREN_REASONING_EFFORT in ("", "default", "auto", "none", "off"):
     EVREN_REASONING_EFFORT = None
+
+
+# Düşünmeyi kapatma. EVREN geçidi `thinking: false` alanını destekler (doküman:
+# "düşünme gerekmiyorsa thinking: false gönderin"). Canlı ölçümde qwen3.8-flash-next,
+# deepseek-v4.1-flash ve mimo-v2.6-pro temiz yanıt verdi; glm-5.3 ise düşünme
+# metnini content içine sızdırdı, bu yüzden glm'e asla gönderilmez.
+THINKING_OFF_UNSAFE_MODELS = {"glm-5.3", "zai/glm-5.3-fp8"}
+
+
+def thinking_off_supported(model: str) -> bool:
+    """True when `thinking: false` yields a clean answer for this model."""
+    return bool(model) and model not in THINKING_OFF_UNSAFE_MODELS
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        value = int((os.getenv(name) or str(default)).strip())
+    except ValueError:
+        return default
+    return value if low <= value <= high else default
+
+
+# Planlayıcı / uygulayıcı model ayrımı. Büyük bir brief geldiğinde önce
+# planlayıcı model (düşünme açık, salt-okuma araçları, az adım) kısa bir plan
+# çıkarır; ardından uygulayıcı model planı düşünmeyi kapatarak hızla uygular.
+def key_min_remaining() -> int:
+    """Günlük kalan kotası bunun altındaki anahtarlar başlangıçta park edilir
+    (EVREN_KEY_MIN_REMAINING, varsayılan 50000 token)."""
+    return _env_int("EVREN_KEY_MIN_REMAINING", 50_000, 0, 15_000_000)
+
+
+def auto_route_enabled() -> bool:
+    """EVREN_AUTO_ROUTE (varsayılan açık): büyük brief'te planla-sonra-uygula."""
+    return _env_flag("EVREN_AUTO_ROUTE", True)
+
+
+def planner_model() -> str:
+    """Plan çıkaran model (EVREN_PLANNER_MODEL, varsayılan deepseek-v4.1-flash)."""
+    return (os.getenv("EVREN_PLANNER_MODEL") or "deepseek-v4.1-flash").strip()
+
+
+def executor_model(session_model: str) -> str:
+    """Planı uygulayan model (EVREN_EXECUTOR_MODEL, yoksa oturum modeli)."""
+    return (os.getenv("EVREN_EXECUTOR_MODEL") or session_model).strip()
+
+
+def route_min_tokens() -> int:
+    """Planlayıcıya geçiş eşiği: tahmini brief token'ı (EVREN_ROUTE_MIN_TOKENS, 800)."""
+    return _env_int("EVREN_ROUTE_MIN_TOKENS", 800, 50, 1_000_000)
+
+
+def planner_max_steps() -> int:
+    """Planlayıcının salt-okuma keşif adım tavanı (EVREN_PLANNER_STEPS, 3)."""
+    return _env_int("EVREN_PLANNER_STEPS", 3, 1, 20)
+
+
+def executor_thinking() -> bool:
+    """Normal kipte uygulayıcı düşünsün mü (EVREN_EXECUTOR_THINKING, varsayılan kapalı).
+
+    Kapalıyken normal kipteki her görev `thinking: false` ile gider (plan olsun ya da
+    olmasın); planlayıcı, plan kipi ve ask kipi düşünmeye devam eder. Kesilen bir
+    yanıt her durumda düşünme kapalı yeniden denenir.
+    """
+    return _env_flag("EVREN_EXECUTOR_THINKING", False)
 
 # SSL/TLS verification configuration.
 # - EVREN_CA_BUNDLE : optional path to a custom CA bundle (PEM). Use this when the
@@ -364,8 +436,8 @@ def execution_context_block(workspace_root: Path) -> str:
         f"Çalışma alanı ve run_command çalışma dizini: {workspace_root.resolve()}\n"
         f"run_command kabuğu: {shell}\n"
         "run_command, EVREN CLI sürecinin çalıştığı makinede çalışır; SSH bağlantısı kurmaz.\n"
-        "Windows'ta PowerShell sözdizimi gerekiyorsa powershell -NoProfile -Command "
-        "ile açıkça çağır; run_command kabuğunu PowerShell varsayma.\n"
+        "Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver; "
+        "aksi halde komutu bu kabuğun sözdizimiyle yaz.\n"
         "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir."
     )
 
@@ -392,6 +464,7 @@ def ensure_evren_dirs(workspace_root: Path | None = None):
         "decisions.json",
         "docs_state.json",
         "docs.lock",
+        "tmp/",
     )
     try:
         existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []

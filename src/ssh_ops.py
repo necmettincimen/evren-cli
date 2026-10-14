@@ -25,8 +25,8 @@ from src.ssh_hosts import SshHost, get_host
 
 DEFAULT_SSH_TIMEOUT = 60
 MAX_SSH_TIMEOUT = 600
-SSH_OUTPUT_HEAD_CHARS = 3000
-SSH_OUTPUT_TAIL_CHARS = 1000
+SSH_OUTPUT_HEAD_CHARS = 6000
+SSH_OUTPUT_TAIL_CHARS = 2000
 
 
 def _truncate_output(text: str) -> str:
@@ -37,6 +37,52 @@ def _truncate_output(text: str) -> str:
     tail = text[-SSH_OUTPUT_TAIL_CHARS:]
     dropped = len(text) - SSH_OUTPUT_HEAD_CHARS - SSH_OUTPUT_TAIL_CHARS
     return f"{head}\n... [{dropped} karakter kırpıldı] ...\n{tail}"
+
+
+def spill_long_output(
+    text: str, workspace_root: Path | None, label: str, *, shown_live: bool = False,
+) -> str:
+    """Returns what the model gets for a possibly long output.
+
+    Short output is returned as is. Long output (listings such as every pod's
+    resources) is printed in full to the user's terminal unless it was already
+    streamed live, saved under `.evren/tmp/`, and the model receives the
+    truncated view plus a note: re-typing a table the user already sees costs a
+    lot of tokens and is the slowest part of a "list ..." request.
+    """
+    if len(text) <= SSH_OUTPUT_HEAD_CHARS + SSH_OUTPUT_TAIL_CHARS:
+        return text
+    from src.secret_vault import active_vault
+
+    text = active_vault().mask(text)
+    lines = text.count("\n") + 1
+    saved = ""
+    try:
+        tmp_dir = get_evren_dir(workspace_root or get_workspace_dir()) / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = tmp_dir / f"{label}-{stamp}.txt"
+        path.write_text(text, encoding="utf-8")
+        saved = path.relative_to(workspace_root or get_workspace_dir()).as_posix()
+    except (OSError, ValueError):
+        saved = ""
+    if not shown_live:
+        try:
+            from src.ui import print_command_output
+
+            for line in text.splitlines():
+                print_command_output(line + "\n", stream="stdout")
+        except Exception:
+            pass
+    where = f" ve {saved} dosyasına kaydedildi" if saved else ""
+    return (
+        _truncate_output(text)
+        + f"\n[EVREN] Tam çıktı ({lines} satır) kullanıcının terminalinde gösterildi{where}. "
+        "Listeyi/tabloyu yanıtında yeniden yazma. Görev listeleme/gösterme ise iş bitti: ek analiz "
+        "komutu çalıştırmadan, gördüğün kısma dayanarak 1-3 cümlelik kısa özetle hemen bitir. "
+        "Yalnızca kullanıcı açıkça analiz/süzme istediyse komutu süzerek (grep/awk/jsonpath) yeniden çalıştır"
+        + (" veya view_file ile dosyadan aralık oku." if saved else ".")
+    )
 
 
 def build_ssh_command(host: SshHost, remote_command: str) -> list[str]:
@@ -64,6 +110,11 @@ def _audit_log(workspace_root: Path | None, alias: str, action: str, detail: str
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         code_str = f" exit={code}" if code is not None else ""
+        from src.secret_vault import active_vault
+        from src.workflow_state import redact_text
+
+        # Executed commands carry real secrets; the audit log keeps placeholders.
+        detail = redact_text(active_vault().mask(detail))
         line = f"[{ts}] host={alias} action={action}{code_str} :: {detail}\n"
         with (log_dir / "ssh_audit.log").open("a", encoding="utf-8") as f:
             f.write(line)
@@ -83,7 +134,9 @@ def ssh_run(
     """
     host = get_host(alias, workspace_root)
     if host is None:
-        return f"HATA: '{alias}' kayıtlı bir SSH host'u değil. Önce '/ssh add' ile tanımlayın."
+        from src.ssh_hosts import unknown_alias_message
+
+        return unknown_alias_message(alias, workspace_root)
 
     timeout = timeout_seconds or DEFAULT_SSH_TIMEOUT
     timeout = max(1, min(timeout, MAX_SSH_TIMEOUT))
@@ -112,10 +165,28 @@ def ssh_run(
 
     result_lines = [f"[{alias}] Çıkış Kodu: {code}"]
     if out:
-        result_lines.append(f"STDOUT:\n{_truncate_output(out)}")
+        result_lines.append(f"STDOUT:\n{spill_long_output(out, workspace_root, f'ssh-{alias}')}")
     if err:
         result_lines.append(f"STDERR:\n{_truncate_output(err)}")
+    if code == 255 and _is_connection_error(err):
+        # ssh itself failed before the remote command ran. Say so plainly so the
+        # model does not spend turns on ssh_list_hosts + ping to diagnose it.
+        result_lines.append(
+            f"[EVREN] Bağlantı kurulamadı: {host.target}:{host.port or 22} (alias={alias}). Uzak komut "
+            "hiç çalışmadı. Aynı çağrıyı tekrarlama; kullanıcıya ağ/VPN erişimini veya host kaydını sor."
+        )
     return "\n".join(result_lines)
+
+
+_CONNECTION_ERRORS = (
+    "timed out", "connection refused", "no route to host", "could not resolve",
+    "network is unreachable", "permission denied", "host key verification failed",
+)
+
+
+def _is_connection_error(err: str) -> bool:
+    lowered = (err or "").casefold()
+    return any(marker in lowered for marker in _CONNECTION_ERRORS)
 
 
 def ssh_read_file(
@@ -127,7 +198,9 @@ def ssh_read_file(
     """Reads a remote file via `cat` (read-only)."""
     host = get_host(alias, workspace_root)
     if host is None:
-        return f"HATA: '{alias}' kayıtlı bir SSH host'u değil."
+        from src.ssh_hosts import unknown_alias_message
+
+        return unknown_alias_message(alias, workspace_root)
 
     # Quote the path to avoid shell interpretation on the remote side.
     safe_path = remote_path.replace("'", "'\\''")
@@ -172,7 +245,9 @@ def ssh_write_file(
     """
     host = get_host(alias, workspace_root)
     if host is None:
-        return f"HATA: '{alias}' kayıtlı bir SSH host'u değil."
+        from src.ssh_hosts import unknown_alias_message
+
+        return unknown_alias_message(alias, workspace_root)
 
     if not host.allow_write:
         return (

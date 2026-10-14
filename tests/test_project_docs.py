@@ -173,7 +173,7 @@ class ChangelogTest(_TempProjectTest):
     def test_repo_changelog_md_is_never_written(self):
         # NTFS: 'CHANGELOG.md' == 'changelog.md'. The repo's own changelog must
         # survive untouched; the CLI keeps its session log in evren-changelog.md.
-        original = "# Changelog\n\n## 1.2.0\n- insan yazimi gir\n"
+        original = "# Changelog\n\n## 2.0.0\n- insan yazimi gir\n"
         self.write("CHANGELOG.md", original)
         result = project_docs.ensure_project_docs(self.root)
         self.assertTrue(

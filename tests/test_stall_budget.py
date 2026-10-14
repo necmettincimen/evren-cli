@@ -24,22 +24,25 @@ def response(content="", finish_reason="stop", tools=()):
 
 
 class StallTokenCapTest(unittest.TestCase):
-    def test_default_is_8192(self):
+    def test_default_is_16384(self):
+        # The qwen base budget is 8192, so the default cap allows one doubling.
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EVREN_STALL_TOKEN_CAP", None)
-            self.assertEqual(_stall_token_cap(), 8192)
+            self.assertEqual(_stall_token_cap(), 16384)
 
-    def test_default_is_a_quarter_of_the_old_ceiling(self):
-        self.assertEqual(_stall_token_cap(), 32768 // 4)
+    def test_default_is_half_of_the_old_ceiling(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EVREN_STALL_TOKEN_CAP", None)
+            self.assertEqual(_stall_token_cap(), 32768 // 2)
 
     def test_env_override(self):
-        with patch.dict(os.environ, {"EVREN_STALL_TOKEN_CAP": "16384"}):
-            self.assertEqual(_stall_token_cap(), 16384)
+        with patch.dict(os.environ, {"EVREN_STALL_TOKEN_CAP": "8192"}):
+            self.assertEqual(_stall_token_cap(), 8192)
 
     def test_out_of_range_falls_back(self):
         for value in ("", "abc", "512", "999999", "-1"):
             with patch.dict(os.environ, {"EVREN_STALL_TOKEN_CAP": value}):
-                self.assertEqual(_stall_token_cap(), 8192)
+                self.assertEqual(_stall_token_cap(), 16384)
 
 
 class StallBudgetBehaviourTest(unittest.TestCase):
@@ -79,7 +82,7 @@ class StallBudgetBehaviourTest(unittest.TestCase):
         return seen_budget, seen_limit
 
     def test_budget_doubles_but_stops_at_the_new_cap(self):
-        # Three consecutive stalls: 4096 -> 8192 -> 8192 (capped), never 16k/32k.
+        # Three consecutive stalls: 4096 -> 8192 -> 16384 (capped), never 32k.
         stalls = [response("", "length")] * 3
         budgets, _limits = self._budgets_and_limits(stalls)
         self.assertGreaterEqual(len(budgets), 4)
@@ -89,10 +92,10 @@ class StallBudgetBehaviourTest(unittest.TestCase):
     def test_cap_env_raises_the_ceiling(self):
         stalls = [response("", "length")] * 3
         budgets, _limits = self._budgets_and_limits(
-            stalls, env={"EVREN_STALL_TOKEN_CAP": "16384"}
+            stalls, env={"EVREN_STALL_TOKEN_CAP": "32768"}
         )
-        self.assertLessEqual(max(budgets), 16384)
-        self.assertGreater(max(budgets), 8192)
+        self.assertLessEqual(max(budgets), 32768)
+        self.assertGreater(max(budgets), 16384)
 
     def test_second_stall_halves_the_compaction_limit(self):
         stalls = [response("", "length")] * 2

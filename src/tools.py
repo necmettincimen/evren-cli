@@ -4,6 +4,8 @@ Provides OpenAI-compatible function schemas and execution logic for
 file reading, writing, surgical editing, directory inspection, and command running.
 """
 
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +39,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "view_file",
-            "description": "Çalışma alanındaki bir dosyanın içeriğini satır numaralarıyla birlikte okur.",
+            "description": "Dosyayı satır numaralarıyla okur. Aralık verilmezse ilk 250 satır, aralıkla en fazla 400 satır döner. Büyük dosyada önce find_files(query) ile yeri bulup yalnızca ilgili aralığı oku.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -148,17 +150,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "find_files",
-            "description": "Dosya adına göre (glob pattern) veya dosya içeriğinde metin arar.",
+            "description": "Dosya adına göre (glob) arar; query verilirse içerikte arar ve eşleşen satırları `yol:satır: metin` olarak döndürür (grep -n gibi, büyük/küçük harf duyarsız, alternatifler | ile). Kod aramak için findstr/grep yerine bunu kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Arama deseni (örn: *.py veya test_*.py)",
+                        "description": "Dosya deseni (örn: *.py, src/*.py, src/repl.py)",
                     },
                     "query": {
                         "type": "string",
-                        "description": "İçerikte aranacak metin (isteğe bağlı)",
+                        "description": "İçerikte aranacak metin; birden çok için a|b|c (isteğe bağlı)",
                     },
                 },
                 "required": ["pattern"],
@@ -169,7 +171,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "EVREN CLI'nin çalıştığı YEREL makinede, aktif çalışma alanını cwd kullanarak komut çalıştırır (test, derleme, sistem kontrolü vb.). Bu host/bu hosts/bu makine/localhost isteklerinde bunu kullan; SSH gerekmez. Windows'ta kabuk cmd.exe'dir; PowerShell gerekiyorsa açıkça powershell -NoProfile -Command çağır. Çalıştırmadan önce onay ayarları uygulanır.",
+            "description": "EVREN CLI'nin çalıştığı YEREL makinede, aktif çalışma alanını cwd kullanarak komut çalıştırır (test, derleme, sistem kontrolü vb.). Bu host/bu hosts/bu makine/localhost isteklerinde bunu kullan; SSH gerekmez. Windows'ta varsayılan kabuk cmd.exe'dir; PowerShell sözdizimi için use_powershell=true ver. Python kodu (çok satırlı olabilir) için use_python=true ver ve command'a yalnızca kodu yaz; python -c ile sarmalama. cmd.exe çok satırlı komut çalıştıramaz. Çıktı 8000 karakterde kırpılır; hedefli komut kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -181,6 +183,14 @@ TOOLS_SCHEMA = [
                         "type": "integer",
                         "description": "Zaman aşımı saniye cinsinden (varsayılan 180, en fazla 600).",
                         "default": 180,
+                    },
+                    "use_python": {
+                        "type": "boolean",
+                        "description": "true: command Python kodu olarak çalışır (sys.executable -c), çok satırlı olabilir, kabuk tırnaklama/kaçış gerekmez.",
+                    },
+                    "use_powershell": {
+                        "type": "boolean",
+                        "description": "true: komut PowerShell betiği olarak çalışır (elle powershell -Command sarmalama/tırnak gerekmez). Varsayılan false: sistem kabuğu (Windows'ta cmd.exe).",
                     },
                 },
                 "required": ["command"],
@@ -233,7 +243,16 @@ TOOLS_SCHEMA = [
                     },
                     "command": {
                         "type": "string",
-                        "description": "Uzak sunucuda çalıştırılacak komut (örn: systemctl status nginx)",
+                        "description": "Uzak sunucuda çalıştırılacak komut (örn: systemctl status nginx). preset verilirse boş bırak.",
+                    },
+                    "preset": {
+                        "type": "string",
+                        "enum": ["k8s_health", "k8s_resources"],
+                        "description": "Hazır salt-okuma komutu (command yerine): k8s_health = pod/küme sağlık anlık görüntüsü; k8s_resources = container başına request/limit tablosu.",
+                    },
+                    "namespace": {
+                        "type": "string",
+                        "description": "preset için tek namespace (boş = tüm namespace'ler).",
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -241,7 +260,7 @@ TOOLS_SCHEMA = [
                         "default": 60,
                     },
                 },
-                "required": ["alias", "command"],
+                "required": ["alias"],
             },
         },
     },
@@ -346,6 +365,13 @@ def tools_for_mode(mode) -> list[dict]:
     return [t for t in TOOLS_SCHEMA if t.get("function", {}).get("name") not in hidden]
 
 
+# view_file window: lines returned without a range / with an explicit range,
+# and a hard character ceiling for files with very long lines.
+VIEW_DEFAULT_LINES = 250
+VIEW_MAX_LINES = 400
+VIEW_MAX_CHARS = 24000
+
+
 def tool_view_file(path: str, start_line: int | None = None, end_line: int | None = None, workspace_root: Path | None = None) -> str:
     root = workspace_root or get_workspace_dir()
     content, err = safe_read_file(path, root)
@@ -361,9 +387,25 @@ def tool_view_file(path: str, start_line: int | None = None, end_line: int | Non
     if s > total_lines:
         return f"HATA: Başlangıç satırı ({s}) dosya satır sayısından ({total_lines}) büyük."
 
+    # Every tool result is re-sent on each later step, so one unbounded read of a
+    # large file is paid for many times. Cap the window and say how to continue.
+    limit = VIEW_DEFAULT_LINES if start_line is None and end_line is None else VIEW_MAX_LINES
+    clipped = e - s + 1 > limit
+    if clipped:
+        e = s + limit - 1
     numbered_lines = [f"{idx:4d} | {lines[idx-1]}" for idx in range(s, e + 1)]
+    body = "\n".join(numbered_lines)
+    if len(body) > VIEW_MAX_CHARS:
+        body = body[:VIEW_MAX_CHARS].rsplit("\n", 1)[0]
+        e = s + body.count("\n")
+        clipped = True
     header = f"--- {path} (Satırlar {s}-{e} / Toplam {total_lines}) ---\n"
-    return header + "\n".join(numbered_lines)
+    if clipped:
+        body += (
+            f"\n... [kırpıldı: {e + 1}-{total_lines} okunmadı. Gerekirse find_files(query=...) ile "
+            "yeri bul ve view_file'ı start_line/end_line ile çağır]"
+        )
+    return header + body
 
 
 def tool_edit_file(
@@ -474,39 +516,66 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
     return "\n".join(sorted(entries)[:100]) or "Klasör boş."
 
 
+# find_files content search limits (grep -n style output).
+FIND_MAX_LINES = 80
+FIND_MAX_PER_FILE = 12
+FIND_LINE_CHARS = 180
+
+
 def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None = None) -> str:
+    """Finds files by glob; with `query`, returns matching lines like `grep -n`.
+
+    The content search used to answer only "path (Eşleşti)", so the model
+    fell back to repeated `findstr` calls to learn line numbers. It now prints
+    `path:line: text` (case-insensitive, `|` separates alternatives).
+    """
     root = workspace_root or get_workspace_dir()
-    matches = []
+    skip = (".git", ".venv", "venv", "node_modules", "__pycache__", ".evren")
+    needles = [q.casefold() for q in (query or "").split("|") if q.strip()]
+    files: list[str] = []
+    lines_out: list[str] = []
+    truncated = False
 
-    for path in root.rglob(pattern):
-        if any(p in (".git", ".venv", "node_modules", "__pycache__", ".evren") for p in path.parts):
+    for path in sorted(root.rglob(pattern or "*")):
+        if any(p in skip for p in path.parts) or not path.is_file():
             continue
-        if not path.is_file():
-            continue
-
         rel = path.relative_to(root).as_posix()
-        if query:
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-                if query in text:
-                    matches.append(f"{rel} (Eşleşti)")
-            except Exception:
-                pass
-        else:
-            matches.append(rel)
-
-        if len(matches) >= 50:
-            matches.append("... [50 eşleşme sınırına ulaşıldı]")
+        if not needles:
+            files.append(rel)
+            if len(files) >= 100:
+                files.append("... [100 dosya sınırına ulaşıldı]")
+                break
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        hits = 0
+        for number, line in enumerate(text.splitlines(), 1):
+            folded = line.casefold()
+            if any(n in folded for n in needles):
+                hits += 1
+                if hits > FIND_MAX_PER_FILE:
+                    lines_out.append(f"{rel}: ... [bu dosyada daha fazla eşleşme var]")
+                    break
+                lines_out.append(f"{rel}:{number}: {line.strip()[:FIND_LINE_CHARS]}")
+                if len(lines_out) >= FIND_MAX_LINES:
+                    truncated = True
+                    break
+        if truncated:
+            lines_out.append(f"... [{FIND_MAX_LINES} satır sınırı; aramayı daralt]")
             break
 
-    return "\n".join(matches) or "Eşleşen dosya bulunamadı."
+    if needles:
+        return "\n".join(lines_out) or "Eşleşme bulunamadı."
+    return "\n".join(files) or "Eşleşen dosya bulunamadı."
 
 
 DEFAULT_COMMAND_TIMEOUT = 180
 MAX_COMMAND_TIMEOUT = 600
 # Output truncation: keep head + tail so exit context is preserved.
-OUTPUT_HEAD_CHARS = 3000
-OUTPUT_TAIL_CHARS = 1000
+OUTPUT_HEAD_CHARS = 6000
+OUTPUT_TAIL_CHARS = 2000
 
 
 def _truncate_output(text: str) -> str:
@@ -519,11 +588,73 @@ def _truncate_output(text: str) -> str:
     return f"{head}\n... [{dropped} karakter kırpıldı] ...\n{tail}"
 
 
+_INLINE_PYTHON_RE = re.compile(
+    r'^\s*(?:python3?|py)(?:\.exe)?\s+-c\s+(["\'])(?P<code>.*)\1\s*$', re.DOTALL,
+)
+
+
+_POWERSHELL_WRAPPER_RE = re.compile(
+    r'^\s*(?:powershell|pwsh)(?:\.exe)?(?:\s+-(?:NoProfile|NonInteractive|NoLogo|ExecutionPolicy\s+\S+))*'
+    r'\s+-Command\s+(?P<q>["\'])(?P<body>.*)(?P=q)\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+class MultilineShellCommand(ValueError):
+    """A multi-line command that cmd.exe would silently mangle."""
+
+
+def _command_argv(
+    command: str, use_powershell: bool, use_python: bool = False,
+) -> tuple[str | list[str], bool]:
+    """Returns (command, use_shell) for the requested shell.
+
+    use_powershell=True runs the text as a PowerShell script through an argv list,
+    so the model never has to nest quotes inside `powershell -Command "..."`
+    under cmd.exe (the most common cause of broken Windows commands).
+    use_python=True runs the text as Python code via `sys.executable -c`.
+
+    cmd.exe treats a newline as the end of the command, so a multi-line
+    `python -c "..."` used to run as a glued-together, broken one-liner. That form
+    is rewritten to the argv route; any other multi-line cmd command is rejected
+    with a clear message instead of executing garbage.
+    """
+    import sys
+
+    if use_python:
+        return [sys.executable, "-c", command], False
+    if not use_powershell:
+        if os.name == "nt" and "\n" in command.strip():
+            match = _INLINE_PYTHON_RE.match(command)
+            if match:
+                code = match.group("code")
+                if match.group(1) == '"':
+                    code = code.replace('\\"', '"')
+                return [sys.executable, "-c", code], False
+            raise MultilineShellCommand(
+                "cmd.exe çok satırlı komut çalıştıramaz. Python kodu için use_python=true, "
+                "PowerShell için use_powershell=true ver ya da satırları && ile birleştir."
+            )
+        return command, True
+    exe = "powershell" if os.name == "nt" else "pwsh"
+    # use_powershell=true plus a hand-written `powershell -Command "..."`
+    # wrapper nested two shells and failed to parse; unwrap it.
+    wrapped = _POWERSHELL_WRAPPER_RE.match(command)
+    if wrapped:
+        command = wrapped.group("body")
+        if wrapped.group("q") == '"':
+            command = command.replace('\\"', '"')
+    script = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + command
+    return [exe, "-NoProfile", "-NonInteractive", "-Command", script], False
+
+
 def tool_run_command(
     command: str,
     workspace_root: Path | None = None,
     auto_approve: bool = False,
     timeout_seconds: int | None = None,
+    use_powershell: bool = False,
+    use_python: bool = False,
 ) -> str:
     root = workspace_root or get_workspace_dir()
 
@@ -531,7 +662,12 @@ def tool_run_command(
     timeout = timeout_seconds or DEFAULT_COMMAND_TIMEOUT
     timeout = max(1, min(timeout, MAX_COMMAND_TIMEOUT))
 
-    print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {command}")
+    from src.secret_vault import active_vault
+
+    vault = active_vault()
+    # The model only ever sees placeholders; the real secret is inserted here
+    # and never printed.
+    print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
 
     if not (auto_approve or EVREN_AUTO_APPROVE):
         approved = prompt_confirm("Bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
@@ -543,29 +679,40 @@ def tool_run_command(
         # progress) and guarantees grandchildren (msbuild/node) are killed on
         # timeout, not just the direct shell child. Its return value carries the
         # full captured output + exit status.
+        try:
+            argv, use_shell = _command_argv(vault.expand(command), use_powershell, use_python)
+        except MultilineShellCommand as e:
+            return f"HATA: {e}"
+        extra = {"env": vault.env()} if vault else {}
         gen = stream_with_tree_kill(
-            command,
+            argv,
             cwd=str(root),
             timeout=timeout,
-            shell=True,
+            shell=use_shell,
+            **extra,
         )
         code, out, err, timed_out = -1, "", "", False
         try:
             while True:
                 stream_name, line = next(gen)
-                print_command_output(line, stream=stream_name)
+                print_command_output(vault.mask(line), stream=stream_name)
         except StopIteration as stop:
             code, out, err, timed_out = stop.value
 
-        out = out.strip()
-        err = err.strip()
+        out = vault.mask(out.strip())
+        err = vault.mask(err.strip())
 
         if timed_out:
             return f"HATA: Komut zaman aşımına uğradı ({timeout} saniye). Süreç ağacı sonlandırıldı."
 
         result_lines = [f"Çıkış Kodu: {code}"]
         if out:
-            result_lines.append(f"STDOUT:\n{_truncate_output(out)}")
+            from src.ssh_ops import spill_long_output
+
+            # Output was already streamed live; only save it and tell the model.
+            result_lines.append(
+                f"STDOUT:\n{spill_long_output(out, root, 'cmd', shown_live=True)}"
+            )
         if err:
             result_lines.append(f"STDERR:\n{_truncate_output(err)}")
         return "\n".join(result_lines)
@@ -637,6 +784,41 @@ def tool_ask_user(
     return "Kullanıcı REDDETTİ.", False
 
 
+def _syntax_report(path: str, root: Path) -> str:
+    """Compiles an edited .py / parses an edited .json; '' when fine.
+
+    An edit that broke the syntax used to surface only when tests ran, often
+    after the step budget was gone, leaving the file unimportable.
+    """
+    try:
+        target = resolve_workspace_path(path, root)
+    except Exception:
+        return ""
+    suffix = target.suffix.lower()
+    if suffix not in (".py", ".json") or not target.is_file():
+        return ""
+    try:
+        source = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    try:
+        if suffix == ".py":
+            compile(source, str(target), "exec")
+        else:
+            import json as _json
+
+            _json.loads(source)
+    except SyntaxError as e:
+        line = (e.text or "").rstrip()
+        return (
+            f"\n⚠ SÖZDİZİMİ HATASI: {path}:{e.lineno}: {e.msg}" + (f"\n    {line}" if line else "")
+            + "\nDosya şu an içe aktarılamaz; bir sonraki adımda önce bunu düzelt (view_file ile satırı oku)."
+        )
+    except ValueError as e:
+        return f"\n⚠ JSON HATASI: {path}: {e}. Bir sonraki adımda önce bunu düzelt."
+    return ""
+
+
 def execute_tool_call(
     name: str,
     arguments: dict[str, Any],
@@ -667,7 +849,7 @@ def execute_tool_call(
             workspace_root=root,
         )
     elif name == "edit_file":
-        return tool_edit_file(
+        result = tool_edit_file(
             path=arguments.get("path", ""),
             target_snippet=arguments.get("target_snippet", ""),
             replacement_snippet=arguments.get("replacement_snippet", ""),
@@ -676,13 +858,19 @@ def execute_tool_call(
             all=arguments.get("all", False),
             edits=arguments.get("edits"),
         )
+        if result.startswith("BAŞARILI"):
+            result += _syntax_report(arguments.get("path", ""), root)
+        return result
     elif name == "write_file":
-        return tool_write_file(
+        result = tool_write_file(
             path=arguments.get("path", ""),
             content=arguments.get("content", ""),
             workspace_root=root,
             auto_approve=auto_approve,
         )
+        if result.startswith("BAŞARILI"):
+            result += _syntax_report(arguments.get("path", ""), root)
+        return result
     elif name == "list_directory":
         return tool_list_directory(
             path=arguments.get("path", "."),
@@ -701,6 +889,8 @@ def execute_tool_call(
             workspace_root=root,
             auto_approve=auto_approve,
             timeout_seconds=arguments.get("timeout_seconds"),
+            use_powershell=arguments.get("use_powershell") is True,
+            use_python=arguments.get("use_python") is True,
         )
     elif name == "create_plan":
         return tool_create_plan(
@@ -714,9 +904,25 @@ def execute_tool_call(
         return ssh_list_hosts(workspace_root=root)
     elif name == "ssh_run":
         from src.ssh_ops import ssh_run
+        from src.secret_vault import active_vault
+
+        vault = active_vault()
         alias = arguments.get("alias", "")
         command = arguments.get("command", "")
-        print_warning(f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{alias}] > {command}")
+        preset = (arguments.get("preset") or "").strip()
+        if preset:
+            from src.remote_presets import build_preset
+
+            try:
+                command = build_preset(preset, arguments.get("namespace"))
+            except ValueError as e:
+                return f"HATA: {e}"
+            shown = f"preset={preset}" + (f" namespace={arguments.get('namespace')}" if arguments.get("namespace") else "")
+        else:
+            if not command.strip():
+                return "HATA: ssh_run için 'command' veya 'preset' gerekli."
+            shown = vault.mask(command)
+        print_warning(f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{alias}] > {shown}")
         if not (auto_approve or EVREN_AUTO_APPROVE):
             approved = prompt_confirm(
                 f"'{alias}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?",
@@ -724,12 +930,12 @@ def execute_tool_call(
             )
             if not approved:
                 return "İPTAL EDİLDİ: Kullanıcı uzak komutun çalıştırılmasını reddetti."
-        return ssh_run(
+        return vault.mask(ssh_run(
             alias=alias,
-            command=command,
+            command=vault.expand(command),
             timeout_seconds=arguments.get("timeout_seconds"),
             workspace_root=root,
-        )
+        ))
     elif name == "ssh_read_file":
         from src.ssh_ops import ssh_read_file
         return ssh_read_file(

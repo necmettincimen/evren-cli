@@ -18,6 +18,7 @@ from src.config import (
     EVREN_DEFAULT_TEMPERATURE,
     EVREN_REASONING_EFFORT,
     get_ssl_verify,
+    thinking_off_supported,
 )
 from src.terms import ensure_terms_accepted
 from src.errors import (
@@ -132,6 +133,8 @@ class EvrenClient:
         self.last_remaining_tokens: int | None = None
         # Reasoning yoğunluğu (runtime'da /effort ile değiştirilebilir).
         self.reasoning_effort: str | None = EVREN_REASONING_EFFORT
+        # False olursa sunucu `thinking` alanını reddetmiş demektir; bir daha gönderilmez.
+        self.thinking_control: bool = True
 
         # Build the key pool. An explicit api_key overrides env-based discovery.
         if key_pool is not None:
@@ -237,7 +240,11 @@ class EvrenClient:
             "remaining",
             header_keys=("x-evren-daily-remaining-tokens",),
         )
+        # Daily fields win over the 5-minute window (`cap`/`used_tokens`): the
+        # banner otherwise paired the daily remainder with the window cap
+        # ("1,086 / 2,500,000").
         limit = _first(
+            "daily_limit_tokens",
             "daily_limit",
             "daily_tokens_limit",
             "limit",
@@ -245,7 +252,7 @@ class EvrenClient:
             "quota_limit",
             header_keys=("x-evren-daily-limit-tokens", "x-evren-daily-limit"),
         )
-        used = _first("used_tokens", "used", "daily_used_tokens")
+        used = _first("daily_used_tokens", "used_tokens", "used")
         reset = _first(
             "reset_at",
             "resets_at",
@@ -346,6 +353,75 @@ class EvrenClient:
             )
         return results
 
+    def select_best_key(self, min_remaining: int | None = None) -> dict[str, Any] | None:
+        """Pins the key with the most daily quota left and parks near-empty ones.
+
+        Each key may belong to a different account, so their daily quotas are
+        independent. Previously the pool stuck to the first key until a request
+        failed with 429, which meant a near-empty key could cut a turn halfway.
+        Keys under `min_remaining` (EVREN_KEY_MIN_REMAINING, default 50k) are
+        marked disabled for this session; if every key is low the fullest one is
+        still used. Returns the chosen quota row, or None when nothing is known.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from src.config import key_min_remaining
+
+        keys = list(self.key_pool.keys)
+        if not keys:
+            return None
+        floor = key_min_remaining() if min_remaining is None else min_remaining
+        with ThreadPoolExecutor(max_workers=min(8, len(keys))) as pool:
+            quotas = list(pool.map(lambda pk: self.get_quota(api_key=pk.key), keys))
+        rows: list[tuple[int, Any, dict[str, Any]]] = []
+        for pk, q in zip(keys, quotas):
+            remaining = q.get("remaining_daily_tokens")
+            if isinstance(remaining, int) and not isinstance(remaining, bool):
+                rows.append((remaining, pk, q))
+        if not rows:
+            return None
+        rows.sort(key=lambda row: row[0], reverse=True)
+        best_remaining, best, best_q = rows[0]
+        for remaining, pk, _q in rows[1:]:
+            if remaining < floor:
+                self.key_pool.report_disabled(pk.key, reason="quota_low")
+        self.key_pool.pin(best.key)
+        self.api_key = best.key
+        self.last_remaining_tokens = best_remaining
+        return {"key": best.key, **best_q}
+
+    def _apply_reasoning_controls(
+        self, kwargs: dict[str, Any], model: str, thinking: bool | None = None,
+    ) -> None:
+        """Adds the thinking controls the target model understands.
+
+        `thinking=False` sends the gateway's `thinking: false` field, which skips
+        the hidden reasoning stream entirely, for models where it was measured to
+        give a clean answer. None keeps the server default.
+        """
+        if (
+            thinking is False
+            and getattr(self, "thinking_control", True)
+            and thinking_off_supported(model)
+        ):
+            kwargs["extra_body"] = {"thinking": False}
+            return
+        effort = getattr(self, "reasoning_effort", None)
+        if effort and model in ("deepseek-v4.1-flash", "glm-5.3"):
+            kwargs["reasoning_effort"] = effort
+
+    def _drop_rejected_param(self, kwargs: dict[str, Any], error: Exception) -> bool:
+        """Removes a thinking parameter the server rejected; True when retrying helps."""
+        text = str(error).lower()
+        if "reasoning_effort" in kwargs and "reasoning_effort" in text:
+            kwargs.pop("reasoning_effort", None)
+            self.reasoning_effort = None
+            return True
+        if "extra_body" in kwargs and "thinking" in text:
+            kwargs.pop("extra_body", None)
+            self.thinking_control = False
+            return True
+        return False
+
     def chat_complete(
         self,
         messages: list[dict[str, Any]],
@@ -355,6 +431,7 @@ class EvrenClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | None = None,
         max_retries: int = 3,
+        thinking: bool | None = None,
     ) -> Any:
         """
         Sends a standard (non-streaming) chat completion request with retry logic.
@@ -372,9 +449,7 @@ class EvrenClient:
         }
         # Reasoning yoğunluğu: düşük değer düşünmeyi kısıp koda daha çok token
         # bırakır (daha hızlı yanıt). Yalnızca reasoning modellerinde gönderilir.
-        effort = getattr(self, "reasoning_effort", None)
-        if effort and chosen_model in ("deepseek-v4.1-flash", "glm-5.3"):
-            kwargs["reasoning_effort"] = effort
+        self._apply_reasoning_controls(kwargs, chosen_model, thinking)
         if tools:
             kwargs["tools"] = tools
             if tool_choice:
@@ -406,11 +481,9 @@ class EvrenClient:
                 typed = map_sdk_exception(e, failed_key=current_key)
                 last_error = typed
 
-                # Server may not support `reasoning_effort` (400 BadRequest).
-                # Strip it and retry once so the request still succeeds.
-                if "reasoning_effort" in kwargs and "reasoning_effort" in str(e).lower():
-                    kwargs.pop("reasoning_effort", None)
-                    self.reasoning_effort = None
+                # Server may not support `reasoning_effort` / `thinking`
+                # (400 BadRequest). Strip it and retry so the request still succeeds.
+                if self._drop_rejected_param(kwargs, e):
                     continue
 
                 # Terms not accepted: prompt once and retry the same request.
@@ -469,6 +542,7 @@ class EvrenClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         tools: list[dict[str, Any]] | None = None,
+        thinking: bool | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """
         Streams chat completion tokens, yielding dicts with:
@@ -489,10 +563,11 @@ class EvrenClient:
             "max_tokens": tokens,
             "temperature": temp,
             "stream": True,
+            # Without it the gateway only sometimes sends usage on the final
+            # chunk, so /tokens, calibration and usage.jsonl silently missed turns.
+            "stream_options": {"include_usage": True},
         }
-        effort = getattr(self, "reasoning_effort", None)
-        if effort and chosen_model in ("deepseek-v4.1-flash", "glm-5.3"):
-            kwargs["reasoning_effort"] = effort
+        self._apply_reasoning_controls(kwargs, chosen_model, thinking)
         if tools:
             kwargs["tools"] = tools
 
@@ -516,6 +591,8 @@ class EvrenClient:
                 stream = client.chat.completions.create(timeout=STREAM_TIMEOUT, **kwargs)
                 break
             except Exception as e:
+                if self._drop_rejected_param(kwargs, e):
+                    continue
                 typed = map_sdk_exception(e, failed_key=current_key)
                 if isinstance(typed, TermsNotAcceptedError):
                     ensure_terms_accepted(interactive=True, api_key=current_key)
@@ -585,6 +662,8 @@ class EvrenClient:
         tools: list[dict[str, Any]] | None = None,
         on_reasoning: Any = None,
         on_content: Any = None,
+        thinking: bool | None = None,
+        tool_choice: Any = None,
     ) -> Any:
         """Streams a completion, invoking live callbacks, and returns an
         assembled response object shaped like a non-streaming OpenAI response.
@@ -610,12 +689,15 @@ class EvrenClient:
             "max_tokens": tokens,
             "temperature": temp,
             "stream": True,
+            # Without it the gateway only sometimes sends usage on the final
+            # chunk, so /tokens, calibration and usage.jsonl silently missed turns.
+            "stream_options": {"include_usage": True},
         }
-        effort = getattr(self, "reasoning_effort", None)
-        if effort and chosen_model in ("deepseek-v4.1-flash", "glm-5.3"):
-            kwargs["reasoning_effort"] = effort
+        self._apply_reasoning_controls(kwargs, chosen_model, thinking)
         if tools:
             kwargs["tools"] = tools
+            if tool_choice:
+                kwargs["tool_choice"] = tool_choice
 
         # Failover loop: if a key is out of daily quota (or auth-fails) *before*
         # any token has been streamed, switch to the next key and retry.
@@ -689,6 +771,8 @@ class EvrenClient:
                 return _StreamedResponse(message, usage=usage, finish_reason=finish_reason)
 
             except Exception as e:
+                if not streamed_any and self._drop_rejected_param(kwargs, e):
+                    continue
                 typed = map_sdk_exception(e, failed_key=current_key)
                 if isinstance(typed, TermsNotAcceptedError):
                     ensure_terms_accepted(interactive=True, api_key=current_key)

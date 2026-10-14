@@ -254,10 +254,13 @@ def print_command_output(line: str, stream: str = "stdout"):
     """
     text = line.rstrip("\n")
     if HAVE_RICH:
+        # soft_wrap: never insert hard line breaks at the console width, which
+        # split every row of wide tables (kubectl custom-columns, ls -l, ...)
+        # into several broken lines.
         if stream == "stderr":
-            console.print(Text(text, style="dim red"), highlight=False)
+            console.print(Text(text, style="dim red"), highlight=False, soft_wrap=True)
         else:
-            console.print(Text(text), highlight=False)
+            console.print(Text(text), highlight=False, soft_wrap=True)
     else:
         if stream == "stderr":
             print(f"\033[2;31m{text}\033[0m")
@@ -267,7 +270,9 @@ def print_command_output(line: str, stream: str = "stdout"):
 
 def print_tool_call(tool_name: str, arguments: dict):
     """Displays a tool invocation block."""
-    arg_summary = ", ".join(f"{k}={repr(v)}" for k, v in arguments.items())
+    # Short values first: a long `command` used to push `alias=` past the cut.
+    ordered = sorted(arguments.items(), key=lambda kv: len(repr(kv[1])))
+    arg_summary = ", ".join(f"{k}={repr(v)}" for k, v in ordered)
     if len(arg_summary) > 100:
         arg_summary = arg_summary[:97] + "..."
     if HAVE_RICH:

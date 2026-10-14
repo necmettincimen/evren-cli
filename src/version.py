@@ -9,20 +9,42 @@ falling back to a hardcoded value when the package is not installed
 import re
 from pathlib import Path
 
-_FALLBACK_VERSION = "1.1.0"
+_FALLBACK_VERSION = "2.0.0"
 
 # CHANGELOG.md lives at the repository root (one level above the src package).
 _CHANGELOG_PATH = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
 
-try:
-    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+_PYPROJECT_PATH = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
+
+def _source_checkout_version() -> str | None:
+    """Version from pyproject.toml when running from a source checkout.
+
+    An editable install (`pip install -e .`) freezes the metadata version at
+    install time, so after every bump `evren --version` and the banner kept
+    showing the old number (1.0.1 while the code was 2.0.0) and looked like
+    the update had not been applied.
+    """
     try:
-        __version__ = _pkg_version("evren-cli")
+        text = _PYPROJECT_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+    return match.group(1) if match else None
+
+
+def _installed_version() -> str | None:
+    try:
+        from importlib.metadata import version as _pkg_version, PackageNotFoundError
+    except ImportError:  # pragma: no cover - Python < 3.8
+        return None
+    try:
+        return _pkg_version("evren-cli")
     except PackageNotFoundError:
-        __version__ = _FALLBACK_VERSION
-except ImportError:  # pragma: no cover - Python < 3.8
-    __version__ = _FALLBACK_VERSION
+        return None
+
+
+__version__ = _source_checkout_version() or _installed_version() or _FALLBACK_VERSION
 
 
 def get_version() -> str:

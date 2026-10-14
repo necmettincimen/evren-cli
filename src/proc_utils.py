@@ -156,6 +156,7 @@ def stream_with_tree_kill(
     shell: bool = False,
     encoding: str = "utf-8",
     errors: str = "replace",
+    env: dict[str, str] | None = None,
 ) -> Generator[tuple[str, str], None, tuple[int, str, str, bool]]:
     """Runs a command and yields output lines live as they are produced.
 
@@ -180,6 +181,8 @@ def stream_with_tree_kill(
         "shell": shell,
         "bufsize": 1,  # line-buffered so output arrives promptly
     }
+    if env:
+        kwargs["env"] = {**os.environ, **env}
     kwargs.update(_popen_kwargs_for_group())
 
     proc = subprocess.Popen(command, **kwargs)
