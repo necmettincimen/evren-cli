@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -717,6 +718,30 @@ def _entry_signature(entry: dict) -> str:
     return section_hash("::".join(parts))
 
 
+def _clean_goal(text: str) -> str:
+    """Strips the prompt-frame boilerplate so the entry carries the real task.
+
+    The task goal is stored verbatim, which means every entry began with the
+    frame template ("GÖREV / Brief tek cümlelik niyettir… / Çıktı, format ve teslim
+    yüzeyidir. / Brief:") and the actual work was pushed past the clip limit.
+    Only the known template is removed; a goal without it is returned as-is.
+    """
+    goal = " ".join((text or "").split())
+    for _ in range(3):
+        before = goal
+        goal = re.sub(r"^(asıl görev|görev)\s*(\(geçmiş bağlam\))?\s*:?\s*", "", goal, flags=re.I)
+        goal = re.sub(
+            r"^.*?ç\u0131kt\u0131, format ve teslim y\u00fczeyidir\.\s*(brief:)?\s*",
+            "",
+            goal,
+            flags=re.I,
+        )
+        goal = re.sub(r"^brief\s*:\s*", "", goal, flags=re.I)
+        if goal == before:
+            break
+    return goal.strip(" .-")
+
+
 def append_changelog_entry(root: Path, entry: dict) -> bool:
     """Appends one session entry. Returns False when nothing was written."""
     if not isinstance(entry, dict):
@@ -733,12 +758,14 @@ def append_changelog_entry(root: Path, entry: dict) -> bool:
         if created:
             text = _changelog_skeleton(root)
 
-        goal = _clip(_redact(entry.get("goal") or ""), 160) or "(görev belirtilmedi)"
+        goal = _clip(_clean_goal(_redact(entry.get("goal") or "")), 160) or "(görev belirtilmedi)"
         files = entry.get("files") or []
-        commands = entry.get("commands") or []
         verification = _clip(_redact(str(entry.get("verification") or "")), 200)
-        note = _clip(_redact(str(entry.get("note") or "")), 200)
 
+        # Her giriş tam üç alan taşır. `commands` ve `exit_codes` payload'da
+        # kalmaya devam eder (mükerrer girişi engelleyen imzayı bunlar üretir),
+        # ancak artık yazdırılmazlar: büyük çoğunluğu salt-okuma keşif gürültüsüydü
+        # ve sabit geri alma satırı her girişde aynen tekrarlanıyordu.
         block = [
             f"## {_stamp()}",
             "",
@@ -747,14 +774,6 @@ def append_changelog_entry(root: Path, entry: dict) -> bool:
             + (", ".join(f"`{name}`" for name in files[:12]) if files else "dosya değişikliği yok"),
             f"- Doğrulama: {verification or 'doğrulama çalıştırılmadı'}",
         ]
-        if commands:
-            block.append(
-                "- Çalıştırılan komutlar: "
-                + ", ".join(f"`{_clip(_redact(str(cmd)), 60)}`" for cmd in commands[:6])
-            )
-        if note:
-            block.append(f"- Not: {note}")
-        block.append("- Geri alma: `evren rollback <dosya>` | yedekler `.evren/backups/`")
         chunk = "\n".join(block)
         if len(chunk) > MAX_CHANGELOG_ENTRY_CHARS:
             chunk = chunk[:MAX_CHANGELOG_ENTRY_CHARS].rstrip() + " …"
@@ -950,8 +969,8 @@ def agent_md_context_block(root: Path | None = None, max_chars: int = 4000) -> s
     order = [name for name in CONTEXT_SECTION_PRIORITY if name in sections]
     order += [name for name in sections if name not in CONTEXT_SECTION_PRIORITY]
     lines = [
-        f"PROJE BAĞLAM BELGESİ ({path.name}, CLI tarafından güncellenir; canlı ortam "
-        "önceliklidir, burada yazan yolu/dosyayı uygulamadan önce doğrula):"
+        f"PROJE BAĞLAM BELGESİ ({path.name}, CLI tarafından güncellenir; hazır bağlam olarak "
+        "kullan, canlı dosyayla çelişirse canlı dosya esastır):"
     ]
     used = 0
     for name in order:
@@ -990,8 +1009,8 @@ def changelog_context_block(root: Path | None = None, max_chars: int = 1500) -> 
         recent = recent[-max_chars:].lstrip("-\n ")
         recent = "[…eski girdiler kırpıldı]\n" + recent
     return (
-        "PROJE DEĞİŞİKLİK GÜNLÜĞÜ (son işler; eski kabul edilebilir, uygulamadan önce "
-        "canlı doğrula):\n" + _redact(recent)
+        "PROJE DEĞİŞİKLİK GÜNLÜĞÜ (son işler; geçmiş kayıttır, yeniden doğrulamaya "
+        "gerek yok):\n" + _redact(recent)
     )
 
 

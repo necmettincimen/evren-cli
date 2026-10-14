@@ -25,11 +25,15 @@ BLOCKER_ROUTES = {
 def redact_text(text: str) -> str:
     """Mask common credential forms before saving; not a substitute for user review."""
     text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+(@)", r"\1[REDACTED]\2", text)
+    # Auth schemes first: "Authorization: Bearer <tok>" used to mask only the
+    # word "Bearer" and leave the token itself in agent.md / changelog.md.
+    text = re.sub(r"""(?i)\b((?:bearer|basic|digest)\s+)[^\s"',;&]+""", r"\1[REDACTED]", text)
     text = re.sub(
-        r"""(?i)(["']?(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)""",
-        r"\1[REDACTED]", text,
+        r"""(?i)(["']?(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)["']?\s*[:=]\s*)"""
+        r"""((?:bearer|basic|digest)\s+\[REDACTED\]|"[^"]*"|'[^']*'|[^\s,;&"']+)""",
+        lambda m: m.group(0) if m.group(2).endswith("[REDACTED]") else m.group(1) + "[REDACTED]",
+        text,
     )
-    text = re.sub(r"(?i)(bearer\s+)\S+", r"\1[REDACTED]", text)
     text = re.sub(r"evren_llm_[A-Za-z0-9_-]+", "[REDACTED]", text)
     return re.sub(
         r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----",

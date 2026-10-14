@@ -24,8 +24,12 @@ import shlex
 
 from src.modes import AgentMode
 
-# Tools that never modify the workspace.
-READ_ONLY_TOOLS = {"view_file", "list_directory", "find_files", "ssh_list_hosts", "ssh_read_file"}
+# Tools that never modify the workspace. `ask_user` only talks to the user; it is
+# advertised in every mode, so denying it in ask/plan made the model loop on
+# "REDDEDİLDİ" while the prompt told it to ask.
+READ_ONLY_TOOLS = {
+    "view_file", "list_directory", "find_files", "ssh_list_hosts", "ssh_read_file", "ask_user",
+}
 
 # Tools that write to source files (local or remote).
 WRITE_TOOLS = {"write_file", "edit_file", "ssh_write_file"}
@@ -124,6 +128,12 @@ def check_tool_allowed(tool_name: str, arguments: dict, mode: AgentMode) -> tupl
     """Returns (allowed, reason) for a tool call under the given mode."""
     if mode == AgentMode.NORMAL:
         return True, ""
+
+    if tool_name == "ssh_run" and (arguments or {}).get("preset"):
+        from src.remote_presets import READ_ONLY_PRESETS
+
+        if arguments["preset"] in READ_ONLY_PRESETS:
+            return True, ""
 
     # Read-only tools are always allowed.
     if tool_name in READ_ONLY_TOOLS:

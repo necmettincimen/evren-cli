@@ -39,6 +39,23 @@ from src.ui import (
 CHAT_SYSTEM = "Sen Windows üzerinde çalışan uzman bir yazılım mühendisi asistanısın."
 
 
+
+def _pin_best_key(client) -> None:
+    """With several keys, start on the one with the most daily quota left."""
+    if len(client.key_pool) < 2:
+        return
+    try:
+        row = client.select_best_key()
+    except Exception as e:
+        print_warning(f"Anahtar kotaları okunamadı; ilk anahtarla devam: {e}")
+        return
+    if row:
+        from src.api_key_pool import mask_key
+
+        remaining = row.get("remaining_daily_tokens")
+        shown = f"{remaining:,}" if isinstance(remaining, int) else remaining
+        print_info(f"Aktif API anahtarı: {mask_key(row['key'])} (kalan günlük kota: {shown})")
+
 def load_frame(args):
     """Resolves a five-line frame plus an optional free-text prompt.
 
@@ -84,6 +101,7 @@ def cmd_chat(args):
     frame, prompt = loaded
 
     client = EvrenClient(default_model=args.model)
+    _pin_best_key(client)
     if frame.is_empty():
         system = CHAT_SYSTEM
         user = prompt
@@ -189,6 +207,7 @@ def cmd_agent(args):
         print_warning(f"Bağlam dosyaları atlandı: {e}")
 
     client = EvrenClient(default_model=args.model)
+    _pin_best_key(client)
     session = AgentSession(client=client, workspace_root=workspace, model=args.model)
 
     print_info(f"Otonom ajan başlatılıyor. Model: {session.model} | Hedef: {workspace}")
@@ -333,7 +352,10 @@ def cmd_ssh(args):
             port=args.port,
             workspace_root=workspace,
         )
-        print_success(f"SSH host eklendi: {args.alias} -> {target}:{args.port}")
+        print_success(
+            f"SSH host eklendi: {args.alias} -> {target}:{args.port} "
+            "(tüm çalışma alanlarında geçerli: ~/.evren/ssh_hosts.json)"
+        )
     elif action == "remove":
         if remove_host(args.alias, workspace):
             print_success(f"SSH host silindi: {args.alias}")
@@ -463,7 +485,7 @@ def main():
         "--max-steps",
         type=int,
         default=None,
-        help="Maksimum adım sayısı (varsayılan: EVREN_MAX_STEPS, 12)",
+        help="Maksimum adım sayısı (varsayılan: EVREN_MAX_STEPS, 20)",
     )
     _add_backup_arg(p_agent)
     p_agent.set_defaults(func=cmd_agent)

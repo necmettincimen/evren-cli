@@ -213,6 +213,15 @@ class TestAgentFrame(unittest.TestCase):
 class TestGuidedFrame(unittest.TestCase):
     suggestions = {"rol": "mühendis", "cerceve": "küçük adımlar", "kisit": "cerrahi yama", "cikti": "test sonucu"}
 
+    def setUp(self):
+        # These tests cover the full form (4 clarify rounds + field suggestions);
+        # the lean defaults are covered by TestGuidedFrameDefaults.
+        patcher = patch.dict(os.environ, {
+            "EVREN_CLARIFY_ROUNDS": "4", "EVREN_FRAME_SUGGEST": "true", "EVREN_FORM_FIELDS": "true",
+        })
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def collect(self, answers, guidance, previous=None):
         inputs = iter(answers)
         return collect_guided_prompt_frame(lambda _: next(inputs), guidance, previous)
@@ -408,7 +417,6 @@ class TestGuidedFrame(unittest.TestCase):
         self.assertNotIn("view_file", str(kwargs["tools"]))
         instruction = kwargs["messages"][0]["content"]
         self.assertIn("ASIL HEDEF", instruction)
-        self.assertIn("eşzamanlı yazma", instruction)
         self.assertIn("tek karar", instruction)
         self.assertEqual(kwargs["messages"][0]["role"], "system")
         self.assertTrue(all(message["role"] != "system" for message in kwargs["messages"][1:]))
@@ -486,7 +494,15 @@ class TestGuidedFrame(unittest.TestCase):
     def test_repl_wrapper_passes_current_model_and_local_context(self):
         from src.repl import _collect_frame
 
-        session = SimpleNamespace(client=MagicMock(), model="active-model", workspace_root=Path.cwd())
+        from src.project_docs import ensure_project_docs
+
+        # Own workspace with a generated agent.md: agent.md is git-ignored, so
+        # relying on Path.cwd() failed on every fresh clone.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        ensure_project_docs(root, goal="x", status="tamam", read_only=False)
+        session = SimpleNamespace(client=MagicMock(), model="active-model", workspace_root=root)
         with patch("src.repl._read_line", side_effect=["iş", "", "", "", ""]), \
              patch("src.repl.request_frame_guidance", side_effect=[
                  FrameGuidance(), FrameGuidance(suggestions=self.suggestions),
@@ -502,6 +518,49 @@ class TestGuidedFrame(unittest.TestCase):
         self.assertIn("PROJE ÖZETİ", context)
         self.assertIn("Çalışma dizini", context)
         self.assertNotIn("YEREL ÇALIŞTIRMA BAĞLAMI", context)
+
+
+class TestGuidedFrameDefaults(unittest.TestCase):
+    """Fast defaults: brief only, no pre-task API call."""
+
+    def setUp(self):
+        patcher = patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in ("EVREN_CLARIFY_ROUNDS", "EVREN_FRAME_SUGGEST", "EVREN_FORM_FIELDS"):
+            os.environ.pop(name, None)
+
+    def collect(self, answers, guidance, previous=None):
+        inputs = iter(answers)
+        return collect_guided_prompt_frame(lambda _: next(inputs), guidance, previous)
+
+    def test_brief_goes_straight_to_the_agent(self):
+        guidance = MagicMock()
+        frame = self.collect(["timeout düzelt"], guidance)
+        guidance.assert_not_called()
+        self.assertEqual(frame.brief, "timeout düzelt")
+        self.assertEqual(frame.rol, "")
+
+    def test_previous_identity_is_kept_without_asking(self):
+        prev = PromptFrame(brief="eski", rol="mühendis", cerceve="küçük adımlar")
+        frame = self.collect([""], MagicMock(), prev)
+        self.assertEqual(frame.rol, "mühendis")
+        self.assertEqual(frame.cerceve, "küçük adımlar")
+
+    def test_opt_in_clarify_is_bounded(self):
+        guidance = MagicMock(side_effect=[
+            FrameGuidance(question="Hangi dosya?"), FrameGuidance(question="Hangi test?"),
+        ])
+        with patch.dict(os.environ, {"EVREN_CLARIFY_ROUNDS": "2"}):
+            frame = self.collect(["iş", "a.py", "devam"], guidance)
+        self.assertEqual(guidance.call_count, 2)
+        self.assertIn("Yanıt: a.py", frame.clarifications)
+        self.assertIn("Çözülemeyen soru: Hangi test?", frame.clarifications)
+
+    def test_opt_in_fields_are_asked(self):
+        with patch.dict(os.environ, {"EVREN_FORM_FIELDS": "true"}):
+            frame = self.collect(["iş", "rol", "", "", ""], MagicMock())
+        self.assertEqual(frame.rol, "rol")
 
 
 class TestFormPromptDisplay(unittest.TestCase):

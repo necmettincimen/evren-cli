@@ -25,7 +25,9 @@ REASONING_MIN_OUTPUT_TOKENS = 4096
 
 # qwen3.8-flash-next spends the same budget on thinking. 4096 often ends the
 # turn before a tool call or answer, which the agent then treats as a stall.
-QWEN_FLASH_MIN_OUTPUT_TOKENS = 16384
+# 16384 bought mostly hidden chain-of-thought. 8192 still fits a thinking turn,
+# and a stalled turn is retried with `thinking: false`, which needs far less.
+QWEN_FLASH_MIN_OUTPUT_TOKENS = 8192
 
 # Default context window assumption when the model is unknown.
 DEFAULT_CONTEXT_WINDOW = 128_000

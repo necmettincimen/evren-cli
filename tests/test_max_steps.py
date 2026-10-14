@@ -24,10 +24,10 @@ def response(content="", finish_reason="stop", tools=()):
 
 
 class DefaultMaxStepsTest(unittest.TestCase):
-    def test_default_is_twelve(self):
+    def test_default_is_twenty(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EVREN_MAX_STEPS", None)
-            self.assertEqual(default_max_steps(), 12)
+            self.assertEqual(default_max_steps(), 20)
 
     def test_env_override(self):
         with patch.dict(os.environ, {"EVREN_MAX_STEPS": "25"}):
@@ -36,7 +36,7 @@ class DefaultMaxStepsTest(unittest.TestCase):
     def test_invalid_env_falls_back(self):
         for value in ("", "abc", "0", "-3", "None"):
             with patch.dict(os.environ, {"EVREN_MAX_STEPS": value}):
-                self.assertEqual(default_max_steps(), 12)
+                self.assertEqual(default_max_steps(), 20)
 
 
 class RunStepCeilingTest(unittest.TestCase):
@@ -85,30 +85,33 @@ class RunStepCeilingTest(unittest.TestCase):
 
     def test_final_steps_get_a_warning(self):
         sent = []
+        systems = []
 
         def capture(**kwargs):
-            # normalize_chat_messages merges every system message to the front,
-            # so the per-step instruction is found across all system turns.
-            sent.append("\n".join(
-                str(m.get("content") or "")
-                for m in kwargs["messages"] if m.get("role") == "system"
-            ))
+            # The warning travels in a transient trailing message; the system
+            # message must stay byte-identical so the prompt cache keeps hitting.
+            messages = kwargs["messages"]
+            systems.append(messages[0]["content"])
+            last = messages[-1]
+            sent.append(str(last.get("content") or "") if last.get("role") == "user" else "")
             call = SimpleNamespace(
                 id="c", function=SimpleNamespace(name="run_command", arguments='{"command":"dir"}')
             )
             return response("devam", tools=[call])
 
         self.client.chat_stream_assembled.side_effect = capture
-        with patch.dict(os.environ, {"EVREN_MAX_STEPS": "4"}, clear=False), \
-                patch("src.agent.execute_tool_call", return_value="ÇIKTI"):
+        with patch.dict(os.environ, {"EVREN_MAX_STEPS": "4"}, clear=False),                 patch("src.agent.execute_tool_call", return_value="ÇIKTI"):
             self.session.run_step("dört adımlık görev")
 
-        # Warning starts when at most 2 steps remain (step 2 of 4 onwards).
+        # Warning on the last two steps only (3 and 4 of 4).
         self.assertEqual(len(sent), 4)
         self.assertNotIn("ADIM UYARISI", sent[0])
-        self.assertIn("ADIM UYARISI", sent[1])
+        self.assertNotIn("ADIM UYARISI", sent[1])
         self.assertIn("ADIM UYARISI", sent[2])
         self.assertIn("ADIM UYARISI", sent[3])
+        self.assertEqual(len(set(systems)), 1)
+        # The transient note is never persisted into the history.
+        self.assertNotIn("ADIM UYARISI", str(self.session.messages))
 
 
 class CliDefaultTest(unittest.TestCase):

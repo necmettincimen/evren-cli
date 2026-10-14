@@ -218,6 +218,14 @@ class ApiKeyPool:
 
         return self._first_available_from(start, now)
 
+    def pin(self, key: str) -> bool:
+        """Makes `key` the sticky current key (e.g. the one with most quota)."""
+        idx = self._key_index(key)
+        if idx is None:
+            return False
+        self._pin(idx, self._keys[idx])
+        return True
+
     def rotate(self, now: float | None = None) -> PooledKey | None:
         """Manually switches to the next available key (used by /keys next).
 

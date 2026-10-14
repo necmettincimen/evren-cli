@@ -597,7 +597,10 @@ def _handle_ssh_command(arg: str, workspace_root: Path):
         else:
             user, host = "", target
         add_host(alias=alias, host=host, user=user, port=port, workspace_root=workspace_root)
-        print_success(f"SSH host eklendi: {alias} -> {target}:{port} (varsayılan: salt-okuma)")
+        print_success(
+            f"SSH host eklendi: {alias} -> {target}:{port} (varsayılan: salt-okuma; "
+            "tüm çalışma alanlarında geçerli: ~/.evren/ssh_hosts.json)"
+        )
         return
 
     if sub == "remove":
@@ -681,7 +684,20 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
 
     # Initial check: terms status & quota (active key summary for the banner)
     with status_spinner("EVREN API bağlantısı ve kota doğrulanıyor..."):
-        quota_data = client.get_quota()
+        quota_data = None
+        if len(client.key_pool) > 1:
+            # Start on the key with the most daily quota left instead of the
+            # first one in the list (keys can belong to different accounts).
+            try:
+                quota_data = client.select_best_key()
+            except Exception:
+                quota_data = None
+        if quota_data is None:
+            quota_data = client.get_quota()
+    if len(client.key_pool) > 1 and quota_data.get("masked") is None:
+        from src.api_key_pool import mask_key
+
+        quota_data["masked"] = mask_key(client.api_key)
     remaining = quota_data.get("remaining", quota_data.get("remaining_daily_tokens", "Bilinmiyor"))
     limit = quota_data.get("limit")
     if isinstance(remaining, int) and isinstance(limit, int):
@@ -690,6 +706,8 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         quota_str = f"{remaining:,}"
     else:
         quota_str = str(remaining)
+    if quota_data.get("masked"):
+        quota_str += f" (anahtar {quota_data['masked']})"
 
     # Ensure terms accepted for the active key (quiet when already OK).
     try:
@@ -912,7 +930,8 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                             print(f"  • Kalıcı log (usage)  : {summary['requests']} istek, "
                                   f"toplam {summary['total_tokens']:,} token, "
                                   f"son {summary['recent_window']} istekte ort. prompt "
-                                  f"{summary['avg_prompt_tokens_recent']:,}")
+                                  f"{summary['avg_prompt_tokens_recent']:,}, "
+                                  f"önbellek isabeti %{round(summary.get('cache_ratio', 0) * 100)}")
                     except Exception:
                         pass
 

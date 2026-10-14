@@ -65,20 +65,17 @@ class ToolsForModeTest(unittest.TestCase):
                 self.assertFalse(allowed, f"{tool} allowed in {mode}")
 
     def test_advertised_tools_are_all_allowed_by_the_gateway(self):
-        # NOTE: `ask_user` is deliberately not probed here. The gateway already
-        # denied it in ask/plan modes before this change (tool_gateway.py:142/154),
-        # while the system prompt mandates a clarify step. That pre-existing
-        # inconsistency is out of this plan's scope and is reported separately;
-        # `tools_for_mode` keeps advertising it so behaviour is unchanged.
+        # `ask_user` is advertised in every mode, so the gateway must allow it too.
         probes = {
             "view_file": {"path": "a.py"},
             "list_directory": {},
             "find_files": {"pattern": "*.py"},
             "run_command": {"command": "dir"},
             "ssh_list_hosts": {},
+            "ask_user": {"question": "?"},
         }
         for mode in (AgentMode.ASK, AgentMode.PLAN):
-            for tool in names(tools_for_mode(mode)) - {"ask_user", "create_plan"}:
+            for tool in names(tools_for_mode(mode)) - {"create_plan"}:
                 if tool in probes:
                     allowed, reason = check_tool_allowed(tool, probes[tool], mode)
                     self.assertTrue(allowed, f"{tool} in {mode}: {reason}")
@@ -91,8 +88,7 @@ class ToolsForModeTest(unittest.TestCase):
         self.assertIn("create_plan", names(tools_for_mode(AgentMode.PLAN)))
 
     def test_ask_user_schema_is_unchanged_by_the_filter(self):
-        # Behaviour preservation: the filter must not silently remove the tool
-        # the system prompt relies on, even though the gateway denies it today.
+        # The filter must not silently remove the tool the system prompt relies on.
         for mode in (AgentMode.ASK, AgentMode.PLAN, AgentMode.NORMAL):
             self.assertIn("ask_user", names(tools_for_mode(mode)))
 

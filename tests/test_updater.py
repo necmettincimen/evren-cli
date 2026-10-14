@@ -9,6 +9,13 @@ import pytest
 from src import updater
 
 
+@pytest.fixture(autouse=True)
+def _isolated_update_log(monkeypatch, tmp_path):
+    # Never append test runs (e.g. "--workspace C:/proj") to the real
+    # .evren/logs/update.log of the checkout running the suite.
+    monkeypatch.setattr(updater, "_log_path", lambda: tmp_path / "update.log")
+
+
 def test_repo_constants():
     assert updater.REPO_HTTPS == "https://github.com/necmettincimen/evren-cli"
     assert updater.REPO_GIT_URL.endswith(".git")

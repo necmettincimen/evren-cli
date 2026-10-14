@@ -48,7 +48,8 @@ class UsageLogTest(unittest.TestCase):
         record = self.record()
         self.assertEqual(
             set(record),
-            {"ts", "model", "prompt_tokens", "completion_tokens", "total_tokens", "step", "mode"},
+            {"ts", "model", "prompt_tokens", "completion_tokens", "total_tokens",
+             "cached_tokens", "step", "mode"},
         )
 
     def test_never_writes_content_or_secrets(self):
@@ -92,6 +93,19 @@ class UsageLogTest(unittest.TestCase):
         record = usage_log.build_record({"prompt_tokens": "abc", "completion_tokens": True})
         self.assertIsNone(record["prompt_tokens"])
         self.assertIsNone(record["completion_tokens"])
+
+    def test_cached_tokens_are_recorded(self):
+        record = usage_log.build_record({
+            "prompt_tokens": 900, "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 800},
+        })
+        self.assertEqual(record["cached_tokens"], 800)
+        usage = SimpleNamespace(
+            prompt_tokens=5, completion_tokens=1, total_tokens=6,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=4),
+        )
+        self.assertEqual(usage_log.build_record(usage)["cached_tokens"], 4)
+        self.assertIsNone(usage_log.build_record({"prompt_tokens": 1})["cached_tokens"])
 
     def test_sdk_object_usage_is_supported(self):
         usage = SimpleNamespace(prompt_tokens=11, completion_tokens=4, total_tokens=15)

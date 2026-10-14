@@ -56,7 +56,8 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(self.session.run_step("bu hostta testleri çalıştır"), "verified")
         self.assertEqual(len(requests), 2)
         self.assertEqual(requests[1][0]["role"], "system")
-        self.assertIn("küçük", requests[1][0]["content"])
+        # The system message must stay identical between steps (prompt cache).
+        self.assertEqual(requests[1][0]["content"], requests[0][0]["content"])
         self.assertTrue(all(message["role"] != "system" for message in requests[1][1:]))
         self.assertIn("unfinished", str(requests[1]))
         self.assertIn("kaldığın yerden", str(requests[1]).casefold())
@@ -321,12 +322,31 @@ class TestExecutionContext(unittest.TestCase):
         for phrase in ("bu host", "bu hosts", "bu makine", "localhost", "127.0.0.1", "::1"):
             with self.subTest(phrase=phrase):
                 self.assertIn(f'"{phrase}"', SYSTEM_PROMPT)
-        self.assertIn("3-7", SYSTEM_PROMPT)
-        self.assertIn("Her model turunda yalnızca sıradaki küçük alt adımı", SYSTEM_PROMPT)
-        self.assertNotIn("Her turda mümkün olduğunca ÇOK iş bitir", SYSTEM_PROMPT)
-        self.assertIn("/api/v1/applications/{ad}/resource-tree", SYSTEM_PROMPT)
-        self.assertIn("/pods", SYSTEM_PROMPT)
-        self.assertIn("HTTP:%{http_code}", SYSTEM_PROMPT)
+        # No mandatory clarify step and no one-step-per-turn rule: both made the
+        # model deliberate and spend a full request per tool call.
+        self.assertNotIn("ZORUNLU NETLEŞTİRME", SYSTEM_PROMPT)
+        self.assertNotIn("Her model turunda yalnızca sıradaki küçük alt adımı", SYSTEM_PROMPT)
+        self.assertIn("aynı turda birlikte çağır", SYSTEM_PROMPT)
+        # Domain notes left the system prompt and travel with matching tasks only.
+        self.assertNotIn("resource-tree", SYSTEM_PROMPT)
+
+    def test_http_argo_notes_attach_only_to_matching_tasks(self):
+        from src.agent import HTTP_ARGO_NOTES, domain_hints
+
+        self.assertIn("/api/v1/applications/{ad}/resource-tree", HTTP_ARGO_NOTES)
+        self.assertIn("/pods", HTTP_ARGO_NOTES)
+        self.assertIn("HTTP:%{http_code}", HTTP_ARGO_NOTES)
+        self.assertEqual(domain_hints("README yazım hatasını düzelt"), "")
+        self.assertIn(HTTP_ARGO_NOTES, domain_hints("Argo CD pod durumunu getir"))
+
+    def test_k8s_notes_carry_the_resource_query(self):
+        from src.agent import HTTP_ARGO_NOTES, K8S_NOTES, domain_hints
+
+        hints = domain_hints("koyu3-k8s üzerindeki podların resource ve limit değerlerini listele")
+        self.assertIn(K8S_NOTES, hints)
+        self.assertIn("preset=\"k8s_resources\"", K8S_NOTES)
+        # kubectl work alone does not drag in the HTTP/Argo notes.
+        self.assertNotIn(HTTP_ARGO_NOTES, domain_hints("kubectl ile podları listele"))
 
     def test_context_describes_actual_shell_and_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

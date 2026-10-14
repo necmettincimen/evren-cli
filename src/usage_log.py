@@ -28,6 +28,7 @@ _FIELDS = (
     "prompt_tokens",
     "completion_tokens",
     "total_tokens",
+    "cached_tokens",
     "step",
     "mode",
 )
@@ -79,6 +80,13 @@ def build_record(
     completion = _as_int(field("completion_tokens"))
     if total is None and prompt is not None and completion is not None:
         total = prompt + completion
+    # Prompt-cache hits (EVREN bills them at ~3%); shows whether the stable
+    # system prefix is actually being reused between agent steps.
+    details = field("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = _as_int(details.get("cached_tokens"))
+    else:
+        cached = _as_int(getattr(details, "cached_tokens", None))
 
     return {
         "ts": ts or _stamp(),
@@ -86,6 +94,7 @@ def build_record(
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": total,
+        "cached_tokens": cached,
         "step": _as_int(step),
         "mode": _redact(str(mode))[:16],
     }
@@ -181,9 +190,12 @@ def usage_summary(records: list[dict[str, Any]] | None = None, *, recent: int = 
     prompts = [r["prompt_tokens"] for r in records if isinstance(r.get("prompt_tokens"), int)]
     completions = [r["completion_tokens"] for r in records if isinstance(r.get("completion_tokens"), int)]
     totals = [r["total_tokens"] for r in records if isinstance(r.get("total_tokens"), int)]
+    cached = sum(r["cached_tokens"] for r in records if isinstance(r.get("cached_tokens"), int))
 
     tail = prompts[-recent:] if prompts else []
     return {
+        "cached_tokens": cached,
+        "cache_ratio": round(cached / sum(prompts), 3) if prompts and sum(prompts) else 0.0,
         "requests": len(records),
         "prompt_tokens": sum(prompts),
         "completion_tokens": sum(completions),

@@ -5,6 +5,113 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [2.0.0] - 2026-10-14
+
+### Değişti
+- Sistem prompt'u sadeleştirildi ve çelişkileri giderildi: "her prompt için zorunlu
+  netleştirme / asla tahmin etme" kuralı kaldırıldı. Ajan makul varsayımları kendisi yapar,
+  araçla bulunabilecek bilgiyi sormaz; `ask_user` yalnızca gerçekten bloklayıcı veya riskli
+  durumda kullanılır. `AGENTS.md` aynı kurala hizalandı.
+- "Her turda yalnızca tek küçük adım" kuralı kaldırıldı: bağımsız okumalar/aramalar aynı turda
+  toplanır. Adım tavanı 12 → **20**.
+- Adım başına talimat artık sistem mesajına eklenmiyor. Sistem mesajı ve geçmiş adımlar arasında
+  birebir aynı kalır (sunucu prompt önbelleği isabet eder); yalnızca son adımlarda ve kesilme
+  sonrasında geçici, geçmişe yazılmayan kısa bir not gönderilir.
+- HTTP/Argo CD notları sistem prompt'undan çıkarıldı; yalnızca görev metni bu konuları
+  içerdiğinde göreve eklenir.
+- `qwen3.8-flash-next` çıktı tabanı 16384 → **8192**. Stall tavanı 8192 → **16384**
+  (eski değer qwen tabanı nedeniyle hiç etkili değildi).
+- Kesilen/boş yanıttan sonraki deneme artık `thinking: false` ile gider: tıkanma neredeyse her
+  zaman gizli düşünmenin bütçeyi tüketmesidir, düşünmeyi kapatmak döngüyü kırar.
+- Prompt hazırlama (netleştirme) çağrısı `thinking: false` ile gider; küçük bir JSON şemasını
+  doldurmak düşünme gerektirmez.
+- `view_file` aralıksız çağrıda ilk 250 satırı, aralıkla en fazla 400 satırı / 24k karakteri
+  döndürür ve devam için ipucu verir (önceden 150k karaktere kadar tüm dosya).
+- **Hızlı varsayılanlar:** görev öncesi hiçbir API çağrısı yapılmaz. Netleştirme turu varsayılan
+  0 (`EVREN_CLARIFY_ROUNDS`, 0-4; ajan gerekirse `ask_user` ile sorar), Rol/Çerçeve/Kısıt/Çıktı
+  öneri çağrısı kapalı (`EVREN_FRAME_SUGGEST=true`) ve bu alanlar artık tek tek sorulmaz
+  (`EVREN_FORM_FIELDS=true` ile açılır); form yalnızca Brief ister.
+- Normal kipteki her görev varsayılan olarak `thinking: false` ile çalışır (plan olsun ya da
+  olmasın); planlayıcı, plan kipi ve ask kipi düşünmeye devam eder.
+  `EVREN_EXECUTOR_THINKING=true` eski davranışı getirir.
+  Hazırlık talimatındaki alana özgü PostgreSQL yamaları çıkarıldı.
+- Bağlam belgeleri "uygulamadan önce doğrula" yerine "hazır bağlam, çelişkide canlı dosya esastır"
+  ifadesiyle verilir; model bilgiyi yeniden doğrulamak için adım harcamaz.
+
+### Eklendi
+- **Planlayıcı / uygulayıcı model ayrımı.** Normal kipte brief `EVREN_ROUTE_MIN_TOKENS`
+  (800) tahmini token'ı aşarsa önce `EVREN_PLANNER_MODEL` (varsayılan `deepseek-v4.1-flash`)
+  salt-okuma araçlarıyla en fazla `EVREN_PLANNER_STEPS` (3) adımda numaralı bir plan çıkarır;
+  ardından `EVREN_EXECUTOR_MODEL` (varsayılan oturum modeli) planı düşünmeyi kapatarak
+  (`thinking: false`, `EVREN_EXECUTOR_THINKING=true` ile açılır) uygular. Plan kipi doğrudan
+  planlayıcı modelde çalışır. `/continue` ve takip yanıtları yeniden planlamaz, aynı uygulayıcıyla
+  sürer. Plan çıkarılamazsa görev normal biçimde oturum modeliyle sürer. `EVREN_AUTO_ROUTE=false`
+  özelliği kapatır. `/model` ile seçilen oturum modeli görev sonunda geri yüklenir.
+- `thinking: false` desteği (`EvrenClient.chat_* (thinking=False)`). Canlı ölçüm: qwen3.8-flash-next,
+  deepseek-v4.1-flash ve mimo-v2.6-pro temiz yanıt verir; glm-5.3 düşünme metnini `content`
+  içine sızdırdığı için glm'e gönderilmez. Sunucu alanı reddederse istemci onsuz yeniden dener.
+- Kullanım loguna `cached_tokens` (sunucu prompt önbelleği isabeti) eklendi; `/tokens`
+  önbellek isabet oranını gösterir.
+- **Gizli değer kasası** (`src/secret_vault.py`): görev metnindeki Bearer/Basic token, parola,
+  API anahtarı ve URL içi parolalar modele gitmeden `{{EVREN_SECRET_n}}` yer tutucusuna alınır.
+  `run_command`/`ssh_run` gerçek değeri yalnızca çalıştırırken koyar ve `EVREN_SECRET_n` ortam
+  değişkeni olarak verir; terminal, araç çıktısı, SSH denetim logu, `agent.md`/`changelog.md`
+  yalnızca yer tutucuyu görür. Önceden token LLM'e gönderiliyor, betiklere ve bağlam belgelerine
+  düz metin yazılıyordu.
+- `run_command` için `use_python`: kod `sys.executable -c` ile argv olarak çalışır (çok satırlı,
+  kaçışsız). Windows'ta çok satırlı `python -c "..."` otomatik bu yola çevrilir; diğer çok satırlı
+  cmd komutları sessizce bozulmak yerine açık hata döndürür.
+- Drone CI notları (`drone` geçen görevlere eklenir): son build'ler tek istekte
+  `GET /api/user/repos?latest=true`; log ucu adım numarası ister.
+- Sistem prompt'u: istenen çıktıya ulaşınca dur (kendiliğinden log/kök neden analizi yok);
+  sorgu işlerinde çalışma alanına ara dosya yazma.
+- **SSH host kayıtları birleştirildi:** `~/.evren/ssh_hosts.json` (makine geneli) ve
+  `<proje>/.evren/ssh_hosts.json` birlikte okunur, çakışmada proje kazanır. Önceden proje dosyası
+  varsa makine genelindeki tüm host'lar görünmüyordu (ör. `koyu3-k8s` yalnızca başka bir dizinde
+  çalışıyordu). `/ssh add` ve `evren ssh add` artık varsayılan olarak makine geneline yazar.
+- Bilinmeyen SSH alias'ında hata kayıtlı alias'ları ve benzerlerini (hedef + açıklama) listeler;
+  benzer ad farklı makine olabileceği için otomatik eşleme yapılmaz.
+- SSH bağlantı hatasında (exit 255: timeout, refused, auth) hedef `user@host:port` ile birlikte
+  "uzak komut çalışmadı, tekrarlama" bildirilir.
+- Uzun komut çıktısı (`ssh_run` ve `run_command`) kullanıcının terminaline tam basılır,
+  `.evren/tmp/` altına kaydedilir; modele kırpılmış görünüm + "tabloyu yeniden yazma" notu gider.
+  Düz "listele/göster" görevlerinde bundan sonraki tur `tool_choice="none"` ile yalnızca kısa özet ister.
+- Görev metninde kayıtlı bir SSH alias'ı geçerse göreve hedef notu eklenir: işler o host'ta
+  `ssh_run` ile yapılır (önceden model kubectl'i yerelde çalıştırıp başka bir kümeyi listeleyebiliyordu).
+- Kubernetes notları (`kubectl/k8s/pod/namespace` geçen görevlere): podların request/limit
+  değerleri için container başına satır veren tek `go-template | column -t` sorgusu.
+- Öneri/teşhis görevleri için "önce tek geniş anlık görüntü, sonra kanıta dayalı öneri" kuralı.
+- **Hazır uzak komutlar** (`src/remote_presets.py`): `ssh_run(alias, preset="k8s_health")` (durum sayıları,
+  hazır olmayan podlar, Running'de yüksek restart, uyarı event'leri, düğüm/bellek, boot ve k3s başlangıcı,
+  limitsiz container sayısı) ve `preset="k8s_resources"` (container başına request/limit tablosu);
+  `namespace` ile tek namespace. Komutu model kopyalamaz, EVREN üretir: kopyalar bozuluyordu (düşünme
+  turunda yanlış "0 limitsiz") ve prompt'taki sürümde go-template `
+` kaçışı gerçek satır sonuna
+  dönmüştü. Preset'ler salt-okumadır, ask/plan kipinde izinlidir. Canlı ölçüm: "pod durumları için öneri"
+  4-9 istek / 34-96K token → 2 istek / ~14K token, 13 sn.
+- Araç çağrısı satırında kısa argümanlar önce yazılır (uzun `command`, `alias=`'ı ekrandan itiyordu).
+- Sistem prompt'u: deneme/yer tutucu komut (`echo test` vb.) çalıştırma.
+- Modele giden komut çıktısı penceresi 4000 → 8000 karakter (teşhis çıktısının ortası kesiliyordu).
+- Akışlı isteklerde `stream_options.include_usage` gönderilir; önceden bazı turların token kullanımı
+  `/tokens` ve `usage.jsonl`'a hiç yazılmıyordu.
+- Komut çıktısı terminalde artık konsol genişliğinde zorla bölünmez (`soft_wrap`), geniş tablolar okunur.
+- `run_command` için `use_powershell` parametresi: komut PowerShell betiği olarak argv ile
+  çalışır; cmd.exe altında `powershell -Command "..."` iç içe tırnak hataları ortadan kalkar.
+
+### Düzeltildi
+- `ask_user` ask/plan modlarında modele sunuluyor fakat gateway tarafından reddediliyordu;
+  model "REDDEDİLDİ" döngüsüne giriyordu. Artık tüm modlarda izinlidir.
+- `project_docs.py` içinde eksik `re` içe aktarması (changelog girdisi yazılamıyordu).
+- Çoklu anahtarda havuz hep ilk anahtara yapışıyor, ancak 429 sonrası geçiyordu; neredeyse
+  boş bir anahtar turu yarıda kesebiliyordu. REPL ve tek seferlik `chat`/`agent` artık
+  başlangıçta tüm anahtarların günlük kotasını paralel okur, en doluyu sabitler ve
+  `EVREN_KEY_MIN_REMAINING` (50k) altındakileri oturum için park eder. Banner aktif anahtarı gösterir.
+- Kota normalizasyonu günlük kalanı 5 dakikalık pencere tavanıyla eşliyordu
+  (`1,086 / 2,500,000`); artık `daily_limit_tokens` / `daily_used_tokens` önceliklidir.
+- `test_updater` testleri gerçek `.evren/logs/update.log` dosyasına yazıyordu; geçici dizine yönlendirildi.
+- `redact_text`: `Authorization: Bearer <tok>` biçiminde yalnızca "Bearer" kelimesi maskeleniyor,
+  token açıkta kalıyordu (Basic için de). Önce kimlik doğrulama şeması maskelenir.
+
 ## [1.1.0] - 2026-10-14
 
 ### Eklendi

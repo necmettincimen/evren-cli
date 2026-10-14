@@ -5,6 +5,7 @@ and ensures safe user approvals for Windows development.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,19 @@ from src.config import (
     execution_context_block,
     EVREN_DEFAULT_MAX_TOKENS,
     default_max_steps,
+    auto_route_enabled,
+    planner_model,
+    executor_model,
+    route_min_tokens,
+    planner_max_steps,
+    executor_thinking,
 )
 from src.token_manager import TokenManager
 from src.history_compactor import HistoryCompactor
 from src.modes import AgentMode, parse_mode_prefix
 from src.prompt_frame import PromptFrame, build_user_content, compose_system
 from src.tool_gateway import check_tool_allowed
+from src.secret_vault import SecretVault, set_active_vault
 from src.ui import (
     print_tool_call,
     print_tool_result,
@@ -41,20 +49,20 @@ def _stall_token_cap() -> int:
     """Ceiling for the doubled output budget on repeated stalls.
 
     The default model is a reasoning model: thinking and answer share this one
-    budget, so a 32k ceiling mostly buys hidden chain-of-thought while every
-    retry re-sends the whole context. 8192 keeps recovery possible at a quarter
-    of the cost; `EVREN_STALL_TOKEN_CAP` raises it for legitimately long outputs.
+    budget, and every retry re-sends the whole context. The base budget for
+    qwen3.8-flash-next is 8192 (see `token_manager`), so a 16k ceiling allows
+    exactly one doubling; `EVREN_STALL_TOKEN_CAP` changes it (1024-32768).
     """
     import os
 
     raw = (os.getenv("EVREN_STALL_TOKEN_CAP") or "").strip()
     if not raw:
-        return 8192
+        return 16384
     try:
         value = int(raw)
     except ValueError:
-        return 8192
-    return value if 1024 <= value <= 32768 else 8192
+        return 16384
+    return value if 1024 <= value <= 32768 else 16384
 
 
 def _tool_arguments_complete(tool_calls) -> bool:
@@ -75,76 +83,176 @@ def _tool_arguments_complete(tool_calls) -> bool:
     return True
 
 
-SYSTEM_PROMPT = """Sen Antigravity felsefesiyle çalışan, EVREN LLM API destekli uzman bir yazılım mühendisi asistanısın.
-Kullanıcının aktif proje çalışma alanında geliştirme, hata ayıklama, refactoring ve test yaparsın.
+SYSTEM_PROMPT = """Sen EVREN LLM API destekli, kullanıcının yerel proje çalışma alanında çalışan uzman bir yazılım mühendisi ajanısın.
 Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞTIRMA BAĞLAMI ile belirtilir.
 
-ZORUNLU NETLEŞTİRME (CLARIFY) ADIMI — HER PROMPT İÇİN İLK ADIM:
-0. Her kullanıcı isteğinde, işe başlamadan ÖNCE bir netleştirme adımı çalıştır. İsteği analiz et ve belirsiz/eksik/çok anlamlı noktaları tespit et.
-   - Belirsizlik varsa (amaç, kapsam, hedef dosya/modül, beklenen çıktı, riskli işlem, eksik girdi/kısıt) MUTLAKA 'ask_user' aracıyla kullanıcıya sor. Tahmin etme, varsayımda bulunma.
-   - Netleştirme tamamlanmadan dosya veya ortamı değiştiren işlemlere BAŞLAMA.
-     Salt-okuma run_command/view_file/list_directory ile keşif yapabilirsin.
-   - İstek zaten tamamen açık, tek anlamlı ve düşük riskliyse veya kullanıcı açıkça "soru sorma, doğrudan yap" dediyse bu adımı atlayabilirsin; ancak emin olmadığın bir nokta kalırsa yine sor.
-   - Netleştirme sonrası anlaşılan işi kısa bir özetle teyit et; gerekirse kind=confirm ile onay al.
-   - Bu kontrol her turda soru sormak değildir. Önceki görev, form yanıtları ve verilmiş onayları kullan.
-     "Yap artık", "hepsine onay veriyorum" gibi takip yanıtlarında asıl görevi tekrar sorma.
-     Yanıtlanmış kararı yeniden onaylatma; salt-okuma araçlarıyla bulunabilecek ayrıntıları keşfet.
-     Yalnızca yeni ve gerçekten bloklayıcı belirsizlik veya kapsam dışı risk için soru sor.
-     Kullanıcının son açık onayı eski "onay bekliyor" durumunu günceller; ancak araç izinlerini,
-     salt-okuma kipini, SSH allow_write ayarını veya komut onay mekanizmasını geçersiz kılmaz.
+ÇALIŞMA TARZI (ÖNEMLİ):
+- Hızlı ve kararlı ol. Kısa düşün ve ilk yararlı aracı hemen çağır; uzun iç muhakeme yerine araçla kanıt topla.
+- Makul ve geri alınabilir varsayımları kendin yap; son yanıtta tek satırla belirt.
+  Dosya adı, yol, sürüm gibi araçlarla bulunabilecek bilgileri kullanıcıya sorma, kendin bul.
+- 'ask_user' yalnızca gerçekten bloklayıcı durumda kullanılır: istek birden çok anlama geliyor ve yanlış seçim
+  ciddi iş kaybı doğurur, ya da geri dönüşü zor/riskli bir işlem (veri silme, üretim değişikliği, sır gerektiren adım) onay ister.
+  Önceki yanıtları, form bilgilerini ve verilmiş onayları tekrar sorma.
+- Bağımsız işlemleri (birden çok dosya okuma, arama, liste) aynı turda birlikte çağır;
+  yalnızca sonucu bilinmeyen bir çağrıya bağlı adımı sonraki tura bırak.
+- Aynı başarısız çağrıyı yeni kanıt olmadan tekrarlama. İki denemede olmazsa farklı yol dene veya somut engeli bildir.
+- İş doğrulanınca dur. Son yanıt: yapılan iş, doğrulama sonucu ve varsa kalan engel. Kapsam dışı iş ekleme.
+- İstenen çıktıya ulaşınca DUR. Kullanıcı listeleme/kontrol/sorgu istediyse kök neden analizi, log çekme,
+  düzeltme gibi ek işleri kendiliğinden yapma; gerekirse son yanıtta tek satırlık öneri olarak yaz.
+- Öneri/değerlendirme/teşhis isteklerinde önce TEK komutla geniş salt-okuma anlık görüntü al (durum, hata,
+  restart, event, kaynak), sonra yalnızca gerekirse 1-2 hedefli ayrıntı komutu çalıştır. Her öneriyi gözlenen
+  bir kanıta (satır, sayı, event) dayandır; kontrol etmediğin konu için öneri yazma, "kontrol edilmedi" de.
+  Önerileri etki sırasına koy; düzeltme komutunu yalnızca öner, kullanıcı istemedikçe uygulama.
+- Sorgu ve salt-okuma işlerinde çalışma alanına dosya (ara JSON, yardımcı betik) yazma; veriyi tek komutta süz.
+- Deneme/yer tutucu komut (`echo test`, `echo PLACEHOLDER`, `print('test')`) çalıştırma; kabuk ve araçlar çalışır.
+  Betik gerçekten gerekiyorsa .evren/tmp/ altına yaz.
+- Kullanıcının son açık onayı araç izinlerini, salt-okuma kipini, SSH allow_write ayarını veya komut onay mekanizmasını geçersiz kılmaz.
 
-TEMEL ÇALIŞMA KURALLARI:
-1. İncelemeden değiştirme: Bir dosyayı değiştirmeden önce mutlaka 'view_file' veya 'list_directory' ile dosyanın güncel halini oku.
-2. Cerrahi değişiklikler yap: Tüm dosyayı baştan yazmak yerine 'edit_file' aracını kullanarak yalnızca değişmesi gereken kod bloğunu hedefle. Mevcut yorum satırlarını, kod stilini ve girintileri koru.
-3. Ortam uyumluluğu: Komutları ve yolları gerçek yerel işletim sistemi ve kabuğa göre üret; uzak sunucunun ortamını yerelle karıştırma.
-4. Güvenlik ve yedekleme: Kritik değişikliklerden önce kullanıcıya diff gösterileceğini bil; otomatik yedek yalnızca CLI --backup bayrağı verildiğinde alınır.
-5. Doğrulama: Kod değişikliklerinden sonra 'run_command' ile ilgili testleri veya sözdizimi kontrollerini çalıştır.
+DOSYA VE KOMUT KURALLARI:
+1. Değiştirmeden önce dosyayı oku. Kod aramak için findstr/grep değil find_files(query="a|b") kullan (satır
+   numarası döner), sonra view_file'ı start_line/end_line ile yalnızca ilgili aralık için çağır; aynı aralığı
+   tekrar okuma. Plan verildiyse planın satır bilgisini kullan, keşfi tekrarlama.
+   Düzenleme sonucu "SÖZDİZİMİ HATASI" içerirse başka işe geçmeden önce onu düzelt.
+2. 'edit_file' ile cerrahi değişiklik yap; dosyayı baştan yazma, yorumları, stili ve girintiyi koru.
+3. Kod değişikliğinden sonra ilgili testi veya sözdizimi kontrolünü 'run_command' ile çalıştır; başarıyı yalnızca doğrulanmış sonuca göre bildir.
+4. Komutları gerçek kabuğa göre yaz. Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver;
+   komutu elle `powershell -Command "..."` içine sarmalama. Veri süzme/JSON işleme için Python kodu yazacaksan
+   use_python=true ver ve yalnızca kodu yaz (çok satırlı olabilir); `python -c "..."` içine sarmalama.
+5. Kritik değişikliklerde kullanıcıya diff gösterilir; otomatik yedek yalnızca CLI --backup bayrağıyla alınır.
 
-KÜÇÜK ADIMLARLA YÜRÜTME (ÖNEMLİ):
-- Netleştirme tamamlanınca karmaşık işi 3-7 kısa, doğrulanabilir alt adıma böl. Basit işte doğrudan uygula.
-- Her alt adımda hedef, gerekli araç ve tamamlanma kontrolü belli olsun. Kısa kontrol listesini yanıtta tut;
-  normal modda kullanıcı istemedikçe plan dosyası oluşturma. plan modunun create_plan davranışını koru.
-- Her model turunda yalnızca sıradaki küçük alt adımı uygula. Sadece aynı alt adıma ait bağımsız okumaları birlikte çağır;
-  sonucu bilinmeyen bir komuta/düzenlemeye bağlı işlemi aynı araç paketine koyma.
-- Tüm projeyi tek yanıtta tasarlama/yazma. Uzun düzenlemeyi dosya veya işlev bazında böl; büyük komut yerine hedefli test kullan.
-- Araç sonucunu değerlendir, tamamlanan adımı kısa belirt ve sıradakine geç. Başarıyı yalnızca doğrulanmış sonuca göre bildir.
-- Aynı analiz veya başarısız araç çağrısını yeni kanıt olmadan tekrarlama. Bir yaklaşım iki kez başarısızsa farklı yöntem dene;
-  hâlâ engelliyse somut engeli ve kalan işi bildir veya ask_user ile eksik bilgiyi sor.
-- Gereksiz uzun düşünme ve açıklama yerine ilk yararlı aracı çağır. Token bütçesini tek alt adım için kullan.
-- Son yanıt: yapılan iş, doğrulama sonucu ve varsa kalan engel. İş tamamlanınca kapsam dışı iş ekleme.
-
-YEREL / UZAK HEDEF AYRIMI:
-- Varsayılan hedef EVREN CLI'nin çalıştığı yerel makinedir; önceki turda SSH kullanılmış olması bu varsayılanı değiştirmez.
+YEREL / UZAK HEDEF:
+- Varsayılan hedef EVREN CLI'nin çalıştığı yerel makinedir; önceki turda SSH kullanılmış olması bunu değiştirmez.
 - "bu host", "bu hosts", "bu hostta", "bu makine", "bu sunucu", "burada", "lokal", "local",
-  "localhost", "127.0.0.1" ve "::1" açıkça başka hedef belirtilmedikçe mevcut yerel makineyi ifade eder.
-- Yerel komut için run_command, yerel dosya için view_file/edit_file/write_file kullan.
-  Yerel istek için ssh_list_hosts çağırma, SSH alias/IP/şifre isteme ve komutu ssh ile sarmalama.
-- "host" kelimesi tek başına uzak bağlantı talebi değildir. Kullanıcı açıkça uzak sunucu/SSH veya kayıtlı alias hedefliyorsa SSH kullan.
-  Uzak hedef gerekli fakat eksikse ask_user ile yalnızca hedefi netleştir; rastgele sunucu seçme.
-- Hem yerel hem uzak iş istenirse her alt adımın hedefini belirt ve uygun aracı ayrı çağır.
+  "localhost", "127.0.0.1" ve "::1" yerel makinedir: run_command/view_file/edit_file kullan, SSH kullanma.
+- SSH'ı yalnızca kullanıcı açıkça uzak sunucu veya kayıtlı alias istediğinde kullan. Kullanıcı alias verdiyse
+  doğrudan 'ssh_run'/'ssh_read_file' çağır (alias yoksa hata kayıtlı ve benzer alias'ları listeler);
+  'ssh_list_hosts'u yalnızca hedef belirsizse kullan. Rastgele host/IP kullanma. Bağlantı zaman aşımına
+  uğrarsa aynı çağrıyı tekrarlama; erişim sorununu bildir. 'ssh_write_file' yalnızca allow_write=true host'ta
+  ve kullanıcı onayıyla çalışır. Uzak işlemler .evren/logs/ssh_audit.log dosyasına kaydedilir.
 
 ÇALIŞMA KİPLERİ:
-- normal: Tüm araçlar açık (oku + yaz + çalıştır).
-- ask: Salt-okuma. 'write_file'/'edit_file' kapalı; 'run_command' yalnızca salt-okuma komutlarıyla sınırlı.
-- plan: Kaynak dosyalara dokunulmaz. Yalnızca 'create_plan' ile plans/<ad>/plan.md yazılır.
-Bir araç reddedilirse ("REDDEDİLDİ: ..."), kip kısıtlaması nedeniyle engellendiğini anla ve kullanıcıdan normal moda geçmesini iste.
+- normal: tüm araçlar. ask: salt-okuma (yazma kapalı, run_command/ssh_run yalnızca salt-okuma komutları).
+  plan: kaynak dosyalara dokunulmaz, yalnızca 'create_plan' ile plans/<ad>/plan.md yazılır.
+- "REDDEDİLDİ: ..." sonucu kip kısıtıdır; aynı çağrıyı tekrarlama, kullanıcıdan normal moda geçmesini iste.
 
-UZAK SUNUCU (SSH) İŞLEMLERİ:
-- Yalnızca 'ssh_list_hosts' ile listelenen kayıtlı alias'lara bağlanabilirsin; rastgele host/IP kullanma.
-- Yalnızca açık uzak işlem isteğinde önce 'ssh_list_hosts' ile mevcut host'ları gör, sonra belirtilen hedefte 'ssh_read_file' veya 'ssh_run' ile durum tespiti yap.
-- 'ssh_run' ask/plan modunda yalnızca salt-okuma komutlarıyla sınırlıdır; yazma gerektiren işler için normal mod gerekir.
-- 'ssh_write_file' yalnızca host'ta allow_write=true ise çalışır ve kullanıcı onayı ister; üretim sunucularında önce salt-okuma ile doğrula.
-- Tüm uzak işlemler .evren/logs/ssh_audit.log dosyasına kaydedilir.
+PROJE BELGELERİ: Aşağıdaki agent.md/changelog.md/AGENTS.md özetleri hazır bağlamdır; doğrudan kullan.
+Yalnızca bir değişiklik bu bilgiye dayanıyor ve canlı dosyayla çelişki görürsen teyit et. Sistem talimatı çelişkide kazanır.
+"""
 
-HTTP VE ARGO CD (ÖNEMLİ):
+# Domain notes that used to ride on every request. They are only relevant to
+# HTTP / Argo CD work, so they are attached to the task text when it mentions
+# those topics instead of inflating the system prompt for every other task.
+HTTP_ARGO_NOTES = """HTTP VE ARGO CD NOTLARI:
+- run_command çıktısı 8000 karakterde kırpılır: büyük JSON yanıtını ham yazdırma. PowerShell
+  (use_powershell=true, Invoke-RestMethod) veya python ile yalnızca gereken alanları süzüp yazdır.
 - curl gövdesini JSON sanma. İstek `-sS -w "\\nHTTP:%{http_code}"` ile gitsin. Kod 200 ve gövde JSON değilse parse etme; kodu ve ilk baytları yaz, aynı aileyi uydurma.
 - Argo CD uygulama özeti: `GET /api/v1/applications/{ad}` içindeki `status.resources` (kind, name, sync, health, message).
 - Pod ve canlı ağaç: `GET /api/v1/applications/{ad}/resource-tree`. Pod düğümleri `nodes` içindedir (`kind==Pod`).
 - Tek nesne: `GET /api/v1/applications/{ad}/resource?namespace=&resourceName=&name=&version=&kind=&group=`.
 - Pod logu: `GET /api/v1/applications/{ad}/logs?namespace=&podName=&container=&tailLines=100`. Bu uç metin döner, JSON değildir.
 - Şu yollar yoktur; 404 alınca tekrarlama: `/pods`, `/resource/pods`, `/resource/tree`.
-- `sync: OutOfSync` ve `health: Missing` kaynak henüz uygulanmamıştır; pod arama. `exceeded its progress deadline` yeni ReplicaSet'in hazır olmamasıdır; resource-tree içindeki Pod ve ardından logs ucuna bak.
-"""
+- `sync: OutOfSync` ve `health: Missing` kaynak henüz uygulanmamıştır; pod arama. `exceeded its progress deadline` yeni ReplicaSet'in hazır olmamasıdır; resource-tree içindeki Pod ve ardından logs ucuna bak."""
+
+DRONE_NOTES = """DRONE CI API NOTLARI:
+- Kimlik doğrulama: `GET /api/user` (200 = token geçerli).
+- Her reponun SON build'i tek istekte gelir: `GET /api/user/repos?latest=true`; her repo nesnesinde
+  `build` alanı son build'dir (`number`, `status`: success|failure|error|killed|running|pending,
+  `target`, `event`, `finished`). Son build'i hatalı repolar için repo başına istek atma; bu
+  yanıtı süz (status failure|error|killed). `build` alanı olmayan repo hiç build almamıştır.
+  `latest=true` olmadan `/api/user/repos` build bilgisi döndürmez.
+- Ayrıntı yalnızca istenirse: `GET /api/repos/{owner}/{repo}/builds/{number}` (stages[].number,
+  stages[].steps[]: number, name, status, exit_code). Log: `GET .../builds/{number}/logs/{stage_number}/{step_number}`
+  — adım ADI değil NUMARASI (isim verilirse 400 strconv.Atoi); yanıt `[{pos,out,time}]` dizisidir, `out` alanlarını birleştir."""
+
+K8S_NOTES = """KUBERNETES NOTLARI:
+- Kullanıcı bir host/alias (ör. koyu3-k8s) verdiyse kubectl'i O host'ta ssh_run ile çalıştır; yerel run_command
+  ile kubectl çalıştırma (yerel kubeconfig BAŞKA bir kümeyi gösterebilir). Ön kontrol (`kubectl version`,
+  `get nodes`) yapma; `-w/--watch` ve uzun `sleep` kullanma (zaman aşımı).
+- Hazır salt-okuma komutları (komut yazma, preset ver): ssh_run(alias, preset="k8s_health") = pod/küme durumu,
+  öneri, teşhis için tek anlık görüntü; ssh_run(alias, preset="k8s_resources") = container başına request/limit
+  tablosu. Tek namespace için namespace="<ns>".
+- Restart sayısını Running podlarda da değerlendir (Running ≠ sağlıklı). Birçok podun son restart'ı aynı
+  zamandaysa boot / k3s başlangıç zamanıyla karşılaştır. Ayrıntı gerekirse yalnızca şüpheli pod için
+  `kubectl -n <ns> describe pod <p> | tail -25` veya `kubectl -n <ns> logs <p> --previous --tail=40`.
+- Uzun liste çıktısını EVREN kullanıcının terminaline tam basar; tabloyu yeniden yazma, kısa özet ver."""
+
+# (notes, triggers): attached to the task text when one trigger occurs in it.
+_DOMAIN_NOTES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (HTTP_ARGO_NOTES, ("argo", "curl", "/api/v1", "http://", "https://", "resource-tree")),
+    (DRONE_NOTES, ("drone",)),
+    (K8S_NOTES, ("kubectl", "k8s", "kubernetes", "pod", "namespace", "deployment")),
+)
+
+
+PLANNER_INSTRUCTION = """[EVREN PLANLAYICI] Bu turda yalnızca uygulama planı çıkar; hiçbir dosyayı değiştirme.
+Keşfi az turda yap: ilk turda ilgili anahtar kelimeleri TEK find_files(query="a|b|c") ile ara ve bağımsız
+okumaları aynı turda birlikte çağır; ikinci turda yalnızca gereken aralıkları view_file(start_line,end_line) ile oku.
+findstr/grep kullanma, dosyaları baştan sona okuma.
+Kullanıcıya soru sorma: belirsiz noktayı "Varsayım:" satırıyla yaz.
+Son yanıtın yalnızca plan olsun: en fazla 10 numaralı adım; her adımda hedef dosya ve satır aralığı/fonksiyon,
+yapılacak değişiklik ve doğrulama komutu. Uygulayıcı keşfi tekrarlamasın diye gördüğün mevcut fonksiyon
+adlarını ve satır numaralarını plana yaz. Uzun gerekçe yazma."""
+
+
+def execution_brief(plan: str, planner: str) -> str:
+    """Text appended to the task so the executor applies the plan directly."""
+    return (
+        f"UYGULAMA PLANI (planlayıcı model: {planner}):\n{plan.strip()}\n\n"
+        "Bu planı sırayla uygula. Planı yeniden tartışma veya baştan analiz etme; yalnızca "
+        "bir adım canlı kodla çelişirse o adımı uyarla. Bağımsız adımları aynı turda çağır."
+    )
+
+
+_LISTING_RE = re.compile(r"(?i)\b(listele|göster|goster|yazdır|getir|list|show)")
+_ANALYSIS_RE = re.compile(
+    r"(?i)(analiz|karşılaştır|kontrol|neden|hangi|bul\b|süz|filtre|sadece|yalnızca|olmayan|eksik|hatalı)"
+)
+
+
+_PLAN_INTENT_RE = re.compile(
+    r"(?i)\b(planla\w*|plan\s+(yap|çıkar|hazırla|oluştur)\w*|önce\s+plan)"
+)
+
+
+def is_listing_task(text: str) -> bool:
+    """True for plain "list/show X" requests (no filtering or analysis asked)."""
+    return bool(_LISTING_RE.search(text or "")) and not _ANALYSIS_RE.search(text or "")
+
+
+def ssh_target_note(text: str, workspace_root) -> str:
+    """Names the registered SSH host(s) a task mentions, so the work goes there.
+
+    Without it the model sometimes ran `kubectl` locally with run_command,
+    where an unrelated kubeconfig answered with another cluster's pods.
+    """
+    try:
+        from src.ssh_hosts import load_hosts
+
+        hosts = load_hosts(workspace_root)
+    except Exception:
+        return ""
+    lowered = (text or "").casefold()
+    hits = [
+        alias for alias in sorted(hosts, key=len, reverse=True)
+        if re.search(rf"(?<![\w-]){re.escape(alias.casefold())}(?![\w-])", lowered)
+    ]
+    if not hits:
+        return ""
+    targets = ", ".join(f"'{a}' ({hosts[a].target})" for a in hits)
+    return (
+        f"[EVREN] HEDEF: Görevde kayıtlı SSH host'u geçiyor: {targets}. Bu host'taki işleri "
+        "ssh_run/ssh_read_file ile o alias üzerinde yap; kubectl/helm/systemctl gibi komutları yerel "
+        "run_command ile çalıştırma (yerel makine farklı bir sistemdir)."
+    )
+
+
+def domain_hints(text: str) -> str:
+    """Returns topic notes relevant to this task text, or an empty string."""
+    lowered = (text or "").casefold()
+    return "\n\n".join(
+        notes for notes, triggers in _DOMAIN_NOTES
+        if any(trigger in lowered for trigger in triggers)
+    )
 
 
 class AgentSession:
@@ -185,6 +293,18 @@ class AgentSession:
         self._compaction_notified = False
         # Optional per-session step ceiling set by `/steps`; None = EVREN_MAX_STEPS.
         self.max_steps: int | None = None
+        # Thinking switch for the running phase: None = server default,
+        # False = `thinking: false` (fast executor). A stalled step always
+        # retries with thinking off.
+        self._thinking: bool | None = None
+        # (model, thinking) of the last routed task, reused by /continue and
+        # follow-ups so they keep running on the executor.
+        self._exec_profile: tuple[str, bool | None] | None = None
+        # User-supplied secrets live here, never in the prompt (see secret_vault).
+        self.vault = SecretVault()
+        # Set once a plain "list X" task has shown its full output to the user:
+        # the next turn may only summarise (tool_choice="none").
+        self._listing_done = False
 
         # Working mode (normal / ask / plan). Persisted across turns; can be
         # overridden per-turn via an "ask:" / "plan:" message prefix.
@@ -265,6 +385,9 @@ class AgentSession:
         self.pending_mode = None
         self.interrupted = False
         self.task_goal = ""
+        self._thinking = None
+        self._exec_profile = None
+        self.vault.clear()
 
     def _close_open_tool_calls(self, note: str) -> None:
         """Adds a tool result for every call the model already sent."""
@@ -327,6 +450,7 @@ class AgentSession:
                 "salt-okuma ile doğrula; sonra sıradaki küçük doğrulanabilir adımı uygula. Eksik izin veya "
                 "kimlik bilgilerini varsayma; gerekli engeli açıkça bildir.",
                 max_steps=max_steps,
+                route=False,
             )
         finally:
             self.mode = mode
@@ -361,6 +485,7 @@ class AgentSession:
                 "SSH yazma izinlerini koru. Yeni gerçek engel yoksa sıradaki uygulama "
                 "adımını yap; engel varsa somut nedeni ve gereken tek eylemi bildir.",
                 max_steps=max_steps,
+                route=False,
             )
         finally:
             self.task_goal = goal
@@ -603,15 +728,22 @@ class AgentSession:
             )
         return result_text
 
-    def run_step(self, user_input: str, max_steps: int | None = None) -> str:
+    def run_step(
+        self, user_input: str, max_steps: int | None = None, *, route: bool = True,
+    ) -> str:
         """
         Executes an agentic goal loop.
         The model can inspect files, produce code diffs, run tests, and iterate
         until the task is fully accomplished or max_steps is reached.
 
-        `max_steps` defaults to `EVREN_MAX_STEPS` (12): every step re-sends the
+        `max_steps` defaults to `EVREN_MAX_STEPS` (20): every step re-sends the
         whole system prompt and tool schemas, so a lower ceiling directly cuts the
         base cost. Raise it with `--max-steps`, `/steps <n>` or the env var.
+
+        With `route=True` a large brief in normal mode is first planned by the
+        planner model (read-only, few steps) and then executed by the executor
+        model with thinking off; plan mode runs on the planner model. `/continue`
+        and follow-ups pass `route=False` and keep the last executor profile.
         """
         if max_steps is None:
             max_steps = self.max_steps or default_max_steps()
@@ -620,6 +752,10 @@ class AgentSession:
 
         # Per-turn mode override via "ask:" / "plan:" prefix.
         turn_mode, cleaned_input = parse_mode_prefix(user_input)
+        # Secrets are swapped for placeholders before anything (model, docs,
+        # changelog, checkpoints) sees the task text.
+        set_active_vault(self.vault)
+        cleaned_input = self.vault.capture(cleaned_input)
         effective_mode = turn_mode or self.mode
         self.pending_mode = None
         self.interrupted = False
@@ -639,6 +775,19 @@ class AgentSession:
             from src.project_scanner import build_context_from_files
             ctx_str = build_context_from_files(list(self.active_context_files), self.workspace_root)
             prompt_with_context = f"{cleaned_input}\n\n[Aktif Dosya Bağlamı]:\n{ctx_str}"
+        brief_for_routing = prompt_with_context
+        sent_before = "".join(
+            str(m.get("content") or "") for m in self.messages if m.get("role") == "user"
+        )
+        self._listing_done = False
+        for notes in (
+            domain_hints(cleaned_input),
+            ssh_target_note(cleaned_input, self.workspace_root),
+            self.vault.usage_note(),
+        ):
+            for block in (notes.split("\n\n") if notes else []):
+                if block and block not in sent_before:
+                    prompt_with_context = f"{prompt_with_context}\n\n{block}"
 
         self.messages.append({"role": "user", "content": prompt_with_context})
 
@@ -646,7 +795,14 @@ class AgentSession:
         stalled_steps = 0
         text_continuations = 0
 
+        session_model = self.model
         try:
+            # Size is judged on what the user wrote (plus attached files), not on
+            # the domain/target notes EVREN appended, which made short briefs
+            # like "pod durumları için öneri ver" look "large" and get planned.
+            self._prepare_phase(
+                route, effective_mode, prompt_with_context, brief_text=brief_for_routing,
+            )
             return self._finish_task(
                 self._run_steps(
                     max_steps, effective_mode, step_count, stalled_steps, text_continuations,
@@ -659,6 +815,106 @@ class AgentSession:
                 "İşlem Ctrl+C ile durduruldu. Geçmiş duruyor; düzeltme yazarak devam edebilirsiniz."
             )
             return "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+        finally:
+            # The session model (/model) is what the user chose; routing only
+            # borrows other models for the duration of one task.
+            self.model = session_model
+            self._thinking = None
+
+    # ------------------------------------------------------------------ #
+    # Planner / executor routing
+    # ------------------------------------------------------------------ #
+
+    def _should_route(self, text: str) -> bool:
+        if not auto_route_enabled():
+            return False
+        if planner_model() == executor_model(self.model):
+            return False
+        # An explicit "planla / plan yap" asks for planning however short the
+        # brief is; size alone sent such multi-file features straight to the
+        # executor, which spent 15 of 20 steps exploring.
+        if _PLAN_INTENT_RE.search(text or ""):
+            return True
+        return self.token_manager.estimate_text(text) >= route_min_tokens()
+
+    def _prepare_phase(
+        self, route: bool, mode: AgentMode, task_text: str, *, brief_text: str | None = None,
+    ) -> None:
+        """Chooses model and thinking for this task; may run the planning phase."""
+        brief_text = task_text if brief_text is None else brief_text
+        if not route:
+            if self._exec_profile is not None:
+                self.model, self._thinking = self._exec_profile
+            elif mode is AgentMode.NORMAL and not executor_thinking():
+                self._thinking = False
+            return
+        self._exec_profile = None
+        if mode is AgentMode.PLAN:
+            if auto_route_enabled():
+                self.model = planner_model()
+            return
+        if mode is not AgentMode.NORMAL:
+            return
+        # Acting needs no hidden chain-of-thought: tool calls and edits come out
+        # directly, which is the main speed and token win on reasoning models.
+        if not executor_thinking():
+            self._thinking = False
+        if not self._should_route(brief_text):
+            return
+        planner = planner_model()
+        executor = executor_model(self.model)
+        print_info(
+            f"Büyük brief (~{self.token_manager.estimate_text(brief_text)} token): "
+            f"plan için {planner} modeline geçiliyor."
+        )
+        plan = self._plan_phase(task_text, planner)
+        self.model = executor
+        if not plan:
+            print_warning(f"Plan çıkarılamadı; doğrudan {executor} ile uygulanıyor.")
+            return
+        self._exec_profile = (executor, self._thinking)
+        # The plan joins the task message so it survives into the executor's
+        # history (and /continue) without a separate turn.
+        self.messages[-1] = {
+            **self.messages[-1],
+            "content": f"{self.messages[-1]['content']}\n\n{execution_brief(plan, planner)}",
+        }
+        print_info(f"Plan hazır; uygulama için {executor} modeline geçiliyor.")
+
+    def _plan_phase(self, task_text: str, planner: str) -> str | None:
+        """Runs a short read-only loop on the planner model; returns the plan text."""
+        saved_messages, saved_model, saved_thinking = self.messages, self.model, self._thinking
+        self.messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": f"{PLANNER_INSTRUCTION}\n\nGÖREV:\n{task_text}"},
+        ]
+        self.model = planner
+        self._thinking = None
+        try:
+            result = self._run_steps(planner_max_steps(), AgentMode.ASK, 0, 0, 0)
+        finally:
+            self.messages, self.model, self._thinking = saved_messages, saved_model, saved_thinking
+            self.pending_mode = None
+        text = (result or "").strip()
+        if not text or text.startswith(("HATA:", "Hata:", "İPTAL")):
+            return None
+        return text
+
+    @staticmethod
+    def _step_notes(step_count: int, max_steps: int, stalled_steps: int) -> str:
+        """Short per-step reminders; empty on an ordinary step."""
+        notes: list[str] = []
+        if max_steps > 1 and max_steps - step_count <= 1:
+            notes.append(
+                f"[EVREN] ADIM UYARISI: adım sınırına geldin ({step_count}/{max_steps}). "
+                "Yeni araç turu açma; sonucu, kalan işi ve tek sonraki adımı kısa bildir."
+            )
+        if stalled_steps:
+            notes.append(
+                "[EVREN] Önceki yanıt kesildi veya boş kaldı. Uzun düşünmeyi tekrarlama; "
+                "gerekli aracı hemen tam argümanlarla çağır veya engeli kısa bildir."
+            )
+        return "\n".join(notes)
 
     def _run_steps(
         self,
@@ -742,35 +998,31 @@ class AgentSession:
                     print(text, end="", flush=True)
 
                 try:
-                    step_instruction = (
-                        f"YÜRÜTME ADIMI {step_count}/{max_steps}. "
-                        f"Bu turdaki kip: {effective_mode.value}. "
-                        "Yalnızca sıradaki küçük, doğrulanabilir alt adımı uygula; "
-                        "araç sonucuna bağlı sonraki adımı sonraki tura bırak. "
-                        "Görev doğrulandıysa sonucu bildir ve bitir."
-                    )
-                    if max_steps - step_count <= 2:
-                        step_instruction += (
-                            f"\nADIM UYARISI: sınırın sonundasın ({step_count}/{max_steps}); "
-                            "yeni araç turu açma. Yapabildiğini bu turda bitir, kalan işi "
-                            "ve tek sonraki adımı kullanıcıya kısa bildir."
+                    # Turn notes go into a transient trailing message, never into the
+                    # system message: the system prefix and the whole history must
+                    # stay byte-identical between steps so the server's prompt cache
+                    # keeps hitting. Nothing is sent on an ordinary step.
+                    step_notes = self._step_notes(step_count, max_steps, stalled_steps)
+                    if self._listing_done:
+                        step_notes = (step_notes + "\n" if step_notes else "") + (
+                            "[EVREN] Liste kullanıcının terminalinde tam gösterildi. Araç çağırma; "
+                            "tabloyu yeniden yazmadan 1-3 cümlelik kısa özetle bitir."
                         )
-                    if stalled_steps:
-                        step_instruction += (
-                            "\nÖnceki yanıt kesildi veya boş kaldı; tamamlanmış sayılmadı. "
-                            "Uzun analizi tekrarlama. Tek küçük adım için gerekli aracı "
-                            "tam ve geçerli argümanlarla çağır veya somut engeli kısa bildir."
-                        )
+                    outgoing = list(self.messages)
+                    if step_notes:
+                        outgoing.append({"role": "user", "content": step_notes})
                     response = self.client.chat_stream_assembled(
-                        messages=normalize_chat_messages([
-                            *self.messages,
-                            {"role": "system", "content": step_instruction},
-                        ]),
+                        messages=normalize_chat_messages(outgoing),
                         model=self.model,
                         max_tokens=output_budget,
                         tools=tools_for_mode(effective_mode),
+                        # Same tool list keeps the cached prefix; "none" only forbids calls.
+                        tool_choice="none" if self._listing_done else None,
                         on_reasoning=_on_reasoning,
                         on_content=_on_content,
+                        # A stall almost always means the hidden reasoning ate the
+                        # budget; retrying with thinking off breaks the loop.
+                        thinking=False if stalled_steps else self._thinking,
                     )
                 finally:
                     if stream_state["first"]:
@@ -940,6 +1192,10 @@ class AgentSession:
                             effective_mode = AgentMode.NORMAL
                             print_info("Kullanıcı onayladı: plan modundan normal moda geçildi.")
 
+                    # A file or command output may still echo a known secret.
+                    result = self.vault.mask(result)
+                    if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
+                        self._listing_done = True
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
                     summary = result.splitlines()[0] if result else "Tamamlandı"
                     print_tool_result(fn_name, summary, is_error=is_err)
