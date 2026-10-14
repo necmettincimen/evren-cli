@@ -10,6 +10,8 @@ from src.file_ops import (
     read_file_with_meta,
     backup_file,
     rollback_last_backup,
+    set_backup_enabled,
+    backup_enabled,
 )
 
 
@@ -19,7 +21,12 @@ class TestFileOps(unittest.TestCase):
         self.workspace = Path(self.temp_dir)
 
     def tearDown(self):
+        set_backup_enabled(False)
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _backup_count(self):
+        backup_root = self.workspace / ".evren" / "backups"
+        return len(list(backup_root.glob("*.bak"))) if backup_root.exists() else 0
 
     def test_safe_path_boundary(self):
         inside_file = self.workspace / "src" / "main.py"
@@ -68,6 +75,34 @@ class TestFileOps(unittest.TestCase):
         # Verify content is restored to Version 1
         content, _ = safe_read_file(target, self.workspace)
         self.assertEqual(content, "Version 1")
+
+    def test_backup_disabled_by_default(self):
+        self.assertFalse(backup_enabled())
+
+    def test_default_write_creates_no_backup(self):
+        target = self.workspace / "test.txt"
+        safe_write_file(target, "Version 1", self.workspace)
+
+        ok, backup, err = safe_write_file(target, "Version 2", self.workspace)
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+        self.assertIsNone(backup)
+        self.assertEqual(self._backup_count(), 0)
+
+        content, _ = safe_read_file(target, self.workspace)
+        self.assertEqual(content, "Version 2")
+
+    def test_backup_enabled_flag_creates_backup(self):
+        set_backup_enabled(True)
+        self.assertTrue(backup_enabled())
+
+        target = self.workspace / "test.txt"
+        safe_write_file(target, "Version 1", self.workspace)
+
+        ok, backup, _ = safe_write_file(target, "Version 2", self.workspace)
+        self.assertTrue(ok)
+        self.assertIsNotNone(backup)
+        self.assertEqual(self._backup_count(), 1)
 
     def test_read_meta_crlf(self):
         target = self.workspace / "crlf.txt"

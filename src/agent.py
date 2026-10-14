@@ -10,8 +10,13 @@ from typing import Any
 
 from src.api_client import EvrenClient, normalize_chat_messages
 from src.errors import EvrenApiError
-from src.tools import TOOLS_SCHEMA, execute_tool_call
-from src.config import get_workspace_dir, execution_context_block, EVREN_DEFAULT_MAX_TOKENS
+from src.tools import TOOLS_SCHEMA, execute_tool_call, tools_for_mode
+from src.config import (
+    get_workspace_dir,
+    execution_context_block,
+    EVREN_DEFAULT_MAX_TOKENS,
+    default_max_steps,
+)
 from src.token_manager import TokenManager
 from src.history_compactor import HistoryCompactor
 from src.modes import AgentMode, parse_mode_prefix
@@ -30,7 +35,26 @@ from src.ui import (
 # Empty or truncated-tool turns. A single miss is normal for thinking models;
 # giving up on the second one aborts real tasks. Budget doubles on each miss.
 _MAX_STALLS = 4
-_STALL_TOKEN_CAP = 32768
+
+
+def _stall_token_cap() -> int:
+    """Ceiling for the doubled output budget on repeated stalls.
+
+    The default model is a reasoning model: thinking and answer share this one
+    budget, so a 32k ceiling mostly buys hidden chain-of-thought while every
+    retry re-sends the whole context. 8192 keeps recovery possible at a quarter
+    of the cost; `EVREN_STALL_TOKEN_CAP` raises it for legitimately long outputs.
+    """
+    import os
+
+    raw = (os.getenv("EVREN_STALL_TOKEN_CAP") or "").strip()
+    if not raw:
+        return 8192
+    try:
+        value = int(raw)
+    except ValueError:
+        return 8192
+    return value if 1024 <= value <= 32768 else 8192
 
 
 def _tool_arguments_complete(tool_calls) -> bool:
@@ -73,7 +97,7 @@ TEMEL ÇALIŞMA KURALLARI:
 1. İncelemeden değiştirme: Bir dosyayı değiştirmeden önce mutlaka 'view_file' veya 'list_directory' ile dosyanın güncel halini oku.
 2. Cerrahi değişiklikler yap: Tüm dosyayı baştan yazmak yerine 'edit_file' aracını kullanarak yalnızca değişmesi gereken kod bloğunu hedefle. Mevcut yorum satırlarını, kod stilini ve girintileri koru.
 3. Ortam uyumluluğu: Komutları ve yolları gerçek yerel işletim sistemi ve kabuğa göre üret; uzak sunucunun ortamını yerelle karıştırma.
-4. Güvenlik ve yedekleme: Kritik değişikliklerden önce kullanıcıya diff gösterileceğini ve otomatik yedek alınacağını bil.
+4. Güvenlik ve yedekleme: Kritik değişikliklerden önce kullanıcıya diff gösterileceğini bil; otomatik yedek yalnızca CLI --backup bayrağı verildiğinde alınır.
 5. Doğrulama: Kod değişikliklerinden sonra 'run_command' ile ilgili testleri veya sözdizimi kontrollerini çalıştır.
 
 KÜÇÜK ADIMLARLA YÜRÜTME (ÖNEMLİ):
@@ -151,6 +175,16 @@ class AgentSession:
         self.token_manager = TokenManager()
         self.compactor = HistoryCompactor(self.token_manager)
         self.last_usage: dict[str, Any] | None = None
+        # Session-wide server-reported totals (feeds /tokens and usage.jsonl).
+        self.usage_totals: dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        self.usage_requests: int = 0
+        self._compaction_notified = False
+        # Optional per-session step ceiling set by `/steps`; None = EVREN_MAX_STEPS.
+        self.max_steps: int | None = None
 
         # Working mode (normal / ask / plan). Persisted across turns; can be
         # overridden per-turn via an "ask:" / "plan:" message prefix.
@@ -274,7 +308,7 @@ class AgentSession:
         self.pending_mode = mode
         self.interrupted = True
 
-    def continue_task(self, max_steps: int = 30) -> str:
+    def continue_task(self, max_steps: int | None = None) -> str:
         """Resumes a step-limited task with history intact and its mode preserved."""
         if self.pending_mode is None:
             error = "HATA: Devam edilecek adım sınırında duraklamış görev yok."
@@ -308,7 +342,7 @@ class AgentSession:
             self.task_goal,
         )
 
-    def execute_followup(self, text: str, max_steps: int = 30) -> str:
+    def execute_followup(self, text: str, max_steps: int | None = None) -> str:
         """Use existing task context without preparing a new brief or changing permissions."""
         if not self.task_goal or not any(m.get("role") == "user" for m in self.messages):
             error = "HATA: Uygulanacak önceki görev yok; önce somut bir Brief yazın."
@@ -405,8 +439,13 @@ class AgentSession:
             raise ValueError(f"Şablon bulunamadı: {name}")
         return tmpl.prompt_block(context)
 
-    def _record_usage(self, response: Any) -> None:
-        """Stores the last server-reported usage for the /tokens report."""
+    def _record_usage(self, response: Any, *, step: int | None = None) -> None:
+        """Stores the last server-reported usage and appends it to the usage log.
+
+        Only token counters reach `.evren/logs/usage.jsonl`; message content and
+        tool arguments are never written. Logging failures are ignored so a
+        reporting problem can never break an agent turn.
+        """
         usage = getattr(response, "usage", None)
         if usage is None:
             return
@@ -415,6 +454,33 @@ class AgentSession:
             "completion_tokens": getattr(usage, "completion_tokens", None),
             "total_tokens": getattr(usage, "total_tokens", None),
         }
+        for key, value in self.last_usage.items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.usage_totals[key] = self.usage_totals.get(key, 0) + value
+        self.usage_requests += 1
+        try:
+            from src.usage_log import log_usage
+
+            log_usage(
+                usage,
+                model=self.model,
+                step=step,
+                mode=getattr(self.mode, "value", str(self.mode)),
+                workspace_root=self.workspace_root,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def compaction_ratio() -> float:
+        """Fraction of the context window at which compaction starts."""
+        from src.config import compaction_ratio
+
+        return compaction_ratio()
+
+    def compaction_limit(self) -> int:
+        """Token ceiling that triggers compaction for this session's model."""
+        return max(1024, int(self.token_manager.context_window * self.compaction_ratio()))
 
     def token_report(self) -> dict[str, Any]:
         """Builds a token/context report for the /tokens command."""
@@ -427,9 +493,13 @@ class AgentSession:
             "estimated_prompt_tokens": estimated,
             "output_budget": output_budget,
             "context_window": self.token_manager.context_window,
+            "compaction_limit": self.compaction_limit(),
+            "compaction_ratio": self.compaction_ratio(),
             "remaining_context": self.token_manager.remaining_context(self.messages, output_budget),
             "calibration": round(self.token_manager.calibration, 3),
             "last_usage": self.last_usage,
+            "session_requests": self.usage_requests,
+            "session_usage": dict(self.usage_totals),
         }
 
     # ------------------------------------------------------------------ #
@@ -533,12 +603,18 @@ class AgentSession:
             )
         return result_text
 
-    def run_step(self, user_input: str, max_steps: int = 30) -> str:
+    def run_step(self, user_input: str, max_steps: int | None = None) -> str:
         """
         Executes an agentic goal loop.
         The model can inspect files, produce code diffs, run tests, and iterate
         until the task is fully accomplished or max_steps is reached.
+
+        `max_steps` defaults to `EVREN_MAX_STEPS` (12): every step re-sends the
+        whole system prompt and tool schemas, so a lower ceiling directly cuts the
+        base cost. Raise it with `--max-steps`, `/steps <n>` or the env var.
         """
+        if max_steps is None:
+            max_steps = self.max_steps or default_max_steps()
         if max_steps < 1:
             raise ValueError("max_steps en az 1 olmalıdır.")
 
@@ -548,6 +624,7 @@ class AgentSession:
         self.pending_mode = None
         self.interrupted = False
         self.task_goal = cleaned_input
+        self._compaction_notified = False
         self._reset_trace()
         # Read-only modes keep the docs contract: read, never write.
         self._sync_docs(
@@ -601,8 +678,27 @@ class AgentSession:
             )
             repeats = max(stalled_steps, text_continuations)
             if repeats:
-                output_budget = min(output_budget * (2 ** repeats), _STALL_TOKEN_CAP)
-            self.messages = self.compactor.compact(self.messages, output_budget)
+                output_budget = min(output_budget * (2 ** repeats), _stall_token_cap())
+            # Compact early: waiting until the window is completely full makes every
+            # step re-send the whole history, so cost grows quadratically. Compacting
+            # at a fraction of the window keeps the repeated prefix small.
+            compact_limit = self.compaction_limit()
+            if repeats >= 2:
+                # A second stall usually means the context itself is the problem.
+                # Shrinking it first is cheaper than paying for a bigger answer
+                # budget on an oversized prompt.
+                compact_limit = max(1024, compact_limit // 2)
+            before = len(self.messages)
+            self.messages = self.compactor.compact(
+                self.messages, output_budget, max_tokens=compact_limit
+            )
+            if len(self.messages) < before and not self._compaction_notified:
+                self._compaction_notified = True
+                print_info(
+                    f"Bağlam {int(self.compaction_ratio() * 100)}% eşiğinde sıkıştırıldı "
+                    f"({before} mesaj -> {len(self.messages)}). "
+                    "Ayar: set EVREN_COMPACT_RATIO=1.0 (eski davranış)."
+                )
 
             status_msg = (
                 f"Model düşünüyor... [{self.model}]"
@@ -653,6 +749,12 @@ class AgentSession:
                         "araç sonucuna bağlı sonraki adımı sonraki tura bırak. "
                         "Görev doğrulandıysa sonucu bildir ve bitir."
                     )
+                    if max_steps - step_count <= 2:
+                        step_instruction += (
+                            f"\nADIM UYARISI: sınırın sonundasın ({step_count}/{max_steps}); "
+                            "yeni araç turu açma. Yapabildiğini bu turda bitir, kalan işi "
+                            "ve tek sonraki adımı kullanıcıya kısa bildir."
+                        )
                     if stalled_steps:
                         step_instruction += (
                             "\nÖnceki yanıt kesildi veya boş kaldı; tamamlanmış sayılmadı. "
@@ -666,7 +768,7 @@ class AgentSession:
                         ]),
                         model=self.model,
                         max_tokens=output_budget,
-                        tools=TOOLS_SCHEMA,
+                        tools=tools_for_mode(effective_mode),
                         on_reasoning=_on_reasoning,
                         on_content=_on_content,
                     )
@@ -678,7 +780,7 @@ class AgentSession:
 
                 # Calibrate the estimator against server-reported usage.
                 self.token_manager.calibrate_from_response(estimated, response)
-                self._record_usage(response)
+                self._record_usage(response, step=step_count)
             except Exception as e:
                 if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
                     stalled_steps += 1
@@ -729,7 +831,10 @@ class AgentSession:
                 stalled_steps += 1
                 if stalled_steps >= _MAX_STALLS:
                     error = (
-                        "HATA: Model art arda kesilmiş veya boş yanıt verdi; görev tamamlanmadı."
+                        "HATA: Model art arda kesilmiş veya boş yanıt verdi; görev tamamlanmadı. "
+                        "Bağlam çok büyük olabilir: `/tokens` ile bütçeyi incele, "
+                        "`/steps <n>` ile adım tavanını düşür veya yeni bir oturum aç. "
+                        f"Çıktı tavanı: EVREN_STALL_TOKEN_CAP={_stall_token_cap()}."
                     )
                     print_error(error)
                     self.messages.append({"role": "assistant", "content": error})

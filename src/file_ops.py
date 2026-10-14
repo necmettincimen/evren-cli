@@ -1,6 +1,6 @@
 """
 Safe file operations and backup/rollback management for EVREN CLI.
-Enforces workspace boundaries, prevents path traversal, creates automatic backups,
+Enforces workspace boundaries, prevents path traversal, and (only when the
 and protects critical files.
 """
 
@@ -10,7 +10,23 @@ from pathlib import Path
 from src.config import get_workspace_dir, get_backup_dir, ensure_evren_dirs
 
 FORBIDDEN_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__"}
-PROTECTED_FILES = {".env", ".env.local"}
+PROTECTED_FILES = {".env", ".env.local"}
+
+
+# Automatic backups are OFF by default. They are enabled only when the user
+# passes the explicit CLI flag (--backup); see set_backup_enabled().
+BACKUP_ENABLED = False
+
+
+def set_backup_enabled(enabled: bool) -> None:
+    """Enables or disables automatic backups process-wide (driven by --backup)."""
+    global BACKUP_ENABLED
+    BACKUP_ENABLED = bool(enabled)
+
+
+def backup_enabled() -> bool:
+    """Returns whether automatic backups are currently enabled."""
+    return BACKUP_ENABLED
 
 
 def is_safe_path(target: Path | str, workspace_root: Path | None = None) -> tuple[bool, str]:
@@ -148,11 +164,13 @@ def safe_write_file(
     target_path: Path | str,
     content: str,
     workspace_root: Path | None = None,
-    create_backup: bool = True,
+    create_backup: bool | None = None,
     preserve_meta: dict | None = None,
 ) -> tuple[bool, Path | None, str]:
     """
-    Safely writes text to target_path with automated backup.
+    Safely writes text to target_path. Backups are disabled by default and are
+    created only when create_backup=True is passed explicitly or the process-wide
+    BACKUP_ENABLED flag is on (set by the CLI --backup flag).
     Returns (success, backup_path_or_none, error_message).
 
     If `preserve_meta` is provided (from read_file_with_meta), the original BOM
@@ -171,6 +189,9 @@ def safe_write_file(
 
     # Backup if file already exists
     backup_path = None
+    if create_backup is None:
+        create_backup = BACKUP_ENABLED
+
     if resolved.exists() and create_backup:
         backup_path = backup_file(resolved, root)
 

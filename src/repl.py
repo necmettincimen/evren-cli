@@ -155,13 +155,34 @@ def _take_interrupt_followup(session: AgentSession, read_line) -> tuple[str, str
     return ("continue", "")
 
 
+def _guidance_context(workspace_root) -> str:
+    """Compact context for the prompt-preparation call.
+
+    The guidance request is a separate API call made before the agent runs, so
+    its whole payload is pure overhead. It only needs enough project context to
+    ask a project-specific question: the one-line digest plus the workspace path
+    is enough, and it is markedly smaller than the full execution context block.
+    """
+    try:
+        from src.project_docs import docs_digest
+
+        digest = docs_digest(workspace_root)
+    except Exception:
+        digest = ""
+    lines = [f"Çalışma dizini: {workspace_root}"]
+    if digest:
+        lines.append("PROJE ÖZETİ (kısa; canlı ortam önceliklidir):")
+        lines.append(digest)
+    return "\n".join(lines)
+
+
 def _collect_frame(session: AgentSession, pt_session, previous=None):
     def guidance(frame, clarify):
         label = "Brief netleştiriliyor..." if clarify else "Boş alanlar için öneriler hazırlanıyor..."
         with status_spinner(label):
             return request_frame_guidance(
                 session.client, session.model, frame, clarify,
-                execution_context_block(session.workspace_root) + _docs_context(session.workspace_root),
+                _guidance_context(session.workspace_root),
             )
 
     return collect_guided_prompt_frame(
@@ -617,6 +638,7 @@ EVREN CLI Komutları:
   /models       - Modelleri listele
   /quota        - Kalan token kotası
   /tokens       - Bağlam/token bütçesi raporu
+  /steps [n]    - Adım tavanını göster veya ayarla (tasarruf: düşük tut)
   /keys         - API anahtar havuzunu yönet
   /keys next    - Sıradaki API anahtarına geç
   /terms        - Şartları kontrol et / kabul et
@@ -868,12 +890,55 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                     print(f"  • Tahmini prompt token : {rep['estimated_prompt_tokens']:,}")
                     print(f"  • Çıktı bütçesi        : {rep['output_budget']:,}")
                     print(f"  • Bağlam penceresi     : {rep['context_window']:,}")
+                    print(f"  • Sıkıştırma eşiği     : {rep.get('compaction_limit', 0):,} "
+                          f"(pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
                     print(f"  • Kalan bağlam         : {rep['remaining_context']:,}")
                     print(f"  • Kalibrasyon oranı    : {rep['calibration']}")
                     if rep["last_usage"]:
                         u = rep["last_usage"]
                         print(f"  • Son sunucu kullanımı : prompt={u['prompt_tokens']}, "
                               f"completion={u['completion_tokens']}, total={u['total_tokens']}")
+                    totals = rep.get("session_usage") or {}
+                    if rep.get("session_requests"):
+                        print(f"  • Oturum isteği       : {rep['session_requests']}")
+                        print(f"  • Oturum toplamı      : prompt={totals.get('prompt_tokens', 0):,}, "
+                              f"completion={totals.get('completion_tokens', 0):,}, "
+                              f"total={totals.get('total_tokens', 0):,}")
+                    try:
+                        from src.usage_log import read_usage, usage_summary
+
+                        summary = usage_summary(read_usage(workspace_root))
+                        if summary["requests"]:
+                            print(f"  • Kalıcı log (usage)  : {summary['requests']} istek, "
+                                  f"toplam {summary['total_tokens']:,} token, "
+                                  f"son {summary['recent_window']} istekte ort. prompt "
+                                  f"{summary['avg_prompt_tokens_recent']:,}")
+                    except Exception:
+                        pass
+
+                elif cmd == "/steps":
+                    from src.config import default_max_steps
+
+                    if not arg.strip():
+                        current = session.max_steps or default_max_steps()
+                        print_info(
+                            f"Adım tavanı: {current} (env varsayılanı: {default_max_steps()}). "
+                            "Değiştirmek için: /steps <1-100>"
+                        )
+                    else:
+                        try:
+                            value = int(arg.strip())
+                        except ValueError:
+                            print_error("Geçersiz sayı. Örnek: /steps 20")
+                            continue
+                        if not 1 <= value <= 100:
+                            print_error("Adım tavanı 1-100 arasında olmalı.")
+                            continue
+                        session.max_steps = value
+                        print_info(
+                            f"Adım tavanı bu oturum için {value}. "
+                            "Kalıcı değişken: set EVREN_MAX_STEPS=<n>"
+                        )
 
                 elif cmd == "/docs":
                     _handle_docs_command(arg, session, workspace_root)
@@ -1100,12 +1165,12 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
 
                 elif cmd == "/auto":
                     if not arg:
-                        state_str = "AÇIK (Değişiklikler otomatik uygulanır ve yedeklenir)" if session.auto_approve else "KAPALI (Her değişiklikte [Y/n] onayı istenir)"
+                        state_str = "AÇIK (Değişiklikler otomatik uygulanır)" if session.auto_approve else "KAPALI (Her değişiklikte [Y/n] onayı istenir)"
                         print_info(f"Otomatik Onay Modu: {state_str}")
                         print("[dim]Değiştirmek için: /auto on veya /auto off[/dim]")
                     elif arg.lower() in ("on", "true", "1", "ac", "aç"):
                         session.set_auto_approve(True)
-                        print_success("Otomatik onay modu AÇILDI. Kod değişiklikleri otomatik uygulanacak (yedekler .evren/backups klasöründe saklanır).")
+                        print_success("Otomatik onay modu AÇILDI. Kod değişiklikleri otomatik uygulanacak (yedekleme varsayılan olarak kapalı; --backup ile açılır).")
                     elif arg.lower() in ("off", "false", "0", "kapat"):
                         session.set_auto_approve(False)
                         print_warning("Otomatik onay modu KAPATILDI. Her dosya değişikliğinde kullanıcı onayı istenecek.")
