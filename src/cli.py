@@ -390,6 +390,26 @@ def _add_frame_args(parser):
     parser.add_argument("--cikti", help="Format ve teslim yüzeyi (user)")
 
 
+class _EnableBackupAction(argparse.Action):
+    """--backup bayrağı: süreç boyunca otomatik yedeklemeyi açar (varsayılan kapalı)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True)
+        from src.file_ops import set_backup_enabled
+
+        set_backup_enabled(True)
+
+
+def _add_backup_arg(parser):
+    """Adds the explicit --backup flag (backups are off unless this is given)."""
+    parser.add_argument(
+        "--backup",
+        action=_EnableBackupAction,
+        nargs=0,
+        help="Yazmalarda .evren/backups altına zaman damgalı yedek oluştur (varsayılan: kapalı)",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="evren",
@@ -414,6 +434,8 @@ def main():
         help=f"Kullanılacak EVREN modeli (varsayılan: {EVREN_DEFAULT_MODEL})",
     )
 
+    _add_backup_arg(parser)
+
     subparsers = parser.add_subparsers(dest="subcommand")
 
     # chat command
@@ -437,7 +459,13 @@ def main():
         help="Serbest istek. Kalıp alanları da doluysa ek istek olarak eklenir",
     )
     _add_frame_args(p_agent)
-    p_agent.add_argument("--max-steps", type=int, default=30, help="Maksimum adım sayısı")
+    p_agent.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Maksimum adım sayısı (varsayılan: EVREN_MAX_STEPS, 12)",
+    )
+    _add_backup_arg(p_agent)
     p_agent.set_defaults(func=cmd_agent)
 
     # scan command

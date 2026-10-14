@@ -408,8 +408,15 @@ evren docs path                # proje ve CLI belge dizinleri
 | Çevre değişkeni | Varsayılan | Etkisi |
 |---|---|---|
 | `EVREN_AUTO_DOCS` | `true` | `false` → tüm bağlam dosyası katmanı kapalı |
-| `EVREN_DOCS_TOKENS` | `3500` | sistem istemine eklenecek bağlamın token tavanı (`0` = enjeksiyon kapalı) |
+| `EVREN_DOCS_TOKENS` | `1200` | sistem istemine eklenecek bağlamın token tavanı (`0` = enjeksiyon kapalı) |
+| `EVREN_MAX_STEPS` | `12` | bir görevin adım tavanı; her adım tam sistem istemini yeniden gönderir (`/steps` ile oturum için değiştirilir) |
+| `EVREN_COMPACT_RATIO` | `0.6` | bağlam sıkıştırmanın pencerenin kaçında tetikleneceği (`1.0` = pencere dolana kadar bekle) |
+| `EVREN_STALL_TOKEN_CAP` | `8192` | kesilen yanıtta katlanan çıktı bütçesinin tavanı |
 | `EVREN_CLI_HOME` | otomatik | CLI belge dizinini zorla (salt-okunur kurulumlarda gerekli) |
+
+Her API yanıtının token sayaçları `.evren/logs/usage.jsonl` dosyasına yazılır
+(yalnızca sayaçlar; içerik ve anahtar yazılmaz). `/tokens` oturum toplamını ve
+son isteklerin ortalama prompt boyutunu gösterir.
 
 Salt-okuma kipleri sözleşmesi gereği `ask` ve `plan` modunda hiçbir bağlam dosyası
 yazılmaz; dosyalar yalnızca okunur.

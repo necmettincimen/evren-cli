@@ -49,7 +49,7 @@ WARN_LOG = "logs/docs_warn.log"
 AGENTS_REFERENCE_NAME = "AGENTS.md"
 
 LOCK_TTL_SECONDS = 120
-MAX_MAP_LINES = 60
+MAX_MAP_LINES = 25
 # The CLI's own documents must not appear in the project map, otherwise the map
 # changes the moment it is written and every run dirties `git status`.
 OWN_DOC_NAMES = frozenset({
@@ -66,6 +66,18 @@ AGENT_SECTIONS: tuple[str, ...] = (
     "project_map",
     "conventions",
     "current_focus",
+)
+
+# Prompt'a enjeksiyon sırası (dosya şablon sırasından bilinçli olarak farklı).
+# Sinyal başına maliyet: conventions/current_focus küçüktür ve doğrudan
+# yönlendirir; project_map en hacimli ve en bayat bölümdür, o yüzden sonda
+# durur ve bütçe yetmezse ilk o düşer.
+CONTEXT_SECTION_PRIORITY: tuple[str, ...] = (
+    "conventions",
+    "current_focus",
+    "identity",
+    "runtime_env",
+    "project_map",
 )
 CHANGELOG_SECTIONS: tuple[str, ...] = ("recent",)
 
@@ -132,15 +144,22 @@ def docs_enabled(root: Path | None = None) -> tuple[bool, str]:
     return True, ""
 
 
+# Varsayılan bağlam bütçesi. Her ajan adımı tam sistem prompt'unu yeniden
+# gönderdiği için bu bütçe doğrudan adım başına maliyettir: 3500 token ~30
+# adımda ~105k token. 1200, conventions + current_focus + kısa bir harita için
+# yeterlidir; EVREN_DOCS_TOKENS ile yükseltilir.
+DEFAULT_DOCS_TOKENS = 1200
+
+
 def docs_token_budget() -> int:
     """Token ceiling for all injected doc blocks (0 disables injection)."""
     raw = (os.getenv("EVREN_DOCS_TOKENS") or "").strip()
     if not raw:
-        return 3500
+        return DEFAULT_DOCS_TOKENS
     try:
         return max(0, int(raw))
     except ValueError:
-        return 3500
+        return DEFAULT_DOCS_TOKENS
 
 
 # --------------------------------------------------------------------------- #
@@ -300,11 +319,13 @@ def _read_text(path: Path) -> str:
 
 
 def _write_text(root: Path, path: Path, text: str) -> bool:
-    """Writes through `safe_write_file` so every change is backed up."""
+    """Writes through `safe_write_file` (backup only when --backup is enabled)."""
     try:
-        from src.file_ops import safe_write_file
+        from src.file_ops import safe_write_file, backup_enabled
 
-        ok, _backup, error = safe_write_file(path, text, root, create_backup=path.exists())
+        ok, _backup, error = safe_write_file(
+        path, text, root, create_backup=path.exists() and backup_enabled()
+    )
         if not ok and error:
             _warn(root, f"yazma reddedildi {path.name}: {error}")
         return bool(ok)
@@ -926,8 +947,8 @@ def agent_md_context_block(root: Path | None = None, max_chars: int = 4000) -> s
             body = body[:max_chars].rstrip() + f"\n[…{path.name} kırpıldı]"
         return f"PROJE BELGESİ ({path.name}, elle yönetiliyor):\n" + _redact(body)
 
-    order = [name for name in AGENT_SECTIONS if name in sections]
-    order += [name for name in sections if name not in AGENT_SECTIONS]
+    order = [name for name in CONTEXT_SECTION_PRIORITY if name in sections]
+    order += [name for name in sections if name not in CONTEXT_SECTION_PRIORITY]
     lines = [
         f"PROJE BAĞLAM BELGESİ ({path.name}, CLI tarafından güncellenir; canlı ortam "
         "önceliklidir, burada yazan yolu/dosyayı uygulamadan önce doğrula):"

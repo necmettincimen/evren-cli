@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
@@ -160,8 +162,20 @@ class TestPromptFrame(unittest.TestCase):
 
 
 class TestAgentFrame(unittest.TestCase):
+    def setUp(self):
+        # `workspace_root=None` resolves to the real repository, whose agent.md
+        # legitimately carries a "Son görev" line. Since the docs budget now
+        # prioritises `current_focus`, that text reaches the system prompt and
+        # would make these frame-composition assertions workspace-dependent.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.workspace = Path(tmp.name).resolve()
+        patcher = patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_apply_frame_merges_identity_and_keeps_base(self):
-        session = AgentSession(client=_Client(), workspace_root=None, model="test-model")
+        session = AgentSession(client=_Client(), workspace_root=self.workspace, model="test-model")
         base = session.base_system_prompt
 
         session.apply_frame(PromptFrame(rol="kimlik", brief="ilk"))
@@ -178,7 +192,7 @@ class TestAgentFrame(unittest.TestCase):
         self.assertNotIn("Brief", user)
 
     def test_clear_history_drops_the_frame(self):
-        session = AgentSession(client=_Client(), workspace_root=None, model="test-model")
+        session = AgentSession(client=_Client(), workspace_root=self.workspace, model="test-model")
         session.apply_frame(PromptFrame(rol="kimlik", brief="iş"))
         session.clear_history()
         self.assertIn(session.base_system_prompt, session.messages[0]["content"])
@@ -480,7 +494,14 @@ class TestGuidedFrame(unittest.TestCase):
             frame = _collect_frame(session, None)
         self.assertEqual(frame.rol, "mühendis")
         self.assertEqual(request.call_args.args[1], "active-model")
-        self.assertIn("YEREL ÇALIŞTIRMA BAĞLAMI", request.call_args.args[4])
+        # Plan token-consumption-fixes F4: the guidance call is a separate API
+        # request, so it now receives the compact project digest instead of the
+        # full execution-context block. It must still know which project it is
+        # preparing for.
+        context = request.call_args.args[4]
+        self.assertIn("PROJE ÖZETİ", context)
+        self.assertIn("Çalışma dizini", context)
+        self.assertNotIn("YEREL ÇALIŞTIRMA BAĞLAMI", context)
 
 
 class TestFormPromptDisplay(unittest.TestCase):

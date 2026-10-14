@@ -321,6 +321,30 @@ TOOLS_SCHEMA = [
 TOOL_ARGUMENT_TYPES = schema_type_map(TOOLS_SCHEMA)
 TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
 
+# Tools that are useless outside `normal` mode: they are always denied by the
+# gateway, so sending their schemas only wastes prompt tokens on every step.
+ASK_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file"}
+PLAN_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file"}
+
+
+def tools_for_mode(mode) -> list[dict]:
+    """Returns the tool schemas that should be advertised for `mode`.
+
+    `normal` returns the full TOOLS_SCHEMA unchanged. `ask` and `plan` drop the
+    write tools that the gateway would deny anyway, which cuts several hundred
+    tokens from every step of a read-only session. `tool_gateway` stays the
+    authority: this only avoids paying for schemas that can never be used.
+    """
+    from src.modes import AgentMode
+
+    if mode == AgentMode.ASK:
+        hidden = ASK_HIDDEN_TOOLS
+    elif mode == AgentMode.PLAN:
+        hidden = PLAN_HIDDEN_TOOLS
+    else:
+        return TOOLS_SCHEMA
+    return [t for t in TOOLS_SCHEMA if t.get("function", {}).get("name") not in hidden]
+
 
 def tool_view_file(path: str, start_line: int | None = None, end_line: int | None = None, workspace_root: Path | None = None) -> str:
     root = workspace_root or get_workspace_dir()
@@ -382,7 +406,7 @@ def tool_edit_file(
             return "İPTAL EDİLDİ: Kullanıcı bu değişikliği onaylamadı. Lütfen aynı değişikliği tekrar denemeyin ve kullanıcıya ne yapmak istediğini sorun."
 
     write_ok, backup_path, write_err = safe_write_file(
-        path, new_content, root, create_backup=True, preserve_meta=meta
+        path, new_content, root, preserve_meta=meta
     )
     if not write_ok:
         return f"HATA: Dosya kaydedilemedi: {write_err}"
@@ -415,7 +439,7 @@ def tool_write_file(
         if not approved:
             return "İPTAL EDİLDİ: Kullanıcı dosya yazma işlemini onaylamadı. Lütfen aynı işlemi tekrar denemeyin."
 
-    write_ok, backup_path, write_err = safe_write_file(path, content, root, create_backup=True)
+    write_ok, backup_path, write_err = safe_write_file(path, content, root)
     if not write_ok:
         return f"HATA: Dosya yazılamadı: {write_err}"
 
@@ -582,7 +606,7 @@ def tool_create_plan(
         if not approved:
             return "İPTAL EDİLDİ: Kullanıcı plan kaydını onaylamadı."
 
-    write_ok, backup_path, write_err = safe_write_file(rel_path, content, root, create_backup=True)
+    write_ok, backup_path, write_err = safe_write_file(rel_path, content, root)
     if not write_ok:
         return f"HATA: Plan kaydedilemedi: {write_err}"
 

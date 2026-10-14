@@ -5,6 +5,50 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [1.1.0] - 2026-10-14
+
+### Eklendi
+- Kalıcı API kullanım logu: her yanıtın token sayaçları `.evren/logs/usage.jsonl`
+  dosyasına tek satır JSON olarak eklenir (`src/usage_log.py`). Yalnızca sayaç
+  alanları yazılır; mesaj içeriği, araç argümanları ve API anahtarları loglanmaz,
+  model adı paylaşım maskelemesinden geçer. Dosya 5000 satırda bir `usage.jsonl.1`
+  olarak arşivlenir. Loglama hatası bir ajan turunu asla bozmaz.
+- `/tokens` raporu artık oturum toplamını (istek sayısı, prompt/completion/total)
+  ve kalıcı logdan gelen son isteklerin ortalama prompt boyutunu gösterir.
+- `/steps [n]` komutu adım tavanını gösterir veya oturum için ayarlar; `--max-steps`
+  artık opsiyoneldir ve verilmediğinde `EVREN_MAX_STEPS` kullanılır.
+- Yeni yapılandırma değişkenleri: `EVREN_MAX_STEPS` (12), `EVREN_COMPACT_RATIO` (0.6),
+  `EVREN_STALL_TOKEN_CAP` (8192); `EVREN_DOCS_TOKENS` varsayılanı 3500'den 1200'e indi.
+
+### Değişti
+- Ajan adım tavanı 30'dan **12**'ye indirildi. Her adım tam sistem prompt'unu ve
+  araç şemalarını yeniden gönderdiği için taban maliyet adım sayısıyla doğrusal
+  artar; iş bitmezse `/continue` ile uzatılır. Son iki adımda modele adım sınırının
+  sonunda olduğu bildirilir.
+- Bağlam sıkıştırma artık pencerenin tamamı dolmadan, **%60**'ında tetiklenir.
+  Eski davranışta 128k pencere dolana kadar geçmiş her adımda tamamıyla
+  yeniden gönderiliyor ve maliyet kuadratik büyüyordu. İlk sıkıştırma bir kez
+  bildirilir; `EVREN_COMPACT_RATIO=1.0` eski davranışı geri getirir.
+- Bağlam belgesi bütçesi 3500 → **1200** token; bölüm sırası sinyal başına maliyete
+  göre `conventions → current_focus → identity → runtime_env → project_map` oldu,
+  proje haritası satır tavanı 60 → 25'e indirildi. `agent.md` dosyasının kendi
+  bölüm sırası değişmedi.
+- `ask` ve `plan` modlarında yazma araçlarının şemaları modele artık gönderilmiyor
+  (gateway bunları zaten reddediyordu); `tool_gateway` otorite olmaya devam eder.
+- Kesilen/boş yanıt durumunda katlanan çıktı bütçesinin tavanı 32768 → **8192**;
+  ikinci tekrarda sıkıştırma eşiği yarıya indirilir. Kalıcı hata mesajı `/tokens`
+  ve `/steps` ile ayar düğmelerini gösterir.
+- Prompt hazırlama (netleştirme) çağrısı tam yürütme bağlamı yerine kısa proje
+  özetini alır; bu çağrı ajan çalışmadan önce yapılan ayrı bir istek olduğu için
+  tüm yükü fazladan maliyetti.
+
+### Düzeltildi
+- `test_apply_frame_merges_identity_and_keeps_base` ve prompt-hazırlama sarmalayıcı
+  testi, `workspace_root=None` üzerinden gerçek depo içeriğine bağımlıydı; izole
+  geçici çalışma alanı kullanırlar.
+
+Ayrıntılı plan ve ölçüm: `plans/token-consumption-fixes/plan.md`.
+
 ## [1.0.1] - 2026-10-14
 
 ### Eklendi

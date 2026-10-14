@@ -200,6 +200,40 @@ EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
 
+# Ajan adım tavanı. Her adım tam sistem prompt'unu + araç şemalarını yeniden
+# gönderdiği için (stateless chat API) taban maliyet doğrusal artar: 30 adım
+# ~162k prompt token. Düşük varsayılan, işi bitmeyince /continue ile uzatılır.
+EVREN_MAX_STEPS = int(os.getenv("EVREN_MAX_STEPS", "12"))
+
+
+# Compaction tetikleme oranı. Compaction yalnızca tahmini kullanım bu oranda
+# bağlam penceresini aşınca devreye girer. 1.0 = pencere dolana kadar bekle (eski
+# davranış, O(n^2) maliyet); 0.6 = pencerenin %60'ında kırp, tekrar gönderilen
+# geçmiş çok daha küçük kalır.
+EVREN_COMPACT_RATIO = float(os.getenv("EVREN_COMPACT_RATIO", "0.6"))
+
+
+def compaction_ratio() -> float:
+    """Fraction of the context window at which compaction starts (0.2-1.0)."""
+    try:
+        value = float(os.getenv("EVREN_COMPACT_RATIO", "0.6"))
+    except (TypeError, ValueError):
+        return 0.6
+    return value if 0.2 <= value <= 1.0 else 0.6
+
+
+def default_max_steps() -> int:
+    """Agent step ceiling; read at call time so `/steps` and env changes apply.
+
+    Values outside 1-100 (typos, `0`, negative numbers) fall back to the default
+    instead of silently reducing every run to a single step.
+    """
+    try:
+        value = int(os.getenv("EVREN_MAX_STEPS", "12"))
+    except (TypeError, ValueError):
+        return 12
+    return value if 1 <= value <= 100 else 12
+
 
 def config_source_report(pool_size: int | None = None) -> dict:
     """Describes where the CLI read its configuration and API keys from.
