@@ -5,6 +5,24 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [1.0.0] - 2026-10-14
+
+### Eklendi
+- Akıllı bağlam dosyaları: CLI her çalıştığında çalışma dizininde `agent.md` ve oturum
+  günlüğü (`changelog.md`) oluşturur, CLI ana dizininde `skills.md`, `lessons.md` ve
+  `commands.md` dosyalarını yönetir; bu dosyalar prompt gönderilmeden önce okunup ajan
+  sistem istemine ve prompt hazırlama (netleştirme/öneri) çağrısına eklenir.
+- Yönetilen blok birleştirme (`src/docs_merge.py`): yalnızca `evren:managed` işaretli
+  bölümler ve yalnızca içerik gerçekten değiştiğinde yazılır; elle yazılan metin,
+  CRLF ve BOM korunur. Yönetilen blok içermeyen dosyaya dokunulmaz.
+- NTFS büyük/küçük harf koruması: mevcut `AGENTS.md` veya `CHANGELOG.md` varsa CLI o
+  dosyaları asla ezmez, `evren-agent.md` / `evren-changelog.md` kullanır.
+- Yeni komutlar: `evren docs [status|refresh [--adopt]|unmark|path]` ve REPL'de `/docs`.
+- Yeni çevre değişkenleri: `EVREN_AUTO_DOCS` (varsayılan `true`), `EVREN_DOCS_TOKENS`
+  (varsayılan `3500`), `EVREN_CLI_HOME` (salt-okunur kurulumlar için belge dizini).
+- Her bağlam dosyası yazımı `.evren/backups/` altına yedeklenir ve sır maskelemesinden
+  (`redact_text`) geçer; `ask` ve `plan` kiplerinde hiçbir bağlam dosyası yazılmaz.
+
 ## [0.17.0] - 2026-10-12
 
 ### Düzeltildi

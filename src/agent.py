@@ -158,10 +158,24 @@ class AgentSession:
         self.pending_mode: AgentMode | None = None
         self.interrupted = False
         self.task_goal = ""
+        # Lightweight audit trail of the current task (feeds changelog.md).
+        self.tool_trace: list[dict[str, Any]] = []
 
     def _compose_system(self, base: str) -> str:
-        """Appends runtime environment, persistent memory and language blocks."""
+        """Appends runtime environment, project docs, memory and language blocks."""
         blocks: list[str] = [execution_context_block(self.workspace_root)]
+        try:
+            from src.cli_home import cli_docs_context_block
+            from src.project_docs import docs_context_block
+
+            for block in (
+                docs_context_block(self.workspace_root),
+                cli_docs_context_block(),
+            ):
+                if block:
+                    blocks.append(block)
+        except Exception:
+            pass
         from src.workflow_state import decision_context
 
         try:
@@ -418,6 +432,107 @@ class AgentSession:
             "last_usage": self.last_usage,
         }
 
+    # ------------------------------------------------------------------ #
+    # Task audit trail -> changelog.md
+    # ------------------------------------------------------------------ #
+
+    _TRACE_FILE_TOOLS = {"edit_file": "path", "write_file": "path"}
+
+    def _reset_trace(self) -> None:
+        self.tool_trace = []
+
+    def _note_tool_call(self, name: str, args: dict, result: str) -> None:
+        """Records one executed tool call for the end-of-task changelog entry."""
+        try:
+            if len(self.tool_trace) >= 200:
+                return
+            ok = not (
+                result.startswith("HATA:")
+                or result.startswith("İPTAL:")
+                or result.startswith("REDDEDİLDİ:")
+            )
+            record: dict[str, Any] = {"name": name, "ok": ok}
+            path_key = self._TRACE_FILE_TOOLS.get(name)
+            if path_key and isinstance(args.get(path_key), str):
+                record["path"] = args[path_key]
+            if name == "run_command":
+                command = str(args.get("command", ""))[:200]
+                record["command"] = command
+                record["exit_ok"] = ok and "Çıkış Kodu: 0" in result[:40]
+                tail_lines = [line for line in result.splitlines() if line.strip()]
+                record["summary"] = (tail_lines[-1] if tail_lines else "")[:160]
+            self.tool_trace.append(record)
+        except Exception:
+            pass
+
+    def changelog_entry(self, final_text: str = "") -> dict:
+        """Builds the changelog payload for the task that just finished."""
+        files: list[str] = []
+        commands: list[str] = []
+        exit_codes: list[int] = []
+        verification = ""
+        for record in self.tool_trace:
+            path = record.get("path")
+            if path and record.get("ok") and path not in files:
+                files.append(str(path))
+            command = record.get("command")
+            if command:
+                if command not in commands:
+                    commands.append(command)
+                exit_codes.append(0 if record.get("exit_ok") else 1)
+                if "pytest" in command and not verification:
+                    tail = str(record.get("summary") or "")
+                    verification = f"`{command}`" + (f" -> {tail}" if tail else "")
+        if not verification:
+            for message in reversed(self.messages):
+                if message.get("role") == "assistant" and message.get("content"):
+                    first = str(message["content"]).strip().splitlines()[0] if message["content"] else ""
+                    verification = first[:200]
+                    break
+        note = " ".join((final_text or "").split())[:200]
+        return {
+            "goal": self.task_goal,
+            "files": files,
+            "commands": commands,
+            "exit_codes": exit_codes,
+            "verification": verification,
+            "note": note,
+        }
+
+    def _sync_docs(self, *, goal: str, status: str, read_only: bool) -> None:
+        """Refreshes agent.md/changelog.md around a task. Never raises."""
+        try:
+            from src.project_docs import ensure_project_docs
+
+            ensure_project_docs(
+                self.workspace_root,
+                goal=goal,
+                status=status,
+                read_only=read_only,
+            )
+        except Exception:
+            pass
+
+    def _flush_changelog(self, final_text: str) -> None:
+        try:
+            from src.project_docs import append_changelog_entry
+
+            append_changelog_entry(self.workspace_root, self.changelog_entry(final_text))
+        except Exception:
+            pass
+
+    def _finish_task(self, result_text: str, effective_mode: AgentMode) -> str:
+        """Persists the task outcome into the project docs, then returns the result."""
+        if effective_mode is AgentMode.NORMAL and not self.interrupted:
+            failed = result_text.startswith("HATA:")
+            self._flush_changelog(result_text)
+            self._sync_docs(
+                goal=self.task_goal,
+                status="blokaj" if failed else "tamam",
+                read_only=False,
+            )
+        return result_text
+
     def run_step(self, user_input: str, max_steps: int = 30) -> str:
         """
         Executes an agentic goal loop.
@@ -433,6 +548,13 @@ class AgentSession:
         self.pending_mode = None
         self.interrupted = False
         self.task_goal = cleaned_input
+        self._reset_trace()
+        # Read-only modes keep the docs contract: read, never write.
+        self._sync_docs(
+            goal=cleaned_input,
+            status="çalışıyor",
+            read_only=effective_mode is not AgentMode.NORMAL,
+        )
 
         # Inject active context files if any
         prompt_with_context = cleaned_input
@@ -448,8 +570,11 @@ class AgentSession:
         text_continuations = 0
 
         try:
-            return self._run_steps(
-                max_steps, effective_mode, step_count, stalled_steps, text_continuations,
+            return self._finish_task(
+                self._run_steps(
+                    max_steps, effective_mode, step_count, stalled_steps, text_continuations,
+                ),
+                effective_mode,
             )
         except KeyboardInterrupt:
             self.note_interrupt(effective_mode)
@@ -713,6 +838,7 @@ class AgentSession:
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
                     summary = result.splitlines()[0] if result else "Tamamlandı"
                     print_tool_result(fn_name, summary, is_error=is_err)
+                    self._note_tool_call(fn_name, args, result)
 
                     # Add tool response to messages
                     self.messages.append({

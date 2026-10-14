@@ -2,3 +2,7 @@ backups/
 logs/
 history.json
 history.txt
+checkpoint.json
+decisions.json
+docs_state.json
+docs.lock

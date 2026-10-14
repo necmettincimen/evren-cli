@@ -291,10 +291,27 @@ def ensure_evren_dirs(workspace_root: Path | None = None):
     (evren_dir / "backups").mkdir(parents=True, exist_ok=True)
     (evren_dir / "logs").mkdir(parents=True, exist_ok=True)
     
-    # Create a gitignore in .evren if it doesn't exist
+    # Keep a gitignore in .evren up to date (additive: never drops user lines).
     gi = evren_dir / ".gitignore"
-    if not gi.exists():
-        gi.write_text("backups/\nlogs/\nhistory.json\ncheckpoint.json\ndecisions.json\n", encoding="utf-8")
+    required = (
+        "backups/",
+        "logs/",
+        "history.json",
+        "checkpoint.json",
+        "decisions.json",
+        "docs_state.json",
+        "docs.lock",
+    )
+    try:
+        existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+        have = {line.strip() for line in existing if line.strip()}
+        missing = [entry for entry in required if entry not in have]
+        if missing:
+            lines = [line for line in existing if line.strip()]
+            lines.extend(missing)
+            gi.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def check_api_key_configured() -> bool:
