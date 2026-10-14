@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [1.0.1] - 2026-10-14
+
+### Eklendi
+- Karşılama paneli artık çalışma alanının yanında API anahtarlarının hangi kaynaktan
+  okunduğunu ve okunan dosyaların tam yolunu gösterir: süreç ortam değişkenleri →
+  `.env` (`.env` → depo kökü → `~/.evren/.env`) → `~/.evren-cli/config.json` `ApiKeys`.
+  Panel yalnızca kaynak adı, dosya yolu ve anahtar adedi basar; anahtar değerleri
+  maskelenmiş olarak bile yazdırılmaz.
+- `config.config_source_report()` yapılandırma kaynağını programatik olarak döndürür;
+  `print_banner()` yeni `config_info` parametresini alır ve hata durumunda da açılır.
+
 ## [1.0.0] - 2026-10-14
 
 ### Eklendi

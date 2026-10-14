@@ -65,6 +65,25 @@ def _docs_context(workspace_root) -> str:
     )
 
 
+def _config_source_info(client) -> dict:
+    """Config/API key origin for the banner; never includes key values."""
+    try:
+        from src.config import config_source_report
+
+        pool_size = None
+        if client is not None:
+            # `ApiKeyPool.keys` is a property returning a list; stay tolerant of a
+            # method-style implementation too.
+            keys = getattr(getattr(client, "key_pool", None), "keys", None)
+            if callable(keys):
+                keys = keys()
+            if keys is not None:
+                pool_size = len(keys)
+        return config_source_report(pool_size)
+    except Exception:
+        return {}
+
+
 def _bootstrap_docs(workspace_root) -> str:
     """Creates/refreshes the smart context docs at startup. Returns a one-line summary.
 
@@ -666,6 +685,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         model=session.model,
         workspace_path=str(workspace_root),
         quota_info=quota_str,
+        config_info=_config_source_info(client),
     )
     print_info(FORM_INTRO)
     print_info(f"Bağlam dosyaları: {docs_result}")
