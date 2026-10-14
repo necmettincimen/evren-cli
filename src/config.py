@@ -31,19 +31,31 @@ def _manual_load_env(filepath: Path):
         pass
 
 
+# Was an API key already present in the real process environment before any
+# file was read? Captured first because .env and config.json both write into
+# os.environ, which would otherwise hide the true origin of the key.
+_PREEXISTING_KEY_ENV = bool(os.getenv("EVREN_API_KEY") or os.getenv("EVREN_API_KEYS"))
+
 # Search for .env in current working directory, then script root, then user home
+ENV_FILE_CANDIDATES = (
+    Path.cwd() / ".env",
+    Path(__file__).resolve().parents[1] / ".env",
+    Path.home() / ".evren" / ".env",
+)
+
+# The .env file that was actually read (None when none of the candidates exist).
+ENV_FILE_PATH: Path | None = None
+
+
 def _load_environment():
-    env_paths = [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parents[1] / ".env",
-        Path.home() / ".evren" / ".env",
-    ]
-    for p in env_paths:
+    global ENV_FILE_PATH
+    for p in ENV_FILE_CANDIDATES:
         if p.exists():
             if HAVE_DOTENV:
                 load_dotenv(p, override=False)
             else:
                 _manual_load_env(p)
+            ENV_FILE_PATH = p
             break
 
 _load_environment()
@@ -147,8 +159,13 @@ def prompt_for_api_key() -> str | None:
     return key
 
 
+# Number of keys taken from config.json `ApiKeys` at import time (0 = none).
+LEGACY_KEYS_USED = 0
+
+
 def _load_legacy_evren_cli_config():
     """Surfaces ApiKeys / BaseUrl from config.json into env when unset."""
+    global LEGACY_KEYS_USED
     data = load_legacy_config()
     if not data:
         return
@@ -163,9 +180,11 @@ def _load_legacy_evren_cli_config():
     if keys and not os.getenv("EVREN_API_KEYS") and not os.getenv("EVREN_API_KEY"):
         os.environ["EVREN_API_KEYS"] = ",".join(keys)
         os.environ["EVREN_API_KEY"] = keys[0]
+        LEGACY_KEYS_USED = len(keys)
     elif keys and not os.getenv("EVREN_API_KEY"):
         preferred = next((k for k in keys if k.startswith("evren_llm_")), keys[0])
         os.environ["EVREN_API_KEY"] = preferred
+        LEGACY_KEYS_USED = len(keys)
 
     if not os.getenv("EVREN_BASE_URL") and data.get("BaseUrl"):
         os.environ["EVREN_BASE_URL"] = data["BaseUrl"]
@@ -180,6 +199,44 @@ EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "qwen3.8-flash-next")
 EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+
+
+def config_source_report(pool_size: int | None = None) -> dict:
+    """Describes where the CLI read its configuration and API keys from.
+
+    Only file paths, key counts and the key *source* are reported; key values are
+    never included, not even masked, so this output is safe to print or log.
+    """
+    if pool_size is None:
+        try:
+            from src.api_key_pool import parse_api_keys
+
+            pool_size = len(parse_api_keys())
+        except Exception:
+            pool_size = 0
+
+    env_file = str(ENV_FILE_PATH) if ENV_FILE_PATH else ""
+    config_exists = LEGACY_CONFIG_PATH.exists()
+
+    if _PREEXISTING_KEY_ENV:
+        key_source = "süreç ortam değişkeni (EVREN_API_KEY / EVREN_API_KEYS)"
+    elif LEGACY_KEYS_USED:
+        key_source = f"{LEGACY_CONFIG_PATH} (ApiKeys, {LEGACY_KEYS_USED} anahtar)"
+    elif ENV_FILE_PATH:
+        key_source = f"{ENV_FILE_PATH} (EVREN_API_KEY / EVREN_API_KEYS)"
+    else:
+        key_source = "bulunamadı"
+
+    return {
+        "env_file": env_file,
+        "env_candidates": [str(p) for p in ENV_FILE_CANDIDATES],
+        "config_json": str(LEGACY_CONFIG_PATH),
+        "config_json_exists": config_exists,
+        "config_json_keys": LEGACY_KEYS_USED,
+        "key_source": key_source,
+        "key_count": pool_size,
+        "has_key": bool(EVREN_API_KEY) or pool_size > 0,
+    }
 
 
 def get_ui_theme() -> str:

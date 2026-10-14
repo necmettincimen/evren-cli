@@ -98,12 +98,30 @@ def status_spinner(message: str = "İşlem yapılıyor..."):
     return StatusTracker(message)
 
 
-def print_banner(model: str, workspace_path: str, quota_info: str = ""):
-    """Displays the Antigravity-style welcome banner with version and release notes."""
+def print_banner(
+    model: str,
+    workspace_path: str,
+    quota_info: str = "",
+    config_info: dict | None = None,
+):
+    """Displays the Antigravity-style welcome banner with version and release notes.
+
+    `config_info` (from `config.config_source_report()`) shows which .env /
+    config.json the API keys were read from. Only paths and counts are shown;
+    key values never reach the terminal.
+    """
     from src.version import get_version, get_changelog_notes
 
     version = get_version()
     notes = get_changelog_notes(version)
+
+    if config_info is None:
+        try:
+            from src.config import config_source_report
+
+            config_info = config_source_report()
+        except Exception:
+            config_info = None
 
     safe_model = escape(str(model))
     safe_workspace = escape(str(workspace_path))
@@ -120,6 +138,19 @@ def print_banner(model: str, workspace_path: str, quota_info: str = ""):
         )
         if quota_info:
             body += f"\n[bold]Kalan Günlük Kota:[/bold] [cyan]{safe_quota}[/cyan]"
+        if config_info:
+            body += (
+                "\n[bold]API anahtarı:[/bold] [green]"
+                f"{escape(str(config_info.get('key_source', '')))}"
+                f"[/green] [dim]({config_info.get('key_count', 0)} anahtar)[/dim]"
+            )
+            body += (
+                "\n[bold].env:[/bold] [yellow]"
+                f"{escape(str(config_info.get('env_file') or 'yok'))}[/yellow]"
+                "   [bold]config.json:[/bold] [yellow]"
+                f"{escape(str(config_info.get('config_json', '')))}"
+                f"{' (yok)' if not config_info.get('config_json_exists') else ''}[/yellow]"
+            )
         if notes:
             body += f"\n\n[bold cyan]v{version} Sürüm Notları:[/bold cyan]"
             for note in notes:
@@ -140,6 +171,16 @@ def print_banner(model: str, workspace_path: str, quota_info: str = ""):
         print(f"Model: {model} | Workspace: {workspace_path}")
         if quota_info:
             print(f"Kalan Kota: {quota_info}")
+        if config_info:
+            print(
+                f"API anahtarı: {config_info.get('key_source', '')} "
+                f"({config_info.get('key_count', 0)} anahtar)"
+            )
+            print(
+                f".env: {config_info.get('env_file') or 'yok'} | "
+                f"config.json: {config_info.get('config_json', '')}"
+                f"{'' if config_info.get('config_json_exists') else ' (yok)'}"
+            )
         if notes:
             print(f"\nv{version} Sürüm Notları:")
             for note in notes:

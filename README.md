@@ -492,6 +492,22 @@ varsa onlar önceliklidir; yoksa config’teki tüm anahtarlar havuza yüklenir.
 > devam eder. Aktif anahtar `/keys next` ile sabitlenir (otomatik round-robin yok;
 > kota/auth failover yine sıradaki anahtara geçer).
 
+### Açılışta Kaynak Gösterimi
+
+CLI her açıldığında karşılama panelinde **çalışma alanının yanında** API anahtarlarının
+hangi kaynaktan okunduğunu ve okunan dosyaların tam yolunu gösterir:
+
+```text
+Model: qwen3.8-flash-next   Çalışma Alanı: D:\Github\evren-cli
+API anahtarı: D:\Github\evren-cli\.env (EVREN_API_KEY / EVREN_API_KEYS) (3 anahtar)
+.env: D:\Github\evren-cli\.env   config.json: C:\Users\msi\.evren-cli\config.json
+```
+
+Öncelik sırası (ilk bulunan kazanır): **süreç ortam değişkenleri** → **`.env`**
+(`.env` → depo kökü → `~/.evren/.env`) → **`~/.evren-cli/config.json`** `ApiKeys`.
+Panel yalnızca **dosya yolu, kaynak adı ve anahtar adedi** basar; anahtar değerleri
+maskelenmiş olarak bile yazdırılmaz ve loglara taşınmaz.
+
 ---
 
 ## 🔖 Sürüm Yönetimi
