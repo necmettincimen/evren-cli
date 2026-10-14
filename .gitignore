@@ -34,6 +34,18 @@ wheels/
 .evren/logs/
 .evren/history.json
 
+# EVREN CLI generated context files (regenerated on every run)
+# Yerel mutlak yol, git dalı ve oturum kaydı içerdikleri için takip edilmez;
+# bilinçli olarak depoya almak isterseniz: git add -f agent.md
+/agent.md
+/evren-agent.md
+/evren-changelog.md
+/skills.md
+/commands.md
+/lessons.md
+/context/
+/logs/lessons_archive.md
+
 # IDEs
 .vscode/
 .idea/

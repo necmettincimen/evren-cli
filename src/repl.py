@@ -47,6 +47,42 @@ from src.ui import (
 )
 
 
+def _docs_context(workspace_root) -> str:
+    """Short project brief appended to the prompt-preparation call (may be empty)."""
+    try:
+        from src.project_docs import docs_digest
+
+        digest = docs_digest(workspace_root)
+    except Exception:
+        return ""
+    if not digest:
+        return ""
+    return (
+        "\n\nPROJE ÖZETİ (agent.md/changelog.md'den; bayat olabilir, uygulamadan önce "
+        "doğrula. Netleştirme sorularını ve alan önerilerini bu projeye göre üret;\n"
+        "bu özetten okunabilen teknik ayrıntılar için kullanıcıya soru sorma):\n"
+        + digest
+    )
+
+
+def _bootstrap_docs(workspace_root) -> str:
+    """Creates/refreshes the smart context docs at startup. Returns a one-line summary.
+
+    Never raises: a docs failure must not stop the CLI from starting.
+    """
+    try:
+        from src.cli_home import cli_docs_dir, ensure_cli_docs
+        from src.project_docs import ensure_project_docs
+
+        result = ensure_project_docs(workspace_root)
+        ensure_cli_docs()
+        if result.disabled:
+            return result.summary()
+        return f"{result.summary()} | CLI bağlamı: {cli_docs_dir()}"
+    except Exception as e:
+        return f"bağlam dosyaları atlandı: {e}"
+
+
 def _read_line(pt_session, label: str) -> str:
     color = ""
     if "\n" in label:
@@ -106,7 +142,7 @@ def _collect_frame(session: AgentSession, pt_session, previous=None):
         with status_spinner(label):
             return request_frame_guidance(
                 session.client, session.model, frame, clarify,
-                execution_context_block(session.workspace_root),
+                execution_context_block(session.workspace_root) + _docs_context(session.workspace_root),
             )
 
     return collect_guided_prompt_frame(
@@ -305,6 +341,7 @@ HELP_TEXT = """
   [green]/models[/green]               EVREN API'deki tüm modelleri çeker ve listeler
   [green]/quota[/green]                Tüm API anahtarlarının kalan/limit/reset kotasını gösterir
   [green]/tokens[/green]               Bağlam/token bütçesi raporunu gösterir
+  [green]/docs [alt komut][/green]      agent.md/changelog.md durumu; refresh|unmark|path
   [green]/keys[/green]                 API anahtar havuzunu listeler (maskeli) ve yönetir
   [green]/keys add/remove[/green]      Anahtar ekler/çıkarır (~/.evren-cli/config.json)
   [green]/keys next[/green]            Aktif anahtarı sabitleyerek sıradakine geçer
@@ -358,6 +395,63 @@ HELP_TEXT = """
 [bold]Serbest istek:[/bold]
   Kalıbı boş geçince yazdığın metin eskisi gibi tek prompt olarak gider.
 """
+
+
+def _handle_docs_command(arg: str, session, workspace_root) -> None:
+    """`/docs [status|refresh|unmark|path]` — smart context document control."""
+    from src.project_docs import docs_status, ensure_project_docs, unmark_docs
+
+    sub = (arg or "").strip().lower()
+    if sub in ("", "status"):
+        status = docs_status(workspace_root)
+        print_info("Akıllı bağlam dosyaları:")
+        print(f"  • Çalışma alanı   : {status['root']}")
+        print(f"  • Etkin           : {'evet' if status['enabled'] else 'hayır'}"
+              + (f" ({status['reason']})" if status["reason"] else ""))
+        print(f"  • Ajan belgesi    : {status['agent_doc'] or 'yok'}")
+        if status["agent_sections"]:
+            print(f"  • Yönetilen blok  : {', '.join(status['agent_sections'])}")
+        print(f"  • Changelog       : {status['changelog'] or 'yok'}"
+              + (f" ({status['changelog_entries']} giriş)" if status["changelog"] else ""))
+        print(f"  • Durum dosyası   : {status['state'] or 'yok'}")
+        print(f"  • Token bütçesi   : {status['token_budget']}")
+        print("\nKomutlar: /docs refresh [--adopt] | /docs unmark | /docs path")
+        return
+
+    if sub in ("path", "dir"):
+        from src.cli_home import cli_docs_dir
+
+        print(f"Proje belgeleri : {workspace_root}")
+        print(f"CLI belgeleri   : {cli_docs_dir()}")
+        return
+
+    if sub.startswith("refresh"):
+        adopt = "--adopt" in sub
+        if not prompt_confirm(
+            "agent.md yönetilen blokları ve changelog başlığı yenilensin mi?",
+            default=True,
+        ):
+            print_info("Vazgeçildi.")
+            return
+        result = ensure_project_docs(workspace_root, refresh=True, adopt=adopt)
+        session.refresh_context()
+        print_success(result.summary())
+        return
+
+    if sub == "unmark":
+        print_warning(
+            "Yönetilen bloklar kaldırılır; elle yazdığınız metin kalır. "
+            "Sonraki çalıştırmada CLI bu dosyalara dokunmaz."
+        )
+        if not prompt_confirm("Yönetilen bloklar kaldırılsın mı?", default=False):
+            print_info("Vazgeçildi.")
+            return
+        result = unmark_docs(workspace_root)
+        session.refresh_context()
+        print_success(result.summary() if (result.updated or result.notes) else "Belge bulunamadı.")
+        return
+
+    print_warning("Kullanım: /docs [status|refresh [--adopt]|unmark|path]")
 
 
 def _handle_keys_command(arg: str, client: EvrenClient):
@@ -508,6 +602,7 @@ EVREN CLI Komutları:
   /keys next    - Sıradaki API anahtarına geç
   /terms        - Şartları kontrol et / kabul et
   /skills       - Mühendislik becerilerini listele
+  /docs         - agent.md / changelog.md bağlam dosyaları
   /apply <b>    - Bir beceriyi uygula
   /diagnose     - Arıza triyajı çalıştır
   /template     - Çıktı şablonunu doldur
@@ -536,6 +631,10 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
     workspace_root = get_workspace_dir(workspace_path)
     evren_dir = get_evren_dir(workspace_root)
     evren_dir.mkdir(parents=True, exist_ok=True)
+
+    # Smart context docs: create/refresh agent.md + changelog.md (project) and the
+    # CLI's own skills/lessons/commands files before the agent prompt is composed.
+    docs_result = _bootstrap_docs(workspace_root)
 
     client = EvrenClient(default_model=initial_model)
 
@@ -569,6 +668,7 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         quota_info=quota_str,
     )
     print_info(FORM_INTRO)
+    print_info(f"Bağlam dosyaları: {docs_result}")
     from src.workflow_state import checkpoint_path
     if checkpoint_path(workspace_root).exists():
         print_info("Kalıcı checkpoint bulundu. İncelemek için /checkpoint, onaylı yükleme için /continue.")
@@ -754,6 +854,9 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                         u = rep["last_usage"]
                         print(f"  • Son sunucu kullanımı : prompt={u['prompt_tokens']}, "
                               f"completion={u['completion_tokens']}, total={u['total_tokens']}")
+
+                elif cmd == "/docs":
+                    _handle_docs_command(arg, session, workspace_root)
 
                 elif cmd == "/skills":
                     from src.skills import list_skills, categories

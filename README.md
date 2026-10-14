@@ -253,6 +253,7 @@ evren --version
 | `/quota` | Günlük kalan token kotasını gösterir |
 | `/terms` | Kullanım şartlarının durumunu denetler ve onaylatır |
 | `/skills [kategori]` | Kullanılabilir mühendislik becerilerini listeler |
+| `/docs [alt komut]` | `agent.md` / `changelog.md` bağlam dosyaları: `status`\|`refresh [--adopt]`\|`unmark`\|`path` |
 | `/apply <beceri>` | Bir beceriyi mevcut göreve uygular (örn: `/apply root-cause-debug`) |
 | `/diagnose [ad]` | Arıza triyajı çalıştırır (örn: `/diagnose build-failure`) |
 | `/template [ad]` | Çıktı şablonunu doldurur (örn: `/template adr`) |
@@ -372,6 +373,46 @@ kalıcı bir geliştirme ortağına dönüştürür:
   yapılandırılmış triyaj; belirtiye göre otomatik eşleştirme.
 - **Çıktı şablonları (`/template`):** Postmortem, ADR, PR açıklaması, sürüm notları,
   runbook ve hata raporu iskeletleri; ajan bunları eksiksiz doldurur.
+
+---
+
+## 🗂️ Akıllı Bağlam Dosyaları (`agent.md` / `changelog.md` / `skills.md`)
+
+CLI her çalıştığında iki katmanda bağlam dosyası üretir ve **prompt API'ye gitmeden önce**
+bunları okuyup ajan sistem istemine ekler; böylece netleştirme soruları ve adım önerileri
+projeyi bilerek üretilir.
+
+| Dosya | Konum | İçerik |
+|---|---|---|
+| `agent.md` | çalışılan proje dizini | ortam, proje haritası, konvansiyonlar, son görev |
+| `changelog.md` | çalışılan proje dizini | oturum/görev bazlı **append-only** değişiklik günlüğü |
+| `skills.md` | CLI ana dizini | beceri kataloğu + `## Özel Beceriler` (yalnızca size ait) |
+| `lessons.md` | CLI ana dizini | oturumlar arası kısa dersler (en yeni 40, eskiler arşivlenir) |
+| `commands.md` | CLI ana dizini | slash komut ve alt komut referansı |
+
+**Güvenlik sözleşmesi:** CLI yalnızca `<!-- evren:managed:... -->` işaretli blokları yazar ve
+içerik gerçekten değiştiyse yazar; ikinci çalıştırmada `git status` temiz kalır. Sizin
+yazdığınız bölümler korunur, yönetilen blok olmayan bir dosyaya hiç dokunulmaz.
+Windows/NTFS büyük/küçük harf duyarsız olduğu için mevcut `AGENTS.md` veya `CHANGELOG.md`
+varsa CLI **onları asla ezmez**; `evren-agent.md` / `evren-changelog.md` kullanır.
+Her yazım `.evren/backups/` altına yedeklenir (`evren rollback <dosya>`), üretilen içerik sır
+maskelemesinden (`redact_text`) geçer.
+
+```text
+evren docs status              # durum, yönetilen bloklar, token bütçesi
+evren docs refresh [--adopt]   # blokları yeniden üret (--adopt: işaretli olmayan dosyaya ekle)
+evren docs unmark              # yönetilen blokları kaldır (elle metin kalır)
+evren docs path                # proje ve CLI belge dizinleri
+```
+
+| Çevre değişkeni | Varsayılan | Etkisi |
+|---|---|---|
+| `EVREN_AUTO_DOCS` | `true` | `false` → tüm bağlam dosyası katmanı kapalı |
+| `EVREN_DOCS_TOKENS` | `3500` | sistem istemine eklenecek bağlamın token tavanı (`0` = enjeksiyon kapalı) |
+| `EVREN_CLI_HOME` | otomatik | CLI belge dizinini zorla (salt-okunur kurulumlarda gerekli) |
+
+Salt-okuma kipleri sözleşmesi gereği `ask` ve `plan` modunda hiçbir bağlam dosyası
+yazılmaz; dosyalar yalnızca okunur.
 
 ---
 

@@ -177,6 +177,17 @@ def cmd_agent(args):
     frame, prompt = loaded
 
     workspace = get_workspace_dir(args.workspace)
+    # Smart context docs must exist before the system prompt is composed.
+    try:
+        from src.cli_home import ensure_cli_docs
+        from src.project_docs import ensure_project_docs
+
+        docs_result = ensure_project_docs(workspace)
+        ensure_cli_docs()
+        print_info(f"Bağlam dosyaları: {docs_result.summary()}")
+    except Exception as e:
+        print_warning(f"Bağlam dosyaları atlandı: {e}")
+
     client = EvrenClient(default_model=args.model)
     session = AgentSession(client=client, workspace_root=workspace, model=args.model)
 
@@ -186,6 +197,62 @@ def cmd_agent(args):
     else:
         print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(frame)}")
         session.run_step(session.apply_frame(frame, extra=prompt), max_steps=args.max_steps)
+
+
+def cmd_docs(args):
+    """Inspects or refreshes the smart context documents (agent.md / changelog.md)."""
+    from src.cli_home import cli_docs_dir, ensure_cli_docs
+    from src.project_docs import docs_status, ensure_project_docs, unmark_docs
+
+    workspace = get_workspace_dir(getattr(args, "workspace", None))
+    action = getattr(args, "docs_action", None) or "status"
+
+    if action == "path":
+        print(f"Proje belgeleri : {workspace}")
+        print(f"CLI belgeleri   : {cli_docs_dir()}")
+        return
+
+    if action == "refresh":
+        result = ensure_project_docs(
+            workspace, refresh=True, adopt=bool(getattr(args, "adopt", False))
+        )
+        ensure_cli_docs()
+        print_success(result.summary())
+        return
+
+    if action == "unmark":
+        if not getattr(args, "yes", False):
+            from src.ui import prompt_confirm
+
+            print_warning(
+                "Yönetilen bloklar kaldırılır; elle yazdığınız metin kalır. "
+                "Sonraki çalıştırmada CLI bu dosyalara dokunmaz."
+            )
+            if not prompt_confirm("Yönetilen bloklar kaldırılsın mı?", default=False):
+                print_info("Vazgeçildi.")
+                return
+        result = unmark_docs(workspace)
+        print_success(
+            result.summary() if (result.updated or result.notes) else "Belge bulunamadı."
+        )
+        return
+
+    status = docs_status(workspace)
+    print_info("Akıllı bağlam dosyaları:")
+    print(f"  • Çalışma alanı : {status['root']}")
+    print(
+        f"  • Etkin         : {'evet' if status['enabled'] else 'hayır'}"
+        + (f" ({status['reason']})" if status["reason"] else "")
+    )
+    print(f"  • Ajan belgesi  : {status['agent_doc'] or 'yok'}")
+    if status["agent_sections"]:
+        print(f"  • Yönetilen blok: {', '.join(status['agent_sections'])}")
+    print(
+        f"  • Changelog     : {status['changelog'] or 'yok'}"
+        + (f" ({status['changelog_entries']} giriş)" if status["changelog"] else "")
+    )
+    print(f"  • CLI belgeleri : {cli_docs_dir()}")
+    print(f"  • Token bütçesi : {status['token_budget']}")
 
 
 def cmd_scan(args):
@@ -400,6 +467,32 @@ def main():
     p_rollback = subparsers.add_parser("rollback", help="Değiştirilen bir dosyayı yedeğinden geri yükle")
     p_rollback.add_argument("file", help="Geri yüklenecek dosya yolu")
     p_rollback.set_defaults(func=cmd_rollback)
+
+    # docs command (smart context documents)
+    p_docs = subparsers.add_parser(
+        "docs", help="agent.md / changelog.md bağlam dosyalarını yönet"
+    )
+    p_docs.add_argument(
+        "docs_action",
+        nargs="?",
+        default="status",
+        choices=["status", "refresh", "unmark", "path"],
+        help="İşlem (varsayılan: status)",
+    )
+    p_docs.add_argument(
+        "--workspace", "-w", default=None, help="Hedef proje dizini"
+    )
+    p_docs.add_argument(
+        "--adopt",
+        action="store_true",
+        help="Yönetilen blokları olmayan bir agent.md dosyasına ekle",
+    )
+    p_docs.add_argument(
+        "--yes",
+        action="store_true",
+        help="Onay sormadan uygula (yalnızca unmark için)",
+    )
+    p_docs.set_defaults(func=cmd_docs)
 
     # ssh command
     p_ssh = subparsers.add_parser("ssh", help="Kayıtlı SSH host'larını yönet ve kullan")
