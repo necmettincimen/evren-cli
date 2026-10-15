@@ -70,6 +70,14 @@ class TestToolGateway(unittest.TestCase):
         ok, _ = check_tool_allowed("create_plan", {}, AgentMode.ASK)
         self.assertFalse(ok)
 
+    def test_web_fetch_allowed_in_ask_and_plan(self):
+        # web_fetch is a read-only tool: must be usable in every mode.
+        for mode in (AgentMode.ASK, AgentMode.PLAN, AgentMode.NORMAL):
+            ok, reason = check_tool_allowed(
+                "web_fetch", {"url": "https://example.com"}, mode
+            )
+            self.assertTrue(ok, f"{mode}: {reason}")
+
     def test_non_string_command_does_not_crash(self):
         # Models may send command as a non-string; must not raise AttributeError.
         ok, _ = is_read_only_command(None)

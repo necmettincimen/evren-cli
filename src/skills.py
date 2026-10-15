@@ -6,12 +6,15 @@ reusable engineering frameworks/recipes. Each skill carries a short structured
 prompt that is injected into the agent turn when applied, so the model follows
 a proven procedure instead of improvising.
 
-Skills are pure data (no I/O), so they are cheap to list and easy to test.
+Built-in skills are pure data (no I/O). In addition, users can define their own
+skills as markdown files with YAML-style front-matter under `<cli_home>/skills/`
+(see `load_user_skills`); a user skill shadows a built-in with the same name.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class Skill:
     description: str
     when_to_use: str
     steps: tuple[str, ...] = field(default_factory=tuple)
+    source: str = "builtin"  # "builtin" | "user"
 
     def prompt_block(self, context: str = "") -> str:
         """Builds the instruction block injected into the agent turn."""
@@ -168,9 +172,160 @@ _register(Skill(
 ))
 
 
+# --------------------------------------------------------------------------- #
+# User-defined skills (markdown files with front-matter under <cli_home>/skills)
+# --------------------------------------------------------------------------- #
+
+USER_SKILLS_DIRNAME = "skills"
+
+# Module-level cache of loaded user skills; rebuilt by reload_user_skills().
+USER_SKILLS: dict[str, Skill] = {}
+
+# Warnings collected during the last user-skill load (skipped/broken files).
+USER_SKILL_WARNINGS: list[str] = []
+
+
+def user_skills_dir(root: Path | None = None) -> Path:
+    """Returns the directory holding user-defined skill files (never raises)."""
+    if root is not None:
+        return Path(root) / USER_SKILLS_DIRNAME
+    try:
+        from src.cli_home import cli_docs_dir
+
+        base = cli_docs_dir()
+    except Exception:  # pragma: no cover - cli_home must always import
+        base = Path.home() / ".evren" / "cli_home"
+    return base / USER_SKILLS_DIRNAME
+
+
+def _normalize_skill_name(raw: str) -> str:
+    """Lowercases and turns spaces/underscores into hyphens."""
+    return " ".join(raw.strip().lower().replace("_", "-").replace("-", " ").split()).replace(" ", "-")
+
+
+def _parse_skill_file(path: Path) -> tuple[Skill | None, str]:
+    """Parses one skill markdown file.
+
+    Format: optional `---` front-matter with `key: value` lines
+    (name, title, category, description, when_to_use), then the body whose
+    list lines (`- step` / `1. step`) become the skill steps.
+
+    Returns (skill, warning); exactly one of them is set. A file without any
+    usable content is skipped with a warning.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        return None, f"{path.name}: okunamadı ({e})"
+
+    lines = text.replace("\r\n", "\n").split("\n")
+    meta: dict[str, str] = {}
+    body_start = 0
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                for raw in lines[1:i]:
+                    raw = raw.strip()
+                    if not raw or ":" not in raw or raw.startswith("#"):
+                        continue
+                    key, _, value = raw.partition(":")
+                    meta[key.strip().lower()] = value.strip().strip("\"'")
+                body_start = i + 1
+                break
+
+    steps: list[str] = []
+    for raw in lines[body_start:]:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith(("- ", "* ")):
+            steps.append(stripped[2:].strip())
+        elif len(stripped) > 2 and stripped[0].isdigit():
+            dot = stripped.find(".")
+            paren = stripped.find(")")
+            cut = min(x for x in (dot, paren) if x != -1)
+            step = stripped[cut + 1:].strip()
+            if step:
+                steps.append(step)
+        else:
+            steps.append(stripped)
+
+    name = _normalize_skill_name(meta.get("name", "")) or _normalize_skill_name(path.stem)
+    if not name:
+        return None, f"{path.name}: beceri adı türetilemedi, atlandı"
+    if not steps and not meta.get("description"):
+        return None, f"{path.name}: adım veya açıklama yok, atlandı"
+    title = meta.get("title") or name
+    return (
+        Skill(
+            name=name,
+            title=title,
+            category=(meta.get("category") or "user").strip() or "user",
+            description=meta.get("description", ""),
+            when_to_use=meta.get("when_to_use", ""),
+            steps=tuple(steps),
+            source="user",
+        ),
+        "",
+    )
+
+
+def load_user_skills(directory: Path | None = None) -> tuple[list[Skill], list[str]]:
+    """Loads all user skill files from `directory` (default: <cli_home>/skills).
+
+    Broken or empty files are skipped with a warning; loading never raises.
+    Returns (skills, warnings).
+    """
+    skills: list[Skill] = []
+    warnings: list[str] = []
+    directory = Path(directory) if directory is not None else user_skills_dir()
+    try:
+        files = sorted(directory.glob("*.md"))
+    except OSError as e:  # pragma: no cover - unreadable directory
+        return [], [f"{directory}: okunamadı ({e})"]
+    for path in files:
+        skill, warning = _parse_skill_file(path)
+        if skill is None:
+            warnings.append(warning)
+        else:
+            skills.append(skill)
+    return skills, warnings
+
+
+_USER_SKILLS_LOADED = False
+
+
+def reload_user_skills(directory: Path | None = None) -> list[Skill]:
+    """Rebuilds the module-level USER_SKILLS cache and returns its values."""
+    global _USER_SKILLS_LOADED
+    _USER_SKILLS_LOADED = True
+    skills, warnings = load_user_skills(directory)
+    USER_SKILLS.clear()
+    USER_SKILLS.update({s.name: s for s in skills})
+    USER_SKILL_WARNINGS.clear()
+    USER_SKILL_WARNINGS.extend(warnings)
+    return list(USER_SKILLS.values())
+
+
+def _merged_skills() -> dict[str, Skill]:
+    """Built-ins merged with user skills (a user skill shadows the same name).
+
+    User skills load lazily on first use, so `/skills` and `/skill` work no
+    matter which part of the CLI touched the catalog first.
+    """
+    if not _USER_SKILLS_LOADED:
+        try:
+            reload_user_skills()
+        except Exception:  # pragma: no cover - loading never raises by design
+            pass
+    merged = dict(SKILLS)
+    merged.update(USER_SKILLS)
+    return merged
+
+
 def list_skills(category: str | None = None) -> list[Skill]:
-    """Returns skills, optionally filtered by category (case-insensitive)."""
-    items = list(SKILLS.values())
+    """Returns built-in + user skills, optionally filtered by category."""
+    items = list(_merged_skills().values())
     if category:
         cat = category.strip().lower()
         items = [s for s in items if s.category.lower() == cat]
@@ -181,13 +336,14 @@ def get_skill(name: str) -> Skill | None:
     """Resolves a skill by exact name, then by unique normalized match."""
     if not name:
         return None
+    merged = _merged_skills()
     key = name.strip().lower()
-    if key in SKILLS:
-        return SKILLS[key]
+    if key in merged:
+        return merged[key]
     # Normalized fallback: match on hyphen/space-insensitive name or title.
     norm = key.replace(" ", "-").replace("_", "-")
     matches = [
-        s for s in SKILLS.values()
+        s for s in merged.values()
         if s.name == norm or s.title.lower() == key
     ]
     if len(matches) == 1:
@@ -197,4 +353,4 @@ def get_skill(name: str) -> Skill | None:
 
 def categories() -> list[str]:
     """Returns the sorted list of distinct skill categories."""
-    return sorted({s.category for s in SKILLS.values()})
+    return sorted({s.category for s in _merged_skills().values()})

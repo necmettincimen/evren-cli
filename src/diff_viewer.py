@@ -25,6 +25,23 @@ def generate_unified_diff(
     return "".join(diff)
 
 
+# Prefix of the "edit is already in the file" outcome (not a failure).
+ALREADY_APPLIED = "ZATEN UYGULANMIŞ"
+
+
+def _already_applied(original_text: str, target_snippet: str, replacement_snippet: str) -> bool:
+    """True when the target is gone but the replacement is already present.
+
+    Models often re-send an edit they applied a turn earlier; the plain "not
+    found" error made them re-read the file and retry (3 wasted steps seen).
+    """
+    replacement = replacement_snippet.replace("\r\n", "\n").strip()
+    if not replacement:
+        return False
+    text = original_text.replace("\r\n", "\n")
+    return replacement in text and target_snippet.replace("\r\n", "\n").strip() not in text
+
+
 def _contextual_not_found_error(original_text: str, target_snippet: str) -> str:
     """Builds a helpful error showing the closest matching region.
 
@@ -125,6 +142,11 @@ def apply_replacement(
             return new_norm.replace("\n", "\r\n"), True, ""
         return new_norm, True, ""
 
+    if _already_applied(original_text, target_snippet, replacement_snippet):
+        return original_text, False, (
+            f"{ALREADY_APPLIED}: replacement_snippet dosyada zaten var, hedef metin artık yok. "
+            "Bu değişiklik daha önce uygulanmış; tekrar deneme, sıradaki işe geç."
+        )
     return original_text, False, _contextual_not_found_error(original_text, target_snippet)
 
 
@@ -141,6 +163,7 @@ def apply_edits(
         return original_text, False, "Düzenleme listesi boş olamaz."
 
     current = original_text
+    already: list[int] = []
     for idx, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
             return (
@@ -163,8 +186,17 @@ def apply_edits(
         new_text, ok, err = apply_replacement(
             current, target, replacement, replace_all=replace_all
         )
+        if not ok and err.startswith(ALREADY_APPLIED):
+            already.append(idx)
+            continue
         if not ok:
             return original_text, False, f"Edit #{idx} başarısız: {err}"
         current = new_text
 
+    if already and current == original_text:
+        numbers = ", ".join(f"#{n}" for n in already)
+        return original_text, False, (
+            f"{ALREADY_APPLIED}: düzenleme {numbers} dosyada zaten uygulanmış; dosya değişmedi. "
+            "Tekrar deneme, sıradaki işe geç."
+        )
     return current, True, ""

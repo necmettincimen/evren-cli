@@ -417,7 +417,7 @@ evren docs path                # proje ve CLI belge dizinleri
 | `EVREN_EXECUTOR_MODEL` | oturum modeli | planı uygulayan model |
 | `EVREN_EXECUTOR_THINKING` | `false` | normal kipte uygulayıcı düşünsün mü (`false` = her görev `thinking: false`; plan/ask kipi düşünür) |
 | `EVREN_ROUTE_MIN_TOKENS` | `800` | planlayıcıya geçiş için tahmini brief token eşiği |
-| `EVREN_PLANNER_STEPS` | `3` | planlayıcının salt-okuma keşif adım tavanı |
+| `EVREN_PLANNER_STEPS` | `4` | planlayıcının salt-okuma keşif adım tavanı |
 | `EVREN_CLARIFY_ROUNDS` | `0` | görev öncesi netleştirme çağrısı sayısı (0-4); `0` = yok, ajan gerekirse `ask_user` ile sorar |
 | `EVREN_KEY_MIN_REMAINING` | `50000` | başlangıçta günlük kalan kotası bunun altındaki anahtarlar park edilir; en dolu anahtar seçilir |
 | `EVREN_FORM_FIELDS` | `false` | Brief'ten sonra Rol/Çerçeve/Kısıt/Çıktı alanları tek tek sorulsun mu |

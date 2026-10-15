@@ -64,7 +64,7 @@ class EnsureCliDocsTest(_TempHomeTest):
         cli_home.ensure_cli_docs(self.home)
         catalog = extract_sections(self.read("skills.md")).get("catalog", "")
         self.assertIn("root-cause-debug", catalog)
-        self.assertIn("| Beceri | Kategori | Ne zaman |", catalog)
+        self.assertIn("| Beceri | Kategori | Kaynak | Ne zaman |", catalog)
 
     def test_second_run_is_idempotent(self):
         cli_home.ensure_cli_docs(self.home)

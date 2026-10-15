@@ -349,8 +349,8 @@ def route_min_tokens() -> int:
 
 
 def planner_max_steps() -> int:
-    """Planlayıcının salt-okuma keşif adım tavanı (EVREN_PLANNER_STEPS, 3)."""
-    return _env_int("EVREN_PLANNER_STEPS", 3, 1, 20)
+    """Planlayıcının salt-okuma keşif adım tavanı (EVREN_PLANNER_STEPS, 4)."""
+    return _env_int("EVREN_PLANNER_STEPS", 4, 1, 20)
 
 
 def executor_thinking() -> bool:
@@ -429,9 +429,15 @@ def get_evren_dir(workspace_root: Path | None = None) -> Path:
 
 def execution_context_block(workspace_root: Path) -> str:
     """Describes the actual local command environment, without probing hosts."""
+    from datetime import date
+
     shell = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
+    # Date only (no time): the block is part of the system message, which must
+    # stay identical between steps for the prompt cache. The model used to run
+    # `date /t` just to date a changelog entry.
     return (
         "YEREL ÇALIŞTIRMA BAĞLAMI\n"
+        f"Bugünün tarihi: {date.today().isoformat()}\n"
         f"İşletim sistemi: {platform.system()}\n"
         f"Çalışma alanı ve run_command çalışma dizini: {workspace_root.resolve()}\n"
         f"run_command kabuğu: {shell}\n"
@@ -440,6 +446,71 @@ def execution_context_block(workspace_root: Path) -> str:
         "aksi halde komutu bu kabuğun sözdizimiyle yaz.\n"
         "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir."
     )
+
+
+def _git_run(args: list[str], cwd: Path, timeout: float = 2.0) -> str | None:
+    """Runs a git command in cwd; returns stripped stdout, or None on any failure.
+
+    Silently yields None when git is missing, the directory is not a repo,
+    the command fails, or the 2-second timeout expires.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip()
+
+
+def git_context_block(workspace_root: Path, timeout: float = 2.0) -> str:
+    """Builds a one-shot git summary block for the session system prompt.
+
+    Returns "" (silently skipped) when git is not installed or the workspace
+    is not inside a work tree. Every git call is capped at `timeout` seconds.
+    The result is intended to be computed once per session and kept stable
+    so the system message does not change between agent steps (server cache).
+    """
+    if _git_run(["rev-parse", "--is-inside-work-tree"], workspace_root, timeout) != "true":
+        return ""
+
+    branch = _git_run(["branch", "--show-current"], workspace_root, timeout) or ""
+    default_branch = ""
+    head_ref = _git_run(
+        ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], workspace_root, timeout
+    )
+    if head_ref:
+        default_branch = head_ref.split("/", 1)[-1]
+    if not default_branch:
+        for candidate in ("main", "master"):
+            if _git_run(["rev-parse", "--verify", f"refs/heads/{candidate}"], workspace_root, timeout):
+                default_branch = candidate
+                break
+
+    lines = ["GIT DURUMU (oturum başında alındı, sabittir)"]
+    lines.append(f"Dal: {branch or '(ayrık HEAD)'}")
+    if default_branch:
+        lines.append(f"Ana dal tahmini: {default_branch}")
+    log = _git_run(["log", "-3", "--pretty=format:%h %s"], workspace_root, timeout)
+    if log:
+        lines.append("Son commit'ler:")
+        lines.extend(f"  {line}" for line in log.splitlines())
+    status = _git_run(["status", "--porcelain"], workspace_root, timeout)
+    if status is not None:
+        entries = [line for line in status.splitlines() if line.strip()]
+        untracked = sum(1 for line in entries if line.startswith("??"))
+        lines.append(
+            f"Değişen dosya: {len(entries) - untracked} | İzlenmeyen dosya: {untracked}"
+        )
+    return "\n".join(lines)
 
 
 def get_backup_dir(workspace_root: Path | None = None) -> Path:
