@@ -2,6 +2,7 @@ import unittest
 import tempfile
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 from src.tools import (
     tool_view_file,
@@ -86,6 +87,29 @@ class TestTools(unittest.TestCase):
             auto_approve=True,
         )
         self.assertIn("BAŞARILI", res)
+
+    def test_web_fetch_schema_present(self):
+        from src.tools import TOOLS_SCHEMA
+
+        entry = next(
+            (t for t in TOOLS_SCHEMA if t.get("function", {}).get("name") == "web_fetch"), None
+        )
+        self.assertIsNotNone(entry)
+        params = entry["function"]["parameters"]
+        self.assertIn("url", params["properties"])
+        self.assertEqual(params["required"], ["url"])
+
+    def test_web_fetch_dispatch_mocked(self):
+        # Dispatch must route to tool_web_fetch without touching the network.
+        with patch("src.tools.tool_web_fetch", return_value="SAHTE ÇIKTI") as m:
+            res = execute_tool_call("web_fetch", {"url": "https://example.com"})
+        self.assertEqual(res, "SAHTE ÇIKTI")
+        m.assert_called_once_with(url="https://example.com", timeout=None, max_chars=None)
+
+    def test_web_fetch_invalid_url_via_dispatch(self):
+        # Real fetch_url path, but no network: scheme validation rejects it first.
+        res = execute_tool_call("web_fetch", {"url": "ftp://example.com/x"})
+        self.assertTrue(res.startswith("HATA:"))
 
 
 if __name__ == "__main__":

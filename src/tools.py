@@ -192,8 +192,51 @@ TOOLS_SCHEMA = [
                         "type": "boolean",
                         "description": "true: komut PowerShell betiği olarak çalışır (elle powershell -Command sarmalama/tırnak gerekmez). Varsayılan false: sistem kabuğu (Windows'ta cmd.exe).",
                     },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "true: komut arka planda başlar ve hemen bir id (örn: bg-1) döner; beklemez. Çıktıyı/durumu check_background ile artımlı oku, gerekirse stop_background ile ağacı öldür.",
+                        "default": False,
+                    },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_background",
+            "description": "run_command(run_in_background=true) ile başlatılan arka plan komutunun son okumadan bu yana gelen çıktısını ve durumunu (çalışıyor / bitti + çıkış kodu) döndürür. Çıktı artımlıdır. Süreç çalışıyorsa bitmesini varsayılan 20 sn bekler (bitince hemen döner); bitmesini bekliyorsan art arda hızlı çağrı yapma, daha uzun wait_seconds ver.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "run_command'ın döndürdüğü arka plan kimliği (örn: bg-1)",
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Bitmesi için en fazla kaç saniye beklensin (varsayılan 20, 0 = hemen bak, en fazla 300).",
+                    },
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_background",
+            "description": "run_command(run_in_background=true) ile başlatılan arka plan komutunu ve tüm süreç ağacını sonlandırır. CLI kapanırken çalışan tüm arka plan süreçleri zaten otomatik temizlenir.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Sonlandırılacak arka plan kimliği (örn: bg-1)",
+                    },
+                },
+                "required": ["id"],
             },
         },
     },
@@ -333,6 +376,81 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_write",
+            "description": "Çok adımlı işlerde yapılacaklar listesini tutar. Her güncellemede TÜM listeyi (içerik + durum: pending/in_progress/completed) yeniden gönder; liste terminalde kısa checklist olarak gösterilir ve kullanıcı /todos ile görebilir. Aynı anda yalnızca bir madde in_progress olabilir; iş bitince completed yap.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "Listemin tamamı (her güncellemede tam liste). Boş dizi listeyi temizler.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "Kısa görev açıklaması"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                    "default": "pending",
+                                },
+                            },
+                            "required": ["content"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Verilen http/https URL'yi GET ile indirir. HTML'i okunur düz metne çevirir (script/style/nav atılır, başlıklar ve linkler korunur); JSON ve düz metni olduğu gibi döndürür. Salt-okuma aracıdır; çıktı makul boyutta kırpılır, zaman aşımı ve boyut sınırı vardır.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "İndirilecek http/https adresi (örn: https://example.com/docs)",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "İstek zaman aşımı saniye (varsayılan 15, en fazla 60).",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Döndürülecek azami karakter sayısı (varsayılan 20000).",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate",
+            "description": "Bağımsız bir araştırma alt görevini temiz bağlamlı bir alt oturuma devreder (Task benzeri). Alt ajan salt-okuma araçlarıyla az adımda çalışır; ana geçmişe yalnızca alt ajanın kısa özeti döner. Yalnızca normal modda; alt ajan delegate veya yazma aracı kullanamaz.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Alt ajana verilecek bağımsız görev (örn: 'X nerede tanımlı, nasıl kullanılıyor'). Kendi başına anlaşılır olmalı; ana konuşma bağlamı taşınmaz.",
+                    },
+                    "max_steps": {
+                        "type": "integer",
+                        "description": "Alt ajanın azami adım sayısı (varsayılan 6, en fazla 12).",
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
 ]
 
 # Derived once from TOOLS_SCHEMA: {tool: {param: declared json type}} and
@@ -342,9 +460,11 @@ TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
 
 # Tools that are useless outside `normal` mode: they are always denied by the
 # gateway, so sending their schemas only wastes prompt tokens on every step.
-ASK_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file"}
-PLAN_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file"}
-
+# `delegate` is also hidden in ask/plan: the sub-agent runs in ASK mode, so an
+# advertised schema there would only invite recursive delegation attempts that
+# the gateway denies anyway.
+ASK_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
+PLAN_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
 
 def tools_for_mode(mode) -> list[dict]:
     """Returns the tool schemas that should be advertised for `mode`.
@@ -408,6 +528,13 @@ def tool_view_file(path: str, start_line: int | None = None, end_line: int | Non
     return header + body
 
 
+_PROBE_TARGET_RE = re.compile(r"(?i)^\s*(placeholder\w*|x|xx+|test|todo|dummy|foo|\.\.\.)\s*$")
+
+
+def _is_probe_target(target: object) -> bool:
+    return isinstance(target, str) and bool(_PROBE_TARGET_RE.match(target))
+
+
 def tool_edit_file(
     path: str,
     target_snippet: str = "",
@@ -422,7 +549,27 @@ def tool_edit_file(
     # Read with metadata so BOM/CRLF are preserved on write.
     old_content, meta, err = read_file_with_meta(path, root)
     if err:
+        try:
+            missing = not resolve_workspace_path(path, root).exists()
+        except Exception:
+            missing = False
+        if missing:
+            return (
+                f"HATA: '{path}' yok; edit_file yalnızca var olan dosyayı düzenler. "
+                "Yeni dosya için write_file kullan."
+            )
         return f"HATA: Dosya okunamadı: {err}"
+
+    probes = [
+        (e.get("target_snippet") if isinstance(e, dict) else "") for e in (edits or [])
+    ] or [target_snippet]
+    if any(_is_probe_target(t) for t in probes):
+        # Seen in practice: target_snippet='placeholder' / 'PLACEHOLDER_DO_NOT_MATCH'
+        # sent on purpose to peek at the file through the "closest line" error.
+        return (
+            "HATA: target_snippet yer tutucu/deneme metni gibi görünüyor. Dosyayı görmek için "
+            "view_file (start_line/end_line) kullan; edit_file'a yalnızca dosyadaki gerçek metni ver."
+        )
 
     # Build the edit list: either the multi-edit list or a single edit.
     if edits:
@@ -436,6 +583,11 @@ def tool_edit_file(
 
     new_content, success, rep_err = apply_edits(old_content, edit_list)
     if not success:
+        from src.diff_viewer import ALREADY_APPLIED
+
+        if rep_err.startswith(ALREADY_APPLIED):
+            # Not an error: the file already has this change.
+            return f"BİLGİ: '{path}' {rep_err}"
         return f"HATA: Değişiklik uygulanamadı: {rep_err}"
 
     diff = generate_unified_diff(old_content, new_content, filename=path)
@@ -569,6 +721,19 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
     if needles:
         return "\n".join(lines_out) or "Eşleşme bulunamadı."
     return "\n".join(files) or "Eşleşen dosya bulunamadı."
+
+
+def tool_web_fetch(url: str, timeout: int | None = None, max_chars: int | None = None) -> str:
+    """Fetches an http(s) URL and returns readable text (see src.web_fetch).
+
+    Secret placeholders (e.g. a token in a query string) are expanded only for
+    the request; the result is masked again before it reaches the model.
+    """
+    from src.secret_vault import active_vault
+    from src.web_fetch import fetch_url
+
+    vault = active_vault()
+    return vault.mask(fetch_url(vault.expand(url or ""), timeout=timeout, max_chars=max_chars))
 
 
 DEFAULT_COMMAND_TIMEOUT = 180
@@ -720,6 +885,98 @@ def tool_run_command(
         return f"HATA: Komut çalıştırılamadı: {e}"
 
 
+def _start_background_command(
+    command: str,
+    root: Path,
+    use_powershell: bool,
+    use_python: bool,
+    auto_approve: bool = False,
+) -> str:
+    """Starts a run_command job in the background and returns its id immediately.
+
+    Same approval gate as a foreground run_command: the background path used to
+    skip it, so with auto-approve off a command still ran without asking.
+    """
+    from src.background import get_manager
+    from src.secret_vault import active_vault
+
+    vault = active_vault()
+    print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
+    if not (auto_approve or EVREN_AUTO_APPROVE):
+        approved = prompt_confirm("Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?", default=False)
+        if not approved:
+            return "İPTAL EDİLDİ: Kullanıcı arka plan komutunun çalıştırılmasını reddetti."
+    try:
+        argv, use_shell = _command_argv(vault.expand(command), use_powershell, use_python)
+    except MultilineShellCommand as e:
+        return f"HATA: {e}"
+    extra = {"env": vault.env()} if vault else {}
+    try:
+        record = get_manager().start(
+            vault.mask(command), cwd=str(root), shell=use_shell, argv=argv, **extra
+        )
+    except Exception as e:
+        return f"HATA: Arka plan komutu başlatılamadı: {e}"
+    return (
+        f"BAŞARILI: Arka plan komutu başlatıldı (id: {record.id}). "
+        "Çıktı/durum için check_background, sonlandırmak için stop_background kullan."
+    )
+
+
+CHECK_DEFAULT_WAIT = 20
+CHECK_MAX_WAIT = 300
+
+
+def tool_check_background(id: str = "", wait_seconds: Any = None) -> str:  # noqa: A002 - şema parametresi 'id'
+    """Returns incremental output + status for a background job.
+
+    While the job runs it first waits up to `wait_seconds` (default 20) for it
+    to finish, returning as soon as it does. Without the wait the model polled
+    18 times in a row and spent its whole step budget before the tests ended.
+    """
+    import time
+
+    from src.background import MAX_CHECK_CHARS, get_manager
+    from src.secret_vault import active_vault
+
+    vault = active_vault()
+    try:
+        wait = CHECK_DEFAULT_WAIT if wait_seconds in (None, "") else int(wait_seconds)
+    except (TypeError, ValueError):
+        wait = CHECK_DEFAULT_WAIT
+    wait = max(0, min(CHECK_MAX_WAIT, wait))
+    record = get_manager().get(id)
+    if record is not None and wait:
+        deadline = time.monotonic() + wait
+        while record.running() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if not record.running() and record._reader is not None:
+            record._reader.join(timeout=2)  # let the reader flush the tail
+    try:
+        output, status, code = get_manager().check(id)
+    except KeyError:
+        known = ", ".join(r.id for r in get_manager().list()) or "(kayıtlı yok)"
+        return f"HATA: Bilinmeyen arka plan id: '{id}'. Kayıtlı id'ler: {known}"
+    output = vault.mask(output)
+    if len(output) > MAX_CHECK_CHARS:
+        output = output[:MAX_CHECK_CHARS] + "\n[çıktı kırpıldı]"
+    lines = [f"Durum: {status}"]
+    if code is not None:
+        lines.append(f"Çıkış Kodu: {code}")
+    lines.append(f"Yeni Çıktı:\n{output if output.strip() else '(son okumadan bu yana yeni çıktı yok)'}")
+    return "\n".join(lines)
+
+
+def tool_stop_background(id: str = "") -> str:  # noqa: A002 - şema parametresi 'id'
+    """Kills a background job's whole process tree."""
+    from src.background import get_manager
+
+    if not get_manager().stop(id):
+        known = ", ".join(r.id for r in get_manager().list()) or "(kayıtlı yok)"
+        return f"HATA: Bilinmeyen arka plan id: '{id}'. Kayıtlı id'ler: {known}"
+    return f"BAŞARILI: Arka plan komutu '{id}' ve süreç ağacı sonlandırıldı."
+
+
 def tool_create_plan(
     name: str,
     content: str,
@@ -819,6 +1076,23 @@ def _syntax_report(path: str, root: Path) -> str:
     return ""
 
 
+def tool_todo_write(todos: Any = None) -> str:
+    """Replaces the session todo list and returns the rendered checklist.
+
+    The returned text is printed by the agent loop as the tool result, so the
+    user sees the checklist update on the terminal after every write.
+    """
+    from src.todos import get_store
+
+    if todos is None or not isinstance(todos, list):
+        return "HATA: 'todos' alanı {content, status} nesnelerinden oluşan bir dizi olmalı."
+    try:
+        get_store().write(todos)
+    except ValueError as exc:
+        return f"HATA: {exc}"
+    return get_store().render() or "Görev listesi temizlendi."
+
+
 def execute_tool_call(
     name: str,
     arguments: dict[str, Any],
@@ -884,6 +1158,14 @@ def execute_tool_call(
             workspace_root=root,
         )
     elif name == "run_command":
+        if arguments.get("run_in_background") is True:
+            return _start_background_command(
+                command=arguments.get("command", ""),
+                root=root,
+                use_powershell=arguments.get("use_powershell") is True,
+                use_python=arguments.get("use_python") is True,
+                auto_approve=auto_approve,
+            )
         return tool_run_command(
             command=arguments.get("command", ""),
             workspace_root=root,
@@ -892,6 +1174,12 @@ def execute_tool_call(
             use_powershell=arguments.get("use_powershell") is True,
             use_python=arguments.get("use_python") is True,
         )
+    elif name == "check_background":
+        return tool_check_background(
+            id=arguments.get("id", ""), wait_seconds=arguments.get("wait_seconds"),
+        )
+    elif name == "stop_background":
+        return tool_stop_background(id=arguments.get("id", ""))
     elif name == "create_plan":
         return tool_create_plan(
             name=arguments.get("name", ""),
@@ -962,6 +1250,14 @@ def execute_tool_call(
             content=content,
             workspace_root=root,
         )
+    elif name == "web_fetch":
+        return tool_web_fetch(
+            url=arguments.get("url", ""),
+            timeout=arguments.get("timeout"),
+            max_chars=arguments.get("max_chars"),
+        )
+    elif name == "todo_write":
+        return tool_todo_write(todos=arguments.get("todos"))
     elif name == "ask_user":
         result, _confirmed = tool_ask_user(
             question=arguments.get("question", ""),

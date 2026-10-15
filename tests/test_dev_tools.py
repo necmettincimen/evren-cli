@@ -106,3 +106,61 @@ class PlanIntentTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class EditGuardTest(unittest.TestCase):
+    def test_probe_target_is_refused_with_view_file_hint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "m.py").write_text("x = 1\n", encoding="utf-8")
+            for target in ("placeholder", "PLACEHOLDER_DO_NOT_MATCH"):
+                out = execute_tool_call("edit_file", {
+                    "path": "m.py", "target_snippet": target, "replacement_snippet": "y",
+                }, workspace_root=root, auto_approve=True)
+                self.assertIn("view_file", out, target)
+
+    def test_missing_file_points_to_write_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = execute_tool_call("edit_file", {
+                "path": "yeni.py", "target_snippet": "a", "replacement_snippet": "b",
+            }, workspace_root=Path(directory), auto_approve=True)
+        self.assertIn("write_file", out)
+
+
+class PlannedStepBudgetTest(unittest.TestCase):
+    def _session(self, directory):
+        client = MagicMock(default_model="m")
+        return AgentSession(client, workspace_root=Path(directory))
+
+    def test_budget_grows_with_plan_items(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}):
+            session = self._session(directory)
+            session._exec_profile = ("m", False)
+            plan = "\n".join(f"{i}. adım {i}" for i in range(1, 11))
+            session.messages.append({"role": "user", "content": f"iş\n\nUYGULAMA PLANI (planlayıcı model: p):\n{plan}"})
+            self.assertEqual(session._planned_step_budget(20), 35)
+            session.messages[-1]["content"] += "\n" + "\n".join(f"{i}. ek" for i in range(11, 30))
+            self.assertEqual(session._planned_step_budget(20), 40)
+
+    def test_no_plan_keeps_the_default(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}):
+            session = self._session(directory)
+            session.messages.append({"role": "user", "content": "1. tek\n2. iki"})
+            self.assertEqual(session._planned_step_budget(20), 20)
+
+
+class ContextDateAndCommitRuleTest(unittest.TestCase):
+    def test_execution_context_carries_todays_date_only(self):
+        from datetime import date
+        from src.config import execution_context_block
+
+        block = execution_context_block(Path("."))
+        self.assertIn(f"Bugünün tarihi: {date.today().isoformat()}", block)
+        self.assertNotRegex(block, r"\d{2}:\d{2}")  # no clock time: keeps the cache stable
+
+    def test_commit_rule_in_system_prompt(self):
+        from src.agent import SYSTEM_PROMPT
+
+        self.assertIn("git log -5", SYSTEM_PROMPT)
+        self.assertIn("~72 karakter", SYSTEM_PROMPT)
+        self.assertIn("ASCII'ye çevirme", SYSTEM_PROMPT)

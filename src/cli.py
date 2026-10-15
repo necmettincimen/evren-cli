@@ -211,11 +211,22 @@ def cmd_agent(args):
     session = AgentSession(client=client, workspace_root=workspace, model=args.model)
 
     print_info(f"Otonom ajan başlatılıyor. Model: {session.model} | Hedef: {workspace}")
-    if frame.is_empty():
-        session.run_step(prompt, max_steps=args.max_steps)
-    else:
-        print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(frame)}")
-        session.run_step(session.apply_frame(frame, extra=prompt), max_steps=args.max_steps)
+    try:
+        if frame.is_empty():
+            session.run_step(prompt, max_steps=args.max_steps)
+        else:
+            print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(frame)}")
+            session.run_step(session.apply_frame(frame, extra=prompt), max_steps=args.max_steps)
+    finally:
+        # One-shot mode must not leave background command trees orphaned.
+        try:
+            from src.background import get_manager
+
+            killed = get_manager().cleanup_all()
+            if killed:
+                print_info(f"Arka planda çalışan {killed} komut kapatılırken durduruldu.")
+        except Exception:
+            pass
 
 
 def cmd_docs(args):

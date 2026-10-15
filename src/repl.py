@@ -387,7 +387,7 @@ HELP_TEXT = """
   [green]/keys next[/green]            Aktif anahtarı sabitleyerek sıradakine geçer
   [green]/terms[/green]                Tüm anahtarlar için şartları denetler / kabul eder (/terms force)
   [green]/skills [kategori][/green]    Kullanılabilir mühendislik becerilerini listeler
-  [green]/apply <beceri>[/green]       Bir beceriyi mevcut göreve uygular (örn: /apply root-cause-debug)
+  [green]/skill <beceri>[/green]       Bir beceriyi (yerleşik veya kullanıcı) uygular (örn: /skill root-cause-debug; eşdeğeri /apply)
   [green]/diagnose [ad][/green]        Arıza triyajı çalıştırır (örn: /diagnose build-failure)
   [green]/template [ad][/green]        Çıktı şablonunu doldurur (örn: /template adr)
   [green]/memory[/green]               Proje hafızasını (profil + notlar) gösterir
@@ -406,6 +406,8 @@ HELP_TEXT = """
   [green]/undo <dosya>[/green]         Belirtilen dosyayı .evren/backups yedeğinden geri yükler
   [green]/auto [on/off][/green]        Otomatik dosya onay modunu açar veya kapatır
   [green]/run <komut>[/green]          PowerShell/terminal komutunu doğrudan çalıştırır
+  [green]/bg[/green]                   Arka planda çalışan/çalışmış komutları listeler (run_in_background)
+  [green]/todos[/green]                Ajanın güncel görev listesini (todo checklist) gösterir
   [green]/ssh[/green]                  Kayıtlı SSH host'larını listeler
   [green]/ssh add <alias> <user@host> [port][/green]  Yeni SSH host'u tanımlar
   [green]/ssh remove <alias>[/green]   Kayıtlı SSH host'unu siler
@@ -647,7 +649,7 @@ EVREN CLI Komutları:
   /terms        - Şartları kontrol et / kabul et
   /skills       - Mühendislik becerilerini listele
   /docs         - agent.md / changelog.md bağlam dosyaları
-  /apply <b>    - Bir beceriyi uygula
+  /skill <b>    - Bir beceriyi uygula (/apply eşdeğeri)
   /diagnose     - Arıza triyajı çalıştır
   /template     - Çıktı şablonunu doldur
   /memory       - Proje hafızasını göster/yönet
@@ -663,6 +665,7 @@ EVREN CLI Komutları:
   /drop <dosya> - Dosya bağlamı çıkar
   /undo <dosya> - Yedeği geri yükle (rollback)
   /run <komut>  - Terminal komutu çalıştır
+  /todos        - Ajanın güncel görev listesini göster
   /ssh          - SSH host'larını listele/yönet
   /update       - En son sürümü çek ve yeniden başlat
   /clear        - Geçmişi temizle
@@ -736,12 +739,36 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
     # History setup
     history_file = evren_dir / "history.txt"
     pt_session = None
-    if HAVE_PT:
-        pt_session = PromptSession(
-            history=FileHistory(str(history_file)),
-            auto_suggest=AutoSuggestFromHistory(),
-        )
+    if HAVE_PT and sys.stdin.isatty():
+        # prompt_toolkit needs a real Windows console; under Git Bash/mintty,
+        # piped input or CI it raised NoConsoleScreenBufferError and the REPL
+        # never started. Fall back to plain input() in those cases.
+        try:
+            pt_session = PromptSession(
+                history=FileHistory(str(history_file)),
+                auto_suggest=AutoSuggestFromHistory(),
+            )
+        except Exception:
+            pt_session = None
 
+    try:
+        _repl_loop(session, client, workspace_root, pt_session)
+    finally:
+        # Kill any still-running background command trees so the REPL never
+        # orphans processes started via run_command(run_in_background=true).
+        try:
+            from src.background import get_manager
+
+            killed = get_manager().cleanup_all()
+            if killed:
+                print_info(f"Arka planda çalışan {killed} komut kapatılırken durduruldu.")
+        except Exception:
+            pass
+
+
+def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_session) -> None:
+    """Interactive command loop; returns on /exit or EOF. Cleanup lives in start_repl."""
+    workspace_root = Path(workspace_root)
     last_frame = None
     while True:
         try:
@@ -963,24 +990,47 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                     _handle_docs_command(arg, session, workspace_root)
 
                 elif cmd == "/skills":
-                    from src.skills import list_skills, categories
+                    from src.skills import (
+                        list_skills,
+                        categories,
+                        reload_user_skills,
+                        user_skills_dir,
+                        USER_SKILL_WARNINGS,
+                    )
+
+                    if (arg or "").strip().lower() == "reload":
+                        loaded = reload_user_skills()
+                        print_info(
+                            f"Kullanıcı becerileri yeniden yüklendi: {len(loaded)} adet "
+                            f"({user_skills_dir()})"
+                        )
+                        for w in USER_SKILL_WARNINGS:
+                            print_warning(f"Atlanan dosya: {w}")
+                        continue
                     items = list_skills(arg or None)
                     if not items:
                         print_warning(f"'{arg}' kategorisinde beceri yok. Kategoriler: {', '.join(categories())}")
                     else:
                         print_info(f"Beceriler ({len(items)}):")
                         for s in items:
-                            print(f"  • {s.name:<22} [{s.category}] {s.title}")
-                        print("\nUygulamak için: /apply <beceri>")
+                            tag = "[user] " if s.source == "user" else ""
+                            print(f"  • {s.name:<22} [{s.category}] {tag}{s.title}")
+                        print("\nUygulamak için: /skill <beceri> (veya /apply <beceri>)")
+                        print(f"Kullanıcı becerileri dizini: {user_skills_dir()} (yeniden yükleme: /skills reload)")
 
-                elif cmd == "/apply":
+                elif cmd in ("/apply", "/skill"):
                     if not arg:
-                        print_warning("Kullanım: /apply <beceri_adı>")
+                        print_warning("Kullanım: /skill <beceri_adı>")
                     else:
                         try:
                             content = session.apply_skill(arg)
                         except ValueError as e:
-                            print_error(str(e))
+                            from src.skills import user_skills_dir
+
+                            print_error(
+                                f"{e}. Kullanıcı becerisi eklemek için: "
+                                f"{user_skills_dir()} altına <ad>.md yazın, sonra /skills reload"
+                            )
                         else:
                             print_info(f"Beceri uygulanıyor: {arg}")
                             _run_agent(session, content)
@@ -1203,6 +1253,32 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                         from src.tools import tool_run_command
                         out = tool_run_command(arg, workspace_root, auto_approve=session.auto_approve)
                         print(out)
+
+                elif cmd == "/bg":
+                    from src.background import get_manager
+
+                    records = get_manager().list()
+                    if not records:
+                        print_info("Arka planda çalıştırılmış komut yok. Ajan run_command(run_in_background=true) ile başlatabilir.")
+                    else:
+                        print("\nArka Plan Komutları:")
+                        for rec in records:
+                            print(f"  {rec.id:<6} {rec.status_line():<28} {rec.elapsed_seconds():>5}s  {rec.command[:70]}")
+                        print("  Durdurmak için: /bg stop <id>\n")
+                    if arg.lower().startswith("stop"):
+                        bg_target = arg.split(maxsplit=1)[1].strip() if len(arg.split(maxsplit=1)) > 1 else ""
+                        if not bg_target:
+                            print_warning("Kullanım: /bg stop <id>")
+                        elif get_manager().stop(bg_target):
+                            print_success(f"Arka plan komutu durduruldu: {bg_target}")
+                        else:
+                            print_warning(f"Bilinmeyen arka plan id: {bg_target}")
+
+                elif cmd == "/todos":
+                    from src.todos import get_store
+
+                    checklist = get_store().render()
+                    print(checklist if checklist else "Görev listesi boş.")
 
                 elif cmd == "/ssh":
                     _handle_ssh_command(arg, workspace_root)

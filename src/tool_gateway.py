@@ -27,8 +27,11 @@ from src.modes import AgentMode
 # Tools that never modify the workspace. `ask_user` only talks to the user; it is
 # advertised in every mode, so denying it in ask/plan made the model loop on
 # "REDDEDİLDİ" while the prompt told it to ask.
+# `todo_write` only mutates the in-memory session checklist (never workspace
+# files), so it is treated like `ask_user`: allowed in every mode.
 READ_ONLY_TOOLS = {
     "view_file", "list_directory", "find_files", "ssh_list_hosts", "ssh_read_file", "ask_user",
+    "todo_write", "web_fetch", "check_background",
 }
 
 # Tools that write to source files (local or remote).
@@ -129,6 +132,11 @@ def check_tool_allowed(tool_name: str, arguments: dict, mode: AgentMode) -> tupl
     if mode == AgentMode.NORMAL:
         return True, ""
 
+    # Delegation spawns a sub-agent session; read-only modes must not fork one.
+    # The sub-agent itself runs in ASK, so it can never re-enter delegate.
+    if tool_name == "delegate":
+        return False, "'delegate' yalnızca normal modda kullanılabilir."
+
     if tool_name == "ssh_run" and (arguments or {}).get("preset"):
         from src.remote_presets import READ_ONLY_PRESETS
 
@@ -145,6 +153,8 @@ def check_tool_allowed(tool_name: str, arguments: dict, mode: AgentMode) -> tupl
         if tool_name in PLAN_TOOLS:
             return False, "'create_plan' ask modunda devre dışı. Plan moduna geçin."
         if tool_name in ("run_command", "ssh_run"):
+            if tool_name == "run_command" and (arguments or {}).get("run_in_background") is True:
+                return False, "ask modunda arka plan komutu başlatılamaz (run_in_background). Normal moda geçin."
             ok, reason = is_read_only_command(arguments.get("command", ""))
             if not ok:
                 return False, f"ask modunda komut reddedildi: {reason}"
@@ -157,6 +167,8 @@ def check_tool_allowed(tool_name: str, arguments: dict, mode: AgentMode) -> tupl
         if tool_name in PLAN_TOOLS:
             return True, ""
         if tool_name in ("run_command", "ssh_run"):
+            if tool_name == "run_command" and (arguments or {}).get("run_in_background") is True:
+                return False, "plan modunda arka plan komutu başlatılamaz (run_in_background). Normal moda geçin."
             ok, reason = is_read_only_command(arguments.get("command", ""))
             if not ok:
                 return False, f"plan modunda komut reddedildi: {reason}"

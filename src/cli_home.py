@@ -111,21 +111,26 @@ def _stamp() -> str:
 # --------------------------------------------------------------------------- #
 
 def skills_catalog_body() -> str:
-    """Renders the in-code skill catalog as a markdown table (no hand copies)."""
+    """Renders the skill catalog (built-in + user) as a markdown table."""
     try:
-        from src.skills import list_skills
+        from src.skills import list_skills, reload_user_skills, user_skills_dir
+
+        reload_user_skills()
         items = list_skills()
+        skills_dir = user_skills_dir()
     except Exception:
         return "Katalog okunamadı; `src/skills.py` içine bakın."
     lines = [
-        "Kod içi katalog: `src/skills.py`. Aşağıdaki tablo ondan üretilir.",
+        "Kod içi katalog: `src/skills.py`; kullanıcı becerileri `"
+        f"{skills_dir}` altında `<ad>.md` dosyaları olarak tanımlanır.",
+        "Aşağıdaki tablo her ikisinden üretilir.",
         "",
-        "| Beceri | Kategori | Ne zaman |",
-        "|---|---|---|",
+        "| Beceri | Kategori | Kaynak | Ne zaman |",
+        "|---|---|---|---|",
     ]
     for skill in items:
         when = (skill.when_to_use or "").replace("|", "/")
-        lines.append(f"| `{skill.name}` | {skill.category} | {when} |")
+        lines.append(f"| `{skill.name}` | {skill.category} | {skill.source} | {when} |")
     lines.append("")
     lines.append(f"Toplam {len(items)} beceri. Ayrıntı: REPL'de `/skills`.")
     return "\n".join(lines)

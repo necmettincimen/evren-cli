@@ -15,6 +15,7 @@ from src.tools import TOOLS_SCHEMA, execute_tool_call, tools_for_mode
 from src.config import (
     get_workspace_dir,
     execution_context_block,
+    git_context_block,
     EVREN_DEFAULT_MAX_TOKENS,
     default_max_steps,
     auto_route_enabled,
@@ -43,6 +44,18 @@ from src.ui import (
 # Empty or truncated-tool turns. A single miss is normal for thinking models;
 # giving up on the second one aborts real tasks. Budget doubles on each miss.
 _MAX_STALLS = 4
+
+# Sub-agent (delegate) instruction: the clean-context prompt the delegated
+# research task runs under. {task} is substituted at delegation time.
+_DELEGATE_INSTRUCTION = (
+    "[ALT GÖREV] Ana ajan sana bağımsız bir araştırma görevi devretti. Temiz "
+    "bağlamsın: ana konuşmayı göremezsin; görev metni kendi başına yeterlidir. "
+    "Yalnızca salt-okuma araçlarıyla (view_file, find_files, list_directory, "
+    "salt-okuma run_command, web_fetch) çalış; yazma yapma ve kullanıcıya sorma. "
+    "En fazla birkaç adımda kanıt topla (dosya:satır referanslarıyla) ve son "
+    "yanıtını 3-8 cümlelik kısa bir özet olarak yaz; özet ana ajanın geçmişine "
+    "girecek, ham çıktı değil sonuç isteniyor.\n\nGÖREV:\n{task}"
+)
 
 
 def _stall_token_cap() -> int:
@@ -96,6 +109,11 @@ Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞT
 - Bağımsız işlemleri (birden çok dosya okuma, arama, liste) aynı turda birlikte çağır;
   yalnızca sonucu bilinmeyen bir çağrıya bağlı adımı sonraki tura bırak.
 - Aynı başarısız çağrıyı yeni kanıt olmadan tekrarlama. İki denemede olmazsa farklı yol dene veya somut engeli bildir.
+- 3+ adımlı işlerde (çok dosyalı özellik, plan uygulama) 'todo_write' ile kısa bir yapılacaklar listesi tut:
+  başta listeyi yaz, bir maddeye başlarken in_progress, bitince hemen completed yap (her seferinde tam liste).
+  Tek adımlı veya salt sorgu işlerinde kullanma.
+- Çok dosyaya yayılan bağımsız bir araştırmayı ("X nerede tanımlı, nasıl kullanılıyor") 'delegate' ile alt
+  ajana devret: ana bağlamın şişmez, yalnızca özet döner. Tek dosya okumak veya tek arama için kullanma.
 - İş doğrulanınca dur. Son yanıt: yapılan iş, doğrulama sonucu ve varsa kalan engel. Kapsam dışı iş ekleme.
 - İstenen çıktıya ulaşınca DUR. Kullanıcı listeleme/kontrol/sorgu istediyse kök neden analizi, log çekme,
   düzeltme gibi ek işleri kendiliğinden yapma; gerekirse son yanıtta tek satırlık öneri olarak yaz.
@@ -105,6 +123,7 @@ Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞT
   Önerileri etki sırasına koy; düzeltme komutunu yalnızca öner, kullanıcı istemedikçe uygulama.
 - Sorgu ve salt-okuma işlerinde çalışma alanına dosya (ara JSON, yardımcı betik) yazma; veriyi tek komutta süz.
 - Deneme/yer tutucu komut (`echo test`, `echo PLACEHOLDER`, `print('test')`) çalıştırma; kabuk ve araçlar çalışır.
+  Dosyanın bir bölümünü görmek için eşleşmeyecek deneme edit_file gönderme; view_file kullan.
   Betik gerçekten gerekiyorsa .evren/tmp/ altına yaz.
 - Kullanıcının son açık onayı araç izinlerini, salt-okuma kipini, SSH allow_write ayarını veya komut onay mekanizmasını geçersiz kılmaz.
 
@@ -119,6 +138,10 @@ DOSYA VE KOMUT KURALLARI:
    komutu elle `powershell -Command "..."` içine sarmalama. Veri süzme/JSON işleme için Python kodu yazacaksan
    use_python=true ver ve yalnızca kodu yaz (çok satırlı olabilir); `python -c "..."` içine sarmalama.
 5. Kritik değişikliklerde kullanıcıya diff gösterilir; otomatik yedek yalnızca CLI --backup bayrağıyla alınır.
+6. Commit: önce `git log -5` ile projenin mesaj biçimine (dil, ön ek, karakter kullanımı) bak ve ona uy.
+   Başlık en fazla ~72 karakter ve NE değiştiğini anlatsın (süreci değil); ayrıntıları gövdeye madde madde yaz:
+   `git commit -m "<başlık>" -m "- madde 1" -m "- madde 2"`. Türkçe karakter cmd/PowerShell'de sorunsuz
+   çalışır; yalnızca kodlama endişesiyle ASCII'ye çevirme. Kullanıcı açıkça istemedikçe push yapma.
 
 YEREL / UZAK HEDEF:
 - Varsayılan hedef EVREN CLI'nin çalıştığı yerel makinedir; önceki turda SSH kullanılmış olması bunu değiştirmez.
@@ -271,6 +294,7 @@ class AgentSession:
         self.workspace_root = workspace_root or get_workspace_dir()
         self.model = model or client.default_model
         self.base_system_prompt = system_prompt or SYSTEM_PROMPT
+        self._git_block = self._read_git_block()
         self.system_prompt = self._compose_system(self.base_system_prompt)
         self.frame = PromptFrame()
         self.auto_approve = auto_approve if auto_approve is not None else EVREN_AUTO_APPROVE
@@ -315,9 +339,21 @@ class AgentSession:
         # Lightweight audit trail of the current task (feeds changelog.md).
         self.tool_trace: list[dict[str, Any]] = []
 
+    def _read_git_block(self) -> str:
+        try:
+            return git_context_block(self.workspace_root)
+        except Exception:
+            return ""
+
     def _compose_system(self, base: str) -> str:
         """Appends runtime environment, project docs, memory and language blocks."""
         blocks: list[str] = [execution_context_block(self.workspace_root)]
+        # Git summary is read once per session in __init__ (and on /clear).
+        # _compose_system also runs for every REPL task (apply_frame), refresh
+        # and checkpoint restore; re-running git there would change the system
+        # message after each task that edits files and break the prompt cache.
+        if self._git_block:
+            blocks.append(self._git_block)
         try:
             from src.cli_home import cli_docs_context_block
             from src.project_docs import docs_context_block
@@ -377,7 +413,11 @@ class AgentSession:
         self.active_context_files.discard(rel_path)
 
     def clear_history(self):
+        from src.todos import get_store
+
+        get_store().clear()
         self.frame = PromptFrame()
+        self._git_block = self._read_git_block()  # a cleared session starts fresh
         self.system_prompt = self._compose_system(self.base_system_prompt)
         self.messages = [{"role": "system", "content": self.system_prompt}]
         self.active_context_files.clear()
@@ -529,10 +569,14 @@ class AgentSession:
         return build_user_content(frame, extra=extra)
 
     def apply_skill(self, name: str, context: str = "") -> str:
-        """Returns the user content for applying a catalog skill."""
-        from src.skills import get_skill
+        """Returns the user content for applying a catalog or user skill."""
+        from src.skills import get_skill, reload_user_skills, USER_SKILLS
 
         skill = get_skill(name)
+        if skill is None and not USER_SKILLS:
+            # User skills may not be loaded yet (e.g. first turn) — try once.
+            reload_user_skills()
+            skill = get_skill(name)
         if skill is None:
             raise ValueError(f"Beceri bulunamadı: {name}")
         return skill.prompt_block(context)
@@ -745,6 +789,7 @@ class AgentSession:
         model with thinking off; plan mode runs on the planner model. `/continue`
         and follow-ups pass `route=False` and keep the last executor profile.
         """
+        explicit_steps = max_steps is not None or self.max_steps is not None
         if max_steps is None:
             max_steps = self.max_steps or default_max_steps()
         if max_steps < 1:
@@ -803,6 +848,8 @@ class AgentSession:
             self._prepare_phase(
                 route, effective_mode, prompt_with_context, brief_text=brief_for_routing,
             )
+            if not explicit_steps:
+                max_steps = self._planned_step_budget(max_steps)
             return self._finish_task(
                 self._run_steps(
                     max_steps, effective_mode, step_count, stalled_steps, text_continuations,
@@ -880,6 +927,68 @@ class AgentSession:
             "content": f"{self.messages[-1]['content']}\n\n{execution_brief(plan, planner)}",
         }
         print_info(f"Plan hazır; uygulama için {executor} modeline geçiliyor.")
+
+    # ------------------------------------------------------------------ #
+    # Sub-agent delegation (Task-style)
+    # ------------------------------------------------------------------ #
+
+    _DELEGATE_DEFAULT_STEPS = 6
+    _DELEGATE_MAX_STEPS = 12
+
+    def _run_delegate(self, task: str, max_steps: int | None = None) -> str:
+        """Runs an independent research sub-task in a clean, read-only session.
+
+        Reuses the existing `_run_steps` loop (same pattern as `_plan_phase`):
+        `self.messages` is temporarily swapped for a fresh system+task pair and
+        the loop runs under `AgentMode.ASK`, so the sub-agent only has read-only
+        tools; `delegate` itself is hidden from ASK schemas and denied by the
+        gateway, so it cannot recurse. The parent history is restored in
+        `finally`; only the sub-agent's final summary text returns to the
+        parent, as the tool result.
+        """
+        task = (task or "").strip()
+        if not task:
+            return "HATA: delegate için 'task' boş olamaz."
+        try:
+            steps = int(max_steps) if max_steps not in (None, "") else self._DELEGATE_DEFAULT_STEPS
+        except (TypeError, ValueError):
+            steps = self._DELEGATE_DEFAULT_STEPS
+        steps = max(1, min(self._DELEGATE_MAX_STEPS, steps))
+
+        saved = (self.messages, self.model, self._thinking, self.pending_mode,
+                 self.task_goal, self._compaction_notified, self._listing_done)
+        self.messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": _DELEGATE_INSTRUCTION.format(task=task)},
+        ]
+        print_info(f"Alt ajan ({steps} adım, salt-okuma): {task[:100]}")
+        try:
+            result = self._run_steps(steps, AgentMode.ASK, 0, 0, 0)
+        finally:
+            (self.messages, self.model, self._thinking, self.pending_mode,
+             self.task_goal, self._compaction_notified, self._listing_done) = saved
+        text = (result or "").strip()
+        if not text:
+            return "ALT AJAN ÖZETİ: (boş yanıt)"
+        return f"ALT AJAN ÖZETİ:\n{text}"
+
+    def _planned_step_budget(self, max_steps: int) -> int:
+        """Grows the executor's step ceiling with the size of the plan.
+
+        A 10-item feature plan ran out of the default 20 steps half-way (code
+        written, cleanup and tests missing). Roughly 3 steps per plan item plus
+        a margin, capped at 40; never lower than the default.
+        """
+        if self._exec_profile is None or not self.messages:
+            return max_steps
+        content = str(self.messages[-1].get("content") or "")
+        marker = content.find("UYGULAMA PLANI")
+        if marker < 0:
+            return max_steps
+        items = len(re.findall(r"(?m)^\s*\d{1,2}[.)]\s", content[marker:]))
+        if not items:
+            return max_steps
+        return max(max_steps, min(40, 3 * items + 5))
 
     def _plan_phase(self, task_text: str, planner: str) -> str | None:
         """Runs a short read-only loop on the planner model; returns the plan text."""
@@ -1041,8 +1150,9 @@ class AgentSession:
                         f"yeniden deneniyor ({stalled_steps}/{_MAX_STALLS})."
                     )
                     continue
-                print_error(f"Model çağrısı sırasında hata oluştu: {e}")
-                return f"Hata: {e}"
+                detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                print_error(f"Model çağrısı sırasında hata oluştu: {detail}")
+                return f"Hata: {detail}"
 
             choice = response.choices[0]
             message = choice.message
@@ -1177,6 +1287,27 @@ class AgentSession:
                         })
                         continue
 
+                    # Delegation is handled by the session itself: it swaps the
+                    # message history and reuses _run_steps, so it must never
+                    # reach the stateless execute_tool_call dispatcher. It sits
+                    # AFTER the mode gate: the sub-agent runs in ASK mode, where
+                    # the gate denies `delegate`, which is what stops recursion.
+                    if fn_name == "delegate":
+                        result = self._run_delegate(
+                            str(args.get("task") or ""), args.get("max_steps"),
+                        )
+                        is_err = result.startswith("HATA:")
+                        summary = (result.splitlines()[0] if result else "Tamamlandı")
+                        print_tool_result(fn_name, summary, is_error=is_err)
+                        self._note_tool_call(fn_name, args, result)
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": fn_name,
+                            "content": result,
+                        })
+                        continue
+
                     # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
                     result = execute_tool_call(
                         name=fn_name,
@@ -1198,6 +1329,10 @@ class AgentSession:
                         self._listing_done = True
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
                     summary = result.splitlines()[0] if result else "Tamamlandı"
+                    if fn_name == "todo_write" and not is_err:
+                        # The checklist is the point of the tool: show every item,
+                        # not just the "Görev listesi (1/3 tamamlandı):" header.
+                        summary = result
                     print_tool_result(fn_name, summary, is_error=is_err)
                     self._note_tool_call(fn_name, args, result)
 

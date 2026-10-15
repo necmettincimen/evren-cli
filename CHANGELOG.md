@@ -5,6 +5,67 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [2.1.0] - 2026-10-15
+
+Claude Code'un temel yetenekleri. Özellikler EVREN'in kendisine geliştirtilip (geçici klonda),
+incelenip düzeltilerek alındı.
+
+### Eklendi
+- **Kullanıcı tanımlı beceriler:** `<cli_home>/skills/*.md` (front-matter: name, title, category,
+  description, when_to_use; gövdedeki liste satırları adımlar). Aynı adlı yerleşik beceriyi
+  gölgeler; `/skills` `[user]` etiketiyle listeler, `/skills reload` yeniden yükler, `/skill <ad>`
+  uygular (`/apply` eşdeğeri). Adımı/açıklaması olmayan dosya uyarıyla atlanır; beceriler ilk
+  kullanımda tembel yüklenir.
+- **`todo_write` aracı (TodoWrite):** çok adımlı işlerde yapılacaklar listesi (pending / in_progress /
+  completed, aynı anda tek in_progress). Her güncellemede tam checklist terminalde gösterilir,
+  `/todos` ile görülür, `/clear` sıfırlar. Sistem prompt'u 3+ adımlı işlerde kullanmasını söyler.
+- **`web_fetch` aracı (WebFetch):** http/https GET; HTML okunur metne (başlık `<title>`, `#` başlıklar,
+  `metin (url)` bağlantılar, tırnaksız öznitelikler dahil), JSON/düz metin aynen; boyut, süre ve
+  12.000 karakter sınırı; ikili içerik (PDF, resim) reddedilir. `EVREN_CA_BUNDLE`/`EVREN_SSL_VERIFY`
+  ayarlarına uyar; URL'deki gizli değer yer tutucuları yalnızca istekte açılır. Tüm kiplerde salt-okuma.
+- **Arka plan komutları:** `run_command(run_in_background=true)` hemen `bg-N` kimliği döndürür;
+  `check_background` son okumadan bu yana gelen çıktıyı ve durumu/çıkış kodunu, `stop_background`
+  süreç ağacını sonlandırır; `/bg` ve `/bg stop <id>`. REPL ve `evren agent` kapanırken tüm arka plan
+  ağaçları temizlenir. Ön plandakiyle aynı onay kapısından geçer; ask/plan kipinde reddedilir.
+  `check_background` süreç çalışıyorsa bitmesini varsayılan 20 sn bekler (`wait_seconds`, 0-300;
+  bitince hemen döner): beklemesiz sürümde model 18 kez art arda yoklayıp adım bütçesini tüketmişti.
+- **`delegate` aracı (Task / alt ajan):** bağımsız bir araştırma alt görevi temiz bağlamlı bir alt
+  oturuma devredilir; mevcut `_run_steps` döngüsü ASK kipinde (salt-okuma) yeniden kullanılır, ana
+  geçmişe yalnızca `ALT AJAN ÖZETİ` girer. Yalnızca normal kipte; kip kapısı alt ajanın yeniden
+  `delegate` çağırmasını engeller (özyineleme yok).
+- **Git farkındalığı:** çalışma alanı bir git deposuysa sistem bağlamına oturum başında bir kez dal,
+  ana dal tahmini, son 3 commit ve değişen/izlenmeyen dosya sayısı eklenir; git yoksa sessizce
+  atlanır, her komut 2 sn ile sınırlı. Özet REPL'deki her görevde yeniden üretilmez (sistem mesajı
+  önbelleği korunur); yalnızca `/clear` yeniler.
+- Yerel çalıştırma bağlamına bugünün tarihi eklendi (`Bugünün tarihi: YYYY-MM-DD`); yalnızca tarih,
+  saat yok — sistem mesajı adımlar arasında birebir aynı kalıp prompt önbelleğini korur. Model
+  tarihli bir işlem için artık `date /t` komutu çalıştırmak zorunda değil.
+
+### Değişti
+- `find_files(query=...)` artık `grep -n` gibi `yol:satır: metin` döndürür (büyük/küçük harf
+  duyarsız, `a|b` alternatifleri); önceden yalnızca "(Eşleşti)" diyordu ve model `findstr`'e düşüyordu.
+- Brief'te açık plan isteği ("planla", "plan yap", "önce plan") boyuttan bağımsız planlayıcıya gider.
+  Planlayıcı adım tavanı 3 → 4 ve satır numaralı plan yazar; plan varsa uygulayıcının adım bütçesi
+  plan maddesi başına ~3 adım (+5, en fazla 40) olarak büyür (`--max-steps`/`/steps` verilmişse dokunulmaz).
+- `.py`/`.json` dosyası yazılınca/düzenlenince otomatik sözdizimi kontrolü; hata aynı turda bildirilir.
+- `edit_file`: zaten uygulanmış düzenleme hata değil `BİLGİ: ... ZATEN UYGULANMIŞ` döner (çoklu
+  düzenlemede diğerleri uygulanır); `placeholder` gibi deneme hedefleri reddedilir ve `view_file`
+  önerilir; var olmayan dosyada `write_file` önerilir.
+- `use_powershell=true` ile elle yazılmış `powershell -Command "..."` sarmalaması otomatik açılır.
+- Sürüm kaynaktan çalışırken `pyproject.toml`'dan okunur (editable kurulumda meta veri bayatlıyordu).
+- Sistem prompt'una commit kuralı: commit'ten önce `git log -5 --oneline` ile projenin mesaj biçimine
+  bakılır, başlık NE değiştiğini anlatır (sürüm commit'inde ana değişiklikler özetlenir), Türkçe
+  karakterler ASCII'ye çevrilmez, kullanıcı istemedikçe push yapılmaz.
+
+### Düzeltildi
+- Arka plan komutu gizli değer ortam değişkenleriyle başlatılınca `PATH` dahil tüm ortam siliniyordu;
+  üst sürecin ortamıyla birleştirilir. Arka plan yolu kullanıcı onayını da atlıyordu.
+- Hata metni boş olan istisnalar (`StopIteration` vb.) `Hata: ` olarak raporlanıyordu; tür adı eklenir.
+- REPL Windows konsolu olmadan (Git Bash/mintty, borulu girdi, CI) açılışta
+  `NoConsoleScreenBufferError` ile çöküyordu; düz `input()`'a düşülür.
+- `test_repl_wrapper_passes_current_model_and_local_context` git'te izlenmeyen `agent.md`'ye
+  bağlıydı; temiz klonda düşüyordu.
+
 ## [2.0.0] - 2026-10-14
 
 ### Değişti
