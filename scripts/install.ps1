@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    EVREN CLI (Antigravity-Style Assistant) Otomatik Kurulum Betiği
+    EVREN CLI Otomatik Kurulum Betiği
 .DESCRIPTION
     Bu betik Python sanal ortamını (.venv) kurar, gerekli paketleri yükler,
     .env dosyasını hazırlar ve evren komutunu sisteme bağlar.

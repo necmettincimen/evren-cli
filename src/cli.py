@@ -1,6 +1,6 @@
 """
 Main CLI entry point for EVREN CLI.
-Provides both the interactive Antigravity TUI mode and scriptable subcommands.
+Provides both the interactive EVREN TUI mode and scriptable subcommands.
 """
 
 import sys
@@ -88,7 +88,7 @@ def cmd_chat(args):
     from src.project_scanner import build_context_from_files
     from src.prompt_frame import build_user_content, compose_system, delivery_summary
 
-    if not ensure_terms_accepted(interactive=True):
+    if not ensure_terms_accepted(interactive=True, silent_ok=True):
         return
 
     loaded = load_frame(args)
@@ -180,7 +180,7 @@ def cmd_agent(args):
     from src.agent import AgentSession
     from src.terms import ensure_terms_accepted
 
-    if not ensure_terms_accepted(interactive=True):
+    if not ensure_terms_accepted(interactive=True, silent_ok=True):
         return
 
     from src.prompt_frame import delivery_summary
@@ -202,7 +202,9 @@ def cmd_agent(args):
 
         docs_result = ensure_project_docs(workspace)
         ensure_cli_docs()
-        print_info(f"Bağlam dosyaları: {docs_result.summary()}")
+        print_info(f"Bağlam: {docs_result.summary()}")
+        for note in docs_result.details():
+            print_warning(f"Bağlam: {note}")
     except Exception as e:
         print_warning(f"Bağlam dosyaları atlandı: {e}")
 
@@ -210,7 +212,7 @@ def cmd_agent(args):
     _pin_best_key(client)
     session = AgentSession(client=client, workspace_root=workspace, model=args.model)
 
-    print_info(f"Otonom ajan başlatılıyor. Model: {session.model} | Hedef: {workspace}")
+    print_info(f"Otonom ajan başlatılıyor • {session.model} • {Path(workspace).name or workspace}")
     try:
         if frame.is_empty():
             session.run_step(prompt, max_steps=args.max_steps)
@@ -446,7 +448,7 @@ def _add_backup_arg(parser):
 def main():
     parser = argparse.ArgumentParser(
         prog="evren",
-        description="EVREN CLI: Antigravity-Style AI Development & Project Assistant",
+        description="EVREN CLI: AI Development & Project Assistant",
     )
     parser.add_argument(
         "--version",
@@ -496,7 +498,7 @@ def main():
         "--max-steps",
         type=int,
         default=None,
-        help="Maksimum adım sayısı (varsayılan: EVREN_MAX_STEPS, 20)",
+        help="Maksimum adım sayısı (varsayılan: EVREN_MAX_STEPS, 30)",
     )
     _add_backup_arg(p_agent)
     p_agent.set_defaults(func=cmd_agent)
@@ -580,7 +582,7 @@ def main():
 
     args = parser.parse_args()
 
-    # If no subcommand provided, start interactive REPL (Antigravity mode)
+    # If no subcommand provided, start interactive REPL (TUI mode)
     if not args.subcommand:
         try:
             from src.repl import start_repl

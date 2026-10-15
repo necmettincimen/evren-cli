@@ -1,6 +1,6 @@
 """
 Interactive REPL (Read-Eval-Print Loop) for EVREN CLI.
-Provides the Antigravity TUI terminal experience, slash commands,
+Provides the EVREN TUI terminal experience, slash commands,
 context management, model switching, and real-time agent interaction.
 """
 
@@ -84,22 +84,24 @@ def _config_source_info(client) -> dict:
         return {}
 
 
-def _bootstrap_docs(workspace_root) -> str:
-    """Creates/refreshes the smart context docs at startup. Returns a one-line summary.
+def _bootstrap_docs(workspace_root) -> tuple[str, list[str]]:
+    """Creates/refreshes the smart context docs at startup.
 
+    Returns (lines, details): one short summary line plus any problem notes
+    (conflicts, write errors) that are only printed when something is off.
     Never raises: a docs failure must not stop the CLI from starting.
     """
     try:
-        from src.cli_home import cli_docs_dir, ensure_cli_docs
+        from src.cli_home import ensure_cli_docs
         from src.project_docs import ensure_project_docs
 
-        result = ensure_project_docs(workspace_root)
+        # The CLI's own skills.md / commands.md must still be refreshed; only
+        # the "CLI bağlamı: <path>" line was startup noise.
         ensure_cli_docs()
-        if result.disabled:
-            return result.summary()
-        return f"{result.summary()} | CLI bağlamı: {cli_docs_dir()}"
+        result = ensure_project_docs(workspace_root)
+        return result.summary(), result.details()
     except Exception as e:
-        return f"bağlam dosyaları atlandı: {e}"
+        return f"bağlam dosyaları atlandı: {e}", []
 
 
 def _read_line(pt_session, label: str) -> str:
@@ -422,10 +424,12 @@ HELP_TEXT = """
   [green]/decisions [add][/green]       Onaylı mimari karar günlüğü
   [green]/exit[/green] veya [green]/quit[/green]       Uygulamadan çıkar
 
-[bold]Beş satırlık kalıp (her tur):[/bold]
-  Rol ve Çerçeve system mesajına, Brief / Kısıt / Çıktı user mesajına gider.
-  Önce Brief, sonra netleştirme, ardından boş alan önerileri.
-  Yeni Brief önceki alanları temizler; Brief'te Enter önceki kalıbı korur.
+[bold]Görev kalıbı (her tur):[/bold]
+  Görev doğrudan ajana gider; Brief'te boş Enter önceki kalıbı korur.
+  Büyük brief'ler önce planlayıcı modelde planlanır, sonra uygulayıcı modelde uygulanır.
+  Rol/Çerçeve/Kısıt/Çıktı alanları için EVREN_FORM_FIELDS=true, görev öncesi netleştirme
+  için EVREN_CLARIFY_ROUNDS=2 ayarla.
+  Mevcut görevde "yap artık" / "onay veriyorum" formu atlar; diğer takip yanıtları: /execute <yanıt>.
   Öneride Enter=kabul, metin=düzenle, -=boş bırak. Tümü boşsa [green]İstek >[/green] sorulur.
   Slash komutunu ilk satıra (Brief) yaz. Örnek kalıp:
     01 Brief    timeout süresini 45 saniyeye çıkar
@@ -674,14 +678,17 @@ EVREN CLI Komutları:
 
 
 def start_repl(workspace_path: str | None = None, initial_model: str | None = None):
-    """Starts the interactive Antigravity CLI REPL."""
+    """Starts the interactive EVREN CLI REPL."""
     workspace_root = get_workspace_dir(workspace_path)
     evren_dir = get_evren_dir(workspace_root)
     evren_dir.mkdir(parents=True, exist_ok=True)
 
     # Smart context docs: create/refresh agent.md + changelog.md (project) and the
     # CLI's own skills/lessons/commands files before the agent prompt is composed.
-    docs_result = _bootstrap_docs(workspace_root)
+    docs_summary, docs_details = _bootstrap_docs(workspace_root)
+    print_info(f"Bağlam: {docs_summary}")
+    for note in docs_details:
+        print_warning(f"Bağlam: {note}")
 
     client = EvrenClient(default_model=initial_model)
 
@@ -731,7 +738,6 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         config_info=_config_source_info(client),
     )
     print_info(FORM_INTRO)
-    print_info(f"Bağlam dosyaları: {docs_result}")
     from src.workflow_state import checkpoint_path
     if checkpoint_path(workspace_root).exists():
         print_info("Kalıcı checkpoint bulundu. İncelemek için /checkpoint, onaylı yükleme için /continue.")

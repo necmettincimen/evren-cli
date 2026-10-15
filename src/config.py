@@ -204,7 +204,7 @@ EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true",
 # gönderir; ancak sistem mesajı artık adımlar arasında sabit (önbellek isabeti) ve
 # bağımsız araç çağrıları tek turda toplanabildiği için 12 adım orta boy işleri
 # yarıda kesiyordu. 20, işi bitmeyince /continue ile uzatılır.
-EVREN_MAX_STEPS = int(os.getenv("EVREN_MAX_STEPS", "20"))
+EVREN_MAX_STEPS = int(os.getenv("EVREN_MAX_STEPS", "30"))
 
 
 # Compaction tetikleme oranı. Compaction yalnızca tahmini kullanım bu oranda
@@ -230,10 +230,10 @@ def default_max_steps() -> int:
     instead of silently reducing every run to a single step.
     """
     try:
-        value = int(os.getenv("EVREN_MAX_STEPS", "20"))
+        value = int(os.getenv("EVREN_MAX_STEPS", "30"))
     except (TypeError, ValueError):
-        return 20
-    return value if 1 <= value <= 100 else 20
+        return 30
+    return value if 1 <= value <= 100 else 30
 
 
 def config_source_report(pool_size: int | None = None) -> dict:

@@ -150,7 +150,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "find_files",
-            "description": "Dosya adına göre (glob) arar; query verilirse içerikte arar ve eşleşen satırları `yol:satır: metin` olarak döndürür (grep -n gibi, büyük/küçük harf duyarsız, alternatifler | ile). Kod aramak için findstr/grep yerine bunu kullan.",
+            "description": "Dosya adına göre (glob) arar; query verilirse içerikte arar ve eşleşen satırları `yol:satır: metin` olarak döndürür (grep -n gibi, büyük/küçük harf duyarsız, alternatifler | ile, regex de olur). Satır girintisiyle birebir verilir: tek satırlık değişiklikte bu satırı doğrudan edit_file hedefi yapabilirsin. Kod aramak için findstr/grep yerine bunu kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -668,6 +668,21 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
     return "\n".join(sorted(entries)[:100]) or "Klasör boş."
 
 
+_REGEX_HINT_RE = re.compile(r"\\[.dswbDSWB()\[\]{}+*?^$]|\(\?|[.*+?]\*|\[[^\]]+\]|\([^()]+\|[^()]+\)|\^|\$$")
+
+
+def _query_matcher(query: str, needles: list[str]):
+    """Returns line -> bool for find_files (regex when the query is one)."""
+    if query and _REGEX_HINT_RE.search(query):
+        try:
+            compiled = re.compile(query, re.IGNORECASE)
+        except re.error:
+            compiled = None
+        if compiled is not None:
+            return lambda line: compiled.search(line) is not None
+    return lambda line: any(n in line.casefold() for n in needles)
+
+
 # find_files content search limits (grep -n style output).
 FIND_MAX_LINES = 80
 FIND_MAX_PER_FILE = 12
@@ -684,6 +699,11 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
     root = workspace_root or get_workspace_dir()
     skip = (".git", ".venv", "venv", "node_modules", "__pycache__", ".evren")
     needles = [q.casefold() for q in (query or "").split("|") if q.strip()]
+    # Models write regexes ("(?i)evren", "2\\.0\\.0", "def (get|set)_x"); the
+    # literal-only search answered "no match" and sent them to findstr. Use the
+    # query as a case-insensitive regex when it compiles and looks like one,
+    # otherwise keep the literal "a|b" behaviour.
+    matcher = _query_matcher(query or "", needles)
     files: list[str] = []
     lines_out: list[str] = []
     truncated = False
@@ -704,13 +724,14 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
             continue
         hits = 0
         for number, line in enumerate(text.splitlines(), 1):
-            folded = line.casefold()
-            if any(n in folded for n in needles):
+            if matcher(line):
                 hits += 1
                 if hits > FIND_MAX_PER_FILE:
                     lines_out.append(f"{rel}: ... [bu dosyada daha fazla eşleşme var]")
                     break
-                lines_out.append(f"{rel}:{number}: {line.strip()[:FIND_LINE_CHARS]}")
+                # Keep the indentation: the line can then be used verbatim as an
+                # edit_file target without a separate view_file round trip.
+                lines_out.append(f"{rel}:{number}: {line.rstrip()[:FIND_LINE_CHARS]}")
                 if len(lines_out) >= FIND_MAX_LINES:
                     truncated = True
                     break
@@ -831,10 +852,10 @@ def tool_run_command(
 
     vault = active_vault()
     # The model only ever sees placeholders; the real secret is inserted here
-    # and never printed.
-    print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
-
+    # and never printed. With auto-approve on, the single ⚡ tool-call line is
+    # the whole announcement; the warning is only for real confirmation prompts.
     if not (auto_approve or EVREN_AUTO_APPROVE):
+        print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
         approved = prompt_confirm("Bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
         if not approved:
             return "İPTAL EDİLDİ: Kullanıcı terminal komutunun çalıştırılmasını reddetti."
@@ -901,8 +922,8 @@ def _start_background_command(
     from src.secret_vault import active_vault
 
     vault = active_vault()
-    print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
     if not (auto_approve or EVREN_AUTO_APPROVE):
+        print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
         approved = prompt_confirm("Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?", default=False)
         if not approved:
             return "İPTAL EDİLDİ: Kullanıcı arka plan komutunun çalıştırılmasını reddetti."
@@ -1210,8 +1231,10 @@ def execute_tool_call(
             if not command.strip():
                 return "HATA: ssh_run için 'command' veya 'preset' gerekli."
             shown = vault.mask(command)
-        print_warning(f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{alias}] > {shown}")
         if not (auto_approve or EVREN_AUTO_APPROVE):
+            print_warning(
+                f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{alias}] > {shown}"
+            )
             approved = prompt_confirm(
                 f"'{alias}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?",
                 default=False,
@@ -1236,8 +1259,8 @@ def execute_tool_call(
         alias = arguments.get("alias", "")
         remote_path = arguments.get("remote_path", "")
         content = arguments.get("content", "")
-        print_warning(f"Ajan uzak sunucuda dosya yazmak istiyor:\n  [{alias}] > {remote_path} ({len(content)} karakter)")
         if not (auto_approve or EVREN_AUTO_APPROVE):
+            print_warning(f"Ajan uzak sunucuda dosya yazmak istiyor:\n  [{alias}] > {remote_path} ({len(content)} karakter)")
             approved = prompt_confirm(
                 f"'{alias}:{remote_path}' uzak dosyası yazılsın mı?",
                 default=False,

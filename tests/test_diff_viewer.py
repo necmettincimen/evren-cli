@@ -124,3 +124,15 @@ class AlreadyAppliedTest(unittest.TestCase):
         _new, ok, err = apply_edits("x = 1\n", [{"target_snippet": "z = 9", "replacement_snippet": "z = 8"}])
         self.assertFalse(ok)
         self.assertNotIn("ZATEN", err)
+
+
+class MultilineMismatchMessageTest(unittest.TestCase):
+    def test_points_at_first_differing_line(self):
+        from src.diff_viewer import apply_replacement
+
+        text = 'FORM_INTRO = (\n    "Brief yaz ve Enter\'a bas: görev"\n    "ikinci satır"\n)\n'
+        target = 'FORM_INTRO = (\n    "Brief yaz ve Enter\'a bas: görev"\n    "ikinci SATIR"\n)'
+        _new, ok, err = apply_replacement(text, target, "X = 1")
+        self.assertFalse(ok)
+        self.assertIn("En yakın satır (satır 3)", err)
+        self.assertIn("ikinci SATIR", err)

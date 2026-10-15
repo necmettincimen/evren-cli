@@ -24,10 +24,10 @@ def response(content="", finish_reason="stop", tools=()):
 
 
 class DefaultMaxStepsTest(unittest.TestCase):
-    def test_default_is_twenty(self):
+    def test_default_is_thirty(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EVREN_MAX_STEPS", None)
-            self.assertEqual(default_max_steps(), 20)
+            self.assertEqual(default_max_steps(), 30)
 
     def test_env_override(self):
         with patch.dict(os.environ, {"EVREN_MAX_STEPS": "25"}):
@@ -36,7 +36,7 @@ class DefaultMaxStepsTest(unittest.TestCase):
     def test_invalid_env_falls_back(self):
         for value in ("", "abc", "0", "-3", "None"):
             with patch.dict(os.environ, {"EVREN_MAX_STEPS": value}):
-                self.assertEqual(default_max_steps(), 20)
+                self.assertEqual(default_max_steps(), 30)
 
 
 class RunStepCeilingTest(unittest.TestCase):

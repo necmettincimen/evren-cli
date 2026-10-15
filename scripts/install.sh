@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EVREN CLI (Antigravity-Style Assistant) — Linux/AlmaLinux Kurulum Betiği
+# EVREN CLI — Linux/AlmaLinux Kurulum Betiği
 # Kullanim: ./scripts/install.sh [--global]
 set -euo pipefail
 
