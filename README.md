@@ -1,12 +1,12 @@
-# EVREN CLI (Antigravity-Style AI Development Assistant)
+# EVREN CLI (AI Development Assistant)
 
-> **EVREN LLM API** (`https://evren-llmapi.ssyz.org.tr/v1`) altyapısını kullanarak Windows üzerinde çalışan, **Google Antigravity CLI (`agy`)** mimarisinden esinlenilmiş açık kaynaklı otonom yazılım geliştirme ve proje düzenleme asistanı.
+> **EVREN LLM API** (`https://evren-llmapi.ssyz.org.tr/v1`) altyapısını kullanarak Windows üzerinde çalışan açık kaynaklı otonom yazılım geliştirme ve proje düzenleme asistanı.
 
 ---
 
 ## 🌟 Öne Çıkan Özellikler
 
-1. **Antigravity TUI ve Slash Komutları (`/`):**
+1. **EVREN TUI ve Slash Komutları (`/`):**
    - `/help`, `/version`, `/model`, `/models`, `/quota`, `/terms`, `/scan`, `/files`, `/add`, `/drop`, `/undo`, `/run`, `/update`, `/clear`, `/exit`.
    - Zengin terminal arayüzü (`rich` panelleri, sözdizimi vurgulamalı markdown, diff tabloları).
 
@@ -43,7 +43,7 @@
 ### 1. Kurulum Betiğini Çalıştırın
 
 ```powershell
-cd C:\Users\msi\.gemini\antigravity\scratch\evren-cli
+cd C:\Projeler\evren-cli
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
@@ -83,7 +83,7 @@ yazarak o dizinde otonom ajanı başlatmak için global kurulum betiğini kullan
 ### Tek Komutla Global Kurulum
 
 ```powershell
-cd C:\Users\msi\.gemini\antigravity\scratch\evren-cli
+cd C:\Projeler\evren-cli
 powershell -ExecutionPolicy Bypass -File .\scripts\install-global.ps1
 ```
 
@@ -162,7 +162,7 @@ yeniden başlatmada `update` komutu tekrar çalıştırılmaz. Çalışma dizini
 `--workspace` ve `--model` seçenekleri korunur. Yeniden başlatmadan yalnızca
 güncellemek için `evren update --no-restart` kullanabilirsiniz.
 
-### A. Etkileşimli Antigravity TUI Modu
+### A. Etkileşimli EVREN TUI Modu
 
 Herhangi bir argüman vermeden çalıştırdığınızda doğrudan etkileşimli terminal asistanı açılır:
 
@@ -195,12 +195,12 @@ Slash komutlarını ilk **Brief** satırına yazabilirsiniz. Tek seferlik
 
 ```text
 ═════════════════════════════════════════════════════════════════
-✦ EVREN CLI v0.1.0 • Antigravity-Style AI Development Assistant
+✦ EVREN CLI v0.1.0 • AI Development & Project Assistant
 Model: deepseek-v4.1-flash   Çalışma Alanı: C:\Projeler\MyProject
 Kalan Günlük Kota: 980,240
 
 v0.1.0 Sürüm Notları:
-  • Antigravity tarzı interaktif TUI (REPL) modu ve scriptlenebilir alt komutlar.
+  • İnteraktif TUI (REPL) modu ve scriptlenebilir alt komutlar.
   • EVREN LLM API istemcisi: sohbet, akışlı (streaming) yanıt ve akıl yürütme desteği.
 ═════════════════════════════════════════════════════════════════
 
@@ -409,7 +409,7 @@ evren docs path                # proje ve CLI belge dizinleri
 |---|---|---|
 | `EVREN_AUTO_DOCS` | `true` | `false` → tüm bağlam dosyası katmanı kapalı |
 | `EVREN_DOCS_TOKENS` | `1200` | sistem istemine eklenecek bağlamın token tavanı (`0` = enjeksiyon kapalı) |
-| `EVREN_MAX_STEPS` | `20` | bir görevin adım tavanı; her adım tam sistem istemini yeniden gönderir (`/steps` ile oturum için değiştirilir) |
+| `EVREN_MAX_STEPS` | `30` | bir görevin adım tavanı; her adım tam sistem istemini yeniden gönderir (`/steps` ile oturum için değiştirilir) |
 | `EVREN_COMPACT_RATIO` | `0.6` | bağlam sıkıştırmanın pencerenin kaçında tetikleneceği (`1.0` = pencere dolana kadar bekle) |
 | `EVREN_STALL_TOKEN_CAP` | `16384` | kesilen yanıtta katlanan çıktı bütçesinin tavanı |
 | `EVREN_AUTO_ROUTE` | `true` | büyük brief'te önce planlayıcı, sonra uygulayıcı model |
@@ -466,7 +466,7 @@ evren-cli/
 │   ├── config.py             # .env ve ayar yönetimi, çalışma alanı dizinleri
 │   ├── api_client.py         # EVREN LLM API istemcisi (OpenAI SDK + streaming + keep-alive + retry)
 │   ├── terms.py              # Kullanım şartları doğrulama ve kabul döngüsü
-│   ├── agent.py              # Antigravity otonom ajan döngüsü ve adım yönetimi
+│   ├── agent.py              # EVREN otonom ajan döngüsü ve adım yönetimi
 │   ├── tools.py              # Ajan araçları (view_file, edit_file, write_file, run_command vb.)
 │   ├── project_scanner.py    # Dosya tarama, ASCII ağaç ve uzantı istatistikleri
 │   ├── file_ops.py           # Güvenli dosya I/O, sınır denetimi, otomatik yedekleme ve rollback
@@ -481,7 +481,7 @@ evren-cli/
 │   ├── ssh_hosts.py          # SSH host kayıt defteri (alias tabanlı, allow_write bayrağı)
 │   ├── ssh_ops.py            # Uzak SSH işlemleri (komut çalıştırma, dosya okuma/yazma, audit log)
 │   ├── repl.py               # Etkileşimli TUI kabuğu ve slash komut yöneticisi
-│   └── ui.py                 # Antigravity tarzı Rich terminal formatları, paneller ve diff boyama
+│   └── ui.py                 # Rich terminal formatları, paneller ve diff boyama
 │
 ├── tests/
 │   ├── test_file_ops.py      # Dosya sınırları, yazma, yedekleme ve rollback testleri

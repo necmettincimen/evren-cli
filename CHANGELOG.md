@@ -5,6 +5,32 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [Unreleased]
+
+## [2.1.1] - 2026-10-15
+
+### Değişti
+- Marka temizliği: kod tabanındaki tüm "Antigravity" atıfları kaldırıldı; proje artık yalnızca
+  EVREN CLI adıyla anılıyor (docstring'ler, CLI açıklamaları, TUI başlığı, kurulum betikleri,
+  pyproject, README ve AGENTS.md).
+- Açılış ekranı sadeleştirildi: banner'daki yapılandırma satırı tek satıra sığıyor (yollar dosya
+  adıyla kısaltılıyor, anahtar kaynağı .env ile aynıysa yalnızca ".env" yazılıyor), sürüm notları
+  56 karaktere indirildi, düz modda çalışma alanı yolu kısaltılıyor; bağlam özeti banner'dan
+  önce tek satır olarak basılıyor, sorun notları ayrı uyarı olarak veriliyor.
+- Yanıt akışı artık canlı markdown olarak çiziliyor: ham `**`/`#` işaretleri ekrana düşmüyor,
+  düz modda satır satır temiz metin basılıyor.
+- Araç çağrısı satırı tek satıra indirildi: varsayılan/boş argümanlar gizleniyor, onay
+  uyarıları yalnızca gerçek onay gerektiğinde basılıyor.
+- Görev sonunda tek satırlık özet: adım • süre • token.
+- Adım tavanı varsayılanı 20 → 30 (`EVREN_MAX_STEPS`); son 3 adımda doğrulamayı hatırlatan
+  adım uyarısı eklendi.
+- `edit_file` hata mesajı çok satırlı hedefte ilk farklı satırı gösteriyor (kör tekrarların
+  önüne geçer).
+
+### Eklendi
+- `/help` görev kalıbı bölümü güncel akışı anlatıyor; `tests/test_repl_startup.py` ile
+  açılış davranışı test kapsamına alındı.
+
 ## [2.1.0] - 2026-10-15
 
 Claude Code'un temel yetenekleri. Özellikler EVREN'in kendisine geliştirtilip (geçici klonda),

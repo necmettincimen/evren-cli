@@ -1,11 +1,12 @@
 """
-Autonomous Agent Loop for EVREN CLI (Antigravity Architecture).
+Autonomous Agent Loop for EVREN CLI.
 Executes multi-step coding workflows, calls tools, handles reasoning tokens,
 and ensures safe user approvals for Windows development.
 """
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,10 @@ from src.ui import (
     print_tool_result,
     print_reasoning,
     print_markdown,
+    print_markdown_stream,
+    flush_markdown,
+    markdown_stream_active,
+    print_run_summary,
     print_info,
     print_warning,
     print_error,
@@ -132,6 +137,10 @@ DOSYA VE KOMUT KURALLARI:
    numarası döner), sonra view_file'ı start_line/end_line ile yalnızca ilgili aralık için çağır; aynı aralığı
    tekrar okuma. Plan verildiyse planın satır bilgisini kullan, keşfi tekrarlama.
    Düzenleme sonucu "SÖZDİZİMİ HATASI" içerirse başka işe geçmeden önce onu düzelt.
+   find_files satırı girintisiyle birebir verir; tek satırlık değişiklikte ayrıca view_file çağırma.
+   Çok dosyaya yayılan aynı türden değişiklikte (yeniden adlandırma, metin değiştirme) bağımsız
+   edit_file çağrılarını aynı turda topla.
+   CHANGELOG'da yayımlanmış sürüm notlarını değiştirme (geçmiş kayıttır); yeni notu [Unreleased]'a yaz.
 2. 'edit_file' ile cerrahi değişiklik yap; dosyayı baştan yazma, yorumları, stili ve girintiyi koru.
 3. Kod değişikliğinden sonra ilgili testi veya sözdizimi kontrolünü 'run_command' ile çalıştır; başarıyı yalnızca doğrulanmış sonuca göre bildir.
 4. Komutları gerçek kabuğa göre yaz. Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver;
@@ -780,7 +789,7 @@ class AgentSession:
         The model can inspect files, produce code diffs, run tests, and iterate
         until the task is fully accomplished or max_steps is reached.
 
-        `max_steps` defaults to `EVREN_MAX_STEPS` (20): every step re-sends the
+        `max_steps` defaults to `EVREN_MAX_STEPS` (30): every step re-sends the
         whole system prompt and tool schemas, so a lower ceiling directly cuts the
         base cost. Raise it with `--max-steps`, `/steps <n>` or the env var.
 
@@ -807,6 +816,8 @@ class AgentSession:
         self.task_goal = cleaned_input
         self._compaction_notified = False
         self._reset_trace()
+        self._task_start = time.perf_counter()
+        self._task_usage_base = int(self.usage_totals.get("total_tokens") or 0)
         # Read-only modes keep the docs contract: read, never write.
         self._sync_docs(
             goal=cleaned_input,
@@ -1013,6 +1024,12 @@ class AgentSession:
     def _step_notes(step_count: int, max_steps: int, stalled_steps: int) -> str:
         """Short per-step reminders; empty on an ordinary step."""
         notes: list[str] = []
+        if max_steps >= 8 and max_steps - step_count == 3:
+            # Two runs ended with edits done but tests never run: leave room for it.
+            notes.append(
+                f"[EVREN] ADIM UYARISI: 3 adım kaldı ({step_count}/{max_steps}). Değişiklikleri "
+                "toparla ve şimdi doğrulamayı (test/kontrol komutu) çalıştır; yeni keşif başlatma."
+            )
         if max_steps > 1 and max_steps - step_count <= 1:
             notes.append(
                 f"[EVREN] ADIM UYARISI: adım sınırına geldin ({step_count}/{max_steps}). "
@@ -1024,6 +1041,24 @@ class AgentSession:
                 "gerekli aracı hemen tam argümanlarla çağır veya engeli kısa bildir."
             )
         return "\n".join(notes)
+
+    def _print_task_summary(self, steps: int) -> None:
+        """One-line end-of-task summary (steps • seconds • task tokens).
+
+        Never raises: a cosmetic summary must not break the agent loop.
+        """
+        try:
+            start = getattr(self, "_task_start", None)
+            if start is None:
+                return
+            self._task_start = None  # print once per task
+            seconds = time.perf_counter() - start
+            tokens = int(self.usage_totals.get("total_tokens") or 0) - int(
+                getattr(self, "_task_usage_base", 0) or 0
+            )
+            print_run_summary(steps, seconds, max(0, tokens))
+        except Exception:
+            pass
 
     def _run_steps(
         self,
@@ -1104,7 +1139,9 @@ class AgentSession:
                         print("\n")
                         stream_state["in_reasoning"] = False
                     stream_state["in_content"] = True
-                    print(text, end="", flush=True)
+                    # Buffer the deltas; the response is rendered once at the end
+                    # as clean markdown, so raw ** marks never hit the screen.
+                    print_markdown_stream(text)
 
                 try:
                     # Turn notes go into a transient trailing message, never into the
@@ -1136,8 +1173,8 @@ class AgentSession:
                 finally:
                     if stream_state["first"]:
                         tracker.stop()
-                    if stream_state["in_content"]:
-                        print()  # finish the streamed line
+                    if stream_state["in_content"] and markdown_stream_active():
+                        flush_markdown()
 
                 # Calibrate the estimator against server-reported usage.
                 self.token_manager.calibrate_from_response(estimated, response)
@@ -1271,7 +1308,7 @@ class AgentSession:
                         })
                         continue
 
-                    print_tool_call(fn_name, args)
+                    print_tool_call(fn_name, args, auto_approved=self.auto_approve)
 
                     # Mode permission gate: deny disallowed tools with a reason
                     # the model can react to (instead of executing them).
@@ -1354,6 +1391,7 @@ class AgentSession:
             # never arrived as stream deltas (e.g. empty stream).
             if final_content and not stream_state["in_content"]:
                 print_markdown(final_content)
+            self._print_task_summary(step_count)
             return final_content
 
         self.pending_mode = effective_mode
@@ -1363,4 +1401,5 @@ class AgentSession:
         )
         print_warning(error)
         self.messages.append({"role": "assistant", "content": error})
+        self._print_task_summary(step_count)
         return error

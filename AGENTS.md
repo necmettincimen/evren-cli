@@ -1,6 +1,6 @@
 # AGENTS.md — EVREN CLI Ajan Kuralları
 
-Bu dosya, bu projede çalışan AI ajanının (EVREN CLI / Antigravity-style asistan) uyması gereken kalıcı davranış kurallarını tanımlar.
+Bu dosya, bu projede çalışan AI ajanının (EVREN CLI) uyması gereken kalıcı davranış kurallarını tanımlar.
 
 ---
 

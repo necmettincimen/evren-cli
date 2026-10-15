@@ -98,8 +98,9 @@ class BannerSourceTest(unittest.TestCase):
         with patch("src.ui.HAVE_RICH", False), patch("builtins.print", lambda *a, **k: captured.append(" ".join(str(x) for x in a))):
             print_banner("model-x", r"C:\proje", "1000", info)
         text = "\n".join(captured)
-        self.assertIn(r"C:\proje\.env", text)
+        self.assertIn(".env=.env", text)      # dosya adı biçiminde kısaltıldı
         self.assertIn("config.json", text)
+        self.assertIn("anahtar=.env", text)   # aynı yol tekrar yazılmıyor
         self.assertIn("(1 anahtar)", text)
         self.assertNotIn(secret, text)
 
@@ -110,6 +111,55 @@ class BannerSourceTest(unittest.TestCase):
                 patch("builtins.print", lambda *a, **k: captured.append(" ".join(str(x) for x in a))):
             print_banner("model-x", r"C:\proje")
         self.assertIn("EVREN CLI", "\n".join(captured))
+
+    def test_banner_config_source_fits_single_line(self):
+        info = {
+            "env_file": r"C:\proje\.env",
+            "config_json": r"C:\Users\test\.evren-cli\config.json",
+            "config_json_exists": True,
+            "key_source": r"C:\proje\.env (EVREN_API_KEY / EVREN_API_KEYS)",
+            "key_count": 2,
+        }
+        captured = []
+        with patch("src.ui.HAVE_RICH", False), \
+                patch("src.version.get_changelog_notes", return_value=[]), \
+                patch("builtins.print", lambda *a, **k: captured.append(" ".join(str(x) for x in a))):
+            print_banner("model-x", r"C:\proje", "1000", info)
+        text = "\n".join(captured)
+        config_lines = [line for line in captured if line.startswith("Yapılandırma:")]
+        self.assertEqual(len(config_lines), 1)
+        self.assertIn(".env=.env", config_lines[0])
+        self.assertIn("anahtar=.env", config_lines[0])
+        self.assertIn("(2 anahtar)", config_lines[0])
+        self.assertLessEqual(len(config_lines[0]), 80)  # satır taşmasın
+        # Eski 3 satırlık biçim geri gelmemeli.
+        self.assertNotIn("API anahtarı:", text)
+        self.assertNotIn("config.json:", text)
+
+    def test_release_notes_stripped_of_markdown_and_capped(self):
+        from src.ui import _clean_release_note, _shorten_path
+
+        note = _clean_release_note(
+            "**Kullanıcı tanımlı beceriler:** `<cli_home>/skills/*.md` ile eklenir ve "
+            "birçok uzun kelime ile satırı taşırmaya devam eder böylece kırpma sınırı test edilir"
+        )
+        self.assertNotIn("**", note)
+        self.assertNotIn("`", note)
+        self.assertLessEqual(len(note), 72)
+        self.assertTrue(note.endswith("…"))
+        self.assertEqual(_clean_release_note("**Kısa madde**"), "Kısa madde")
+
+    def test_shorten_path_uses_home_and_clips_head(self):
+        from src.ui import _shorten_path
+
+        home = str(Path.home())
+        self.assertEqual(_shorten_path(home), "~")
+        self.assertEqual(_shorten_path(home + r"\proje\.env"), "~\\proje\\.env")
+        long_path = "C:\\" + "a" * 20 + "\\" + "b" * 80
+        short = _shorten_path(long_path, limit=40)
+        self.assertEqual(len(short), 40)
+        self.assertTrue(short.startswith("…"))
+        self.assertTrue(long_path.endswith(short[1:]))
 
 
 class ReplHelperTest(unittest.TestCase):

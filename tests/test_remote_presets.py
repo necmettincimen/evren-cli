@@ -60,6 +60,22 @@ class PresetGatewayTest(unittest.TestCase):
 
 class PresetDispatchTest(unittest.TestCase):
     def test_preset_builds_the_command_for_ssh_run(self):
+        # Pin the approval path: a developer .env with EVREN_AUTO_APPROVE=true
+        # used to skip it and fail this test.
+        with mock.patch("src.ssh_ops.ssh_run", return_value="[k] Çıkış Kodu: 0") as run, \
+                mock.patch("src.tools.print_warning") as warn, \
+                mock.patch("src.tools.EVREN_AUTO_APPROVE", False), \
+                mock.patch("src.tools.prompt_confirm", return_value=True):
+            out = execute_tool_call(
+                "ssh_run", {"alias": "k", "preset": "k8s_resources"}, workspace_root=Path("."), auto_approve=False,
+            )
+        self.assertIn("Çıkış Kodu: 0", out)
+        self.assertEqual(run.call_args.kwargs["command"], build_preset("k8s_resources"))
+        self.assertIn("preset=k8s_resources", str(warn.call_args))
+
+    def test_auto_approve_prints_no_warning_line(self):
+        # With auto-approve on, the single tool-call line is the whole
+        # announcement; no "Ajan ... çalıştırmak istiyor" warning is printed.
         with mock.patch("src.ssh_ops.ssh_run", return_value="[k] Çıkış Kodu: 0") as run, \
                 mock.patch("src.tools.print_warning") as warn:
             out = execute_tool_call(
@@ -67,7 +83,7 @@ class PresetDispatchTest(unittest.TestCase):
             )
         self.assertIn("Çıkış Kodu: 0", out)
         self.assertEqual(run.call_args.kwargs["command"], build_preset("k8s_resources"))
-        self.assertIn("preset=k8s_resources", str(warn.call_args))
+        warn.assert_not_called()
 
     def test_missing_command_and_preset_is_an_error(self):
         out = execute_tool_call("ssh_run", {"alias": "k"}, workspace_root=Path("."), auto_approve=True)

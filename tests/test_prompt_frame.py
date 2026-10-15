@@ -699,9 +699,9 @@ class TestFormPromptDisplay(unittest.TestCase):
         terminal = MagicMock()
         terminal.prompt.return_value = "brief"
         with patch("builtins.print") as output:
-            self.assertEqual(_read_line(terminal, "01 Brief > "), "brief")
+            self.assertEqual(_read_line(terminal, "Brief > "), "brief")
         output.assert_not_called()
-        terminal.prompt.assert_called_once_with("01 Brief > ")
+        terminal.prompt.assert_called_once_with("Brief > ")
 
 
 if __name__ == "__main__":

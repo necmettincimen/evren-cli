@@ -74,6 +74,22 @@ def _contextual_not_found_error(original_text: str, target_snippet: str) -> str:
             best_idx = i
 
     if best_idx >= 0 and best_score > 0.5:
+        # Multi-line target whose first line matches: point at the first line
+        # that actually differs. Showing only the (identical) first line left
+        # the model retrying the same edit blind.
+        if orig_lines[best_idx].strip() == first and len(target_lines) > 1:
+            for offset, expected in enumerate(target_lines[1:], 1):
+                idx = best_idx + offset
+                actual = orig_lines[idx] if idx < len(orig_lines) else "<dosya sonu>"
+                if actual != expected:
+                    return (
+                        "Değiştirilmek istenen kod parçası dosyada birebir bulunamadı. "
+                        f"İlk satır (satır {best_idx + 1}) eşleşiyor; En yakın satır (satır {idx + 1}) "
+                        "ilk farkın olduğu yer:\n"
+                        f"  Dosyada : {actual!r}\n"
+                        f"  Aranan  : {expected!r}\n"
+                        "Hedef parçayı bu satırdan itibaren dosyadaki metinle birebir düzelt."
+                    )
         actual = orig_lines[best_idx]
         expected = target_lines[0]
         return (

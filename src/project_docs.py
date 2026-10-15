@@ -103,19 +103,24 @@ class DocsResult:
         return bool(self.created or self.updated)
 
     def summary(self) -> str:
+        """One short line for the startup banner; details go to `details()`."""
         if self.disabled:
-            return f"Bağlam dosyaları kapalı: {self.reason}"
-        parts = []
-        if self.created:
-            parts.append("oluşturuldu: " + ", ".join(self.created))
-        if self.updated:
-            parts.append("güncellendi: " + ", ".join(self.updated))
-        if self.skipped:
-            parts.append("değişmedi: " + ", ".join(self.skipped))
-        if self.conflict:
-            parts.append(self.conflict)
-        parts.extend(self.notes)
-        return " | ".join(parts) if parts else "bağlam dosyaları güncel"
+            return f"kapalı ({self.reason})" if self.reason else "kapalı"
+        names = []
+        for name in list(self.created) + list(self.updated):
+            base = name.split("#", 1)[0]
+            if base not in names:
+                names.append(base)
+        if names:
+            return "hazır: " + ", ".join(names)
+        return "güncel"
+
+    def details(self) -> list[str]:
+        """Notes worth showing at startup; the naming conflict only on creation."""
+        out = list(self.notes)
+        if self.conflict and self.created:
+            out.insert(0, self.conflict)
+        return out
 
 
 # --------------------------------------------------------------------------- #
@@ -823,7 +828,9 @@ def ensure_changelog(root: Path, result: DocsResult | None = None) -> DocsResult
     result.changelog = changelog_path(root).name
     try:
         path = changelog_path(root)
-        if path.name != CHANGELOG_NAME:
+        # Expected, stable state (the repo ships CHANGELOG.md): explain it once,
+        # when the alternative file is created, not as a warning on every start.
+        if path.name != CHANGELOG_NAME and not path.exists():
             result.notes.append(
                 f"'{path.name}' kullanılıyor: NTFS büyük/küçük harf duyarsız, "
                 "mevcut CHANGELOG.md korunuyor"

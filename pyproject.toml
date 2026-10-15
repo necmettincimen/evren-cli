@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evren-cli"
-version = "2.1.0"
-description = "Antigravity-Style AI Development & Project Assistant for EVREN LLM API"
+version = "2.1.1"
+description = "AI Development & Project Assistant for EVREN LLM API"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Antigravity Pair Programmer" }
+    { name = "EVREN CLI Pair Programmer" }
 ]
 dependencies = [
     "openai>=1.20.0",

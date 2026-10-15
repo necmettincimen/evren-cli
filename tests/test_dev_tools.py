@@ -164,3 +164,26 @@ class ContextDateAndCommitRuleTest(unittest.TestCase):
         self.assertIn("git log -5", SYSTEM_PROMPT)
         self.assertIn("~72 karakter", SYSTEM_PROMPT)
         self.assertIn("ASCII'ye çevirme", SYSTEM_PROMPT)
+
+
+class FindFilesRegexTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        (self.root / "m.py").write_text(
+            '"""EVREN CLI doc."""\nclass A:\n    def get_x(self):\n        return "2.0.0"\n',
+            encoding="utf-8",
+        )
+
+    def test_inline_flag_and_escaped_dot_regexes(self):
+        self.assertIn("m.py:1:", tool_find_files("*.py", "(?i)evren", self.root))
+        self.assertIn("m.py:4:", tool_find_files("*.py", r"2\.0\.0", self.root))
+        self.assertIn("m.py:3:", tool_find_files("*.py", r"def (get|set)_x", self.root))
+
+    def test_unbalanced_paren_falls_back_to_literal(self):
+        self.assertIn("m.py:3:", tool_find_files("*.py", "def get_x(", self.root))
+
+    def test_indentation_is_kept_for_edit_targets(self):
+        out = tool_find_files("*.py", "get_x", self.root)
+        self.assertEqual(out, "m.py:3:     def get_x(self):")

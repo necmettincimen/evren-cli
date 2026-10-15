@@ -1,5 +1,5 @@
 """
-EVREN CLI - Antigravity-Style AI Development & Project Assistant for EVREN LLM API
+EVREN CLI - AI Development & Project Assistant for EVREN LLM API
 """
 
 import sys

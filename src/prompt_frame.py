@@ -27,13 +27,7 @@ FIELD_SPECS: tuple[tuple[str, str, str], ...] = (
     ("cikti", "05 Çıktı", "format ve teslim yüzeyi"),
 )
 
-FORM_INTRO = (
-    "Brief yaz ve Enter'a bas: görev doğrudan ajana gider (Enter önceki Brief'i korur). "
-    "Büyük brief'ler önce planlayıcı modelde planlanır, sonra uygulayıcı modelde uygulanır. "
-    "Rol/Çerçeve/Kısıt/Çıktı alanları için EVREN_FORM_FIELDS=true, görev öncesi netleştirme "
-    "için EVREN_CLARIFY_ROUNDS=2 ayarla. Slash komutunu Brief satırına yaz."
-    " Mevcut görevde yap artık/onay veriyorum formu atlar; diğer takip yanıtları: /execute <yanıt>."
-)
+FORM_INTRO = "Brief yaz ve Enter'a bas; ayrıntı ve komutlar için /help. Slash komutunu da doğrudan buraya yaz."
 
 _ROLE_NOTE = "Rol, hangi kimlikten yazacağını belirler ve genel asistan sesinin önüne geçer."
 _FRAME_NOTE = "Çerçeve bu işin kalıbıdır; strateji yalnızca bu satıra yüklenir."
@@ -311,7 +305,7 @@ def collect_guided_prompt_frame(
     previous: PromptFrame | None = None,
 ) -> PromptFrame | str:
     """Brief -> bounded clarification -> individually accepted empty-field suggestions."""
-    brief = (read_line(field_prompt("01 Brief", "yapılacak iş", previous.brief if previous else "")) or "").strip()
+    brief = (read_line("Brief > ") or "").strip()
     if brief.casefold() == "devam":
         return "/continue"
     if is_execution_followup(brief):
