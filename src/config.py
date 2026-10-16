@@ -362,6 +362,18 @@ def executor_thinking() -> bool:
     """
     return _env_flag("EVREN_EXECUTOR_THINKING", False)
 
+
+def paste_max_lines() -> int:
+    """Pasted task text above this many lines is saved to .evren/tmp and summarized
+    for the model (EVREN_PASTE_MAX_LINES, default 80)."""
+    return _env_int("EVREN_PASTE_MAX_LINES", 80, 20, 1_000_000)
+
+
+def paste_max_chars() -> int:
+    """Same limit for the character count (EVREN_PASTE_MAX_CHARS, default 6000)."""
+    return _env_int("EVREN_PASTE_MAX_CHARS", 6000, 1000, 100_000_000)
+
+
 # SSL/TLS verification configuration.
 # - EVREN_CA_BUNDLE : optional path to a custom CA bundle (PEM). Use this when the
 #   server presents a self-signed / corporate certificate you want to trust explicitly.
