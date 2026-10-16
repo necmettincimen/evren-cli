@@ -1,0 +1,23 @@
+{
+  "name": "ask_user_allowed_in_ask_mode",
+  "description": "ask_user is offered in ask mode and really reaches the user (confirm and free-text questions), never denied by the mode gate. Old bug: the tool was advertised but the gateway denied it with REDDEDİLDİ, so the model, told to ask, looped on the refusal.",
+  "mode": "ask",
+  "user_inputs": ["Hangi dosyayı inceleyelim?"],
+  "question_answers": ["y", "main"],
+  "model_replies": [
+    {"tool_calls": [{"name": "ask_user", "arguments": {"question": "src/app.py dosyasını mı inceleyeyim?", "kind": "confirm"}}]},
+    {"tool_calls": [{"name": "ask_user", "arguments": {"question": "Hangi fonksiyon?", "kind": "text"}}]},
+    {"content": "src/app.py içindeki main fonksiyonunu inceleyeceğim."}
+  ],
+  "expect": {
+    "executed_tools": ["ask_user", "ask_user"],
+    "denied_count": 0,
+    "user_questions": 2,
+    "confirm_prompts": 0,
+    "request_count": 3,
+    "requests": [{"index": 0, "tools_include": ["ask_user", "view_file"], "tools_exclude": ["edit_file", "delegate"]}],
+    "messages_contain": ["Kullanıcı ONAYLADI", "Kullanıcı yanıtı: main"],
+    "messages_not_contain": ["REDDEDİLDİ"],
+    "final_contains": "main"
+  }
+}

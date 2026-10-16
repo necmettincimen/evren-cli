@@ -1,0 +1,20 @@
+{
+  "name": "delegate_mode_gate",
+  "description": "In ask mode `delegate` is neither offered nor allowed: a hallucinated call is denied by the mode gate and no sub-agent session is started (no extra model request). Old bug: the delegate branch sat in front of the mode gate, so ask/plan mode could spawn sub-agents (and sub-agents could recurse).",
+  "mode": "ask",
+  "user_inputs": ["Bir şeye bak."],
+  "model_replies": [
+    {"tool_calls": [{"name": "delegate", "arguments": {"task": "X nerede tanımlı, nasıl kullanılıyor?"}}]},
+    {"content": "Alt ajan başlatamıyorum; normal moda geçmem gerekir."}
+  ],
+  "expect": {
+    "denied_count": 1,
+    "executed_count": 0,
+    "request_count": 2,
+    "requests": [
+      {"index": 0, "tools_include": ["view_file", "ask_user"], "tools_exclude": ["delegate", "edit_file", "write_file"]}
+    ],
+    "messages_contain": ["'delegate' yalnızca normal modda kullanılabilir"],
+    "final_contains": "normal moda"
+  }
+}
