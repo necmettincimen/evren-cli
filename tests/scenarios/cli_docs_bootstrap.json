@@ -1,0 +1,17 @@
+{
+  "name": "cli_docs_bootstrap",
+  "description": "Starting the REPL creates the project docs (agent.md, changelog.md) and the CLI's own docs (skills.md, commands.md, context/README.md in the CLI home). Old bug: the `ensure_cli_docs()` call was silently dropped from the startup bootstrap, so the CLI's own skill and command references were never created or refreshed; no test noticed because each piece worked when called directly.",
+  "kind": "repl",
+  "env": {"EVREN_AUTO_DOCS": "true"},
+  "user_inputs": ["/exit"],
+  "expect": {
+    "stdout_contains": ["Bağlam: hazır", "sonlandırılıyor"],
+    "files": {
+      "agent.md": "evren:managed",
+      "changelog.md": "evren:managed",
+      "@cli_home/skills.md": "evren:managed",
+      "@cli_home/commands.md": "evren:managed",
+      "@cli_home/context/README.md": "EVREN CLI destek dosyaları"
+    }
+  }
+}

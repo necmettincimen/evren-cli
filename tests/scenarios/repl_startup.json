@@ -1,0 +1,11 @@
+{
+  "name": "repl_startup",
+  "description": "The REPL starts on a non-TTY, answers a few slash commands and exits on /exit. Old bug: a UI refactor renamed a startup variable and left a stale `docs_result` reference, so start_repl died with NameError on every launch while all unit tests passed.",
+  "kind": "repl",
+  "user_inputs": ["/help", "/todos", "/bg", "/skills", "/exit"],
+  "expect": {
+    "stdout_contains": ["EVREN CLI", "Bağlam:", "Görev listesi boş.", "sonlandırılıyor"],
+    "request_count": 0,
+    "executed_count": 0
+  }
+}

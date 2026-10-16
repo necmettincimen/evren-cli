@@ -1,0 +1,14 @@
+{
+  "name": "docs_kill_switch",
+  "description": "Found while building the harness: with EVREN_AUTO_DOCS=false (the documented kill switch) a finished normal-mode task still creates changelog.md in the project, because `append_changelog_entry` never consults `docs_enabled` (only `ensure_project_docs` does). Expected: with the switch off, neither agent.md nor changelog.md is written. Expected to fail until that is fixed; then remove the xfail key.",
+  "env": {"EVREN_AUTO_DOCS": "false"},
+  "user_inputs": ["Merhaba, kısa bir soru: bu proje ne yapıyor?"],
+  "model_replies": [{"content": "Henüz dosya yok; bilgi veremem."}],
+  "expect": {
+    "request_count": 1,
+    "files": {
+      "agent.md": {"absent": true},
+      "changelog.md": {"absent": true}
+    }
+  }
+}

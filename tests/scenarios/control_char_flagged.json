@@ -1,0 +1,50 @@
+{
+  "name": "control_char_flagged",
+  "description": "If a control character (a backslash-b decoded as a backspace, say) ends up in a written file, the write succeeds but the result carries a JSON HATASI (inside a JSON string) or SÖZDİZİMİ HATASI (in Python code outside string literals) warning, so the model repairs the file in its next step instead of finding out when the tests run. Pairs with json_regex_escapes, which checks that clean content raises no warning. Known blind spot: a control character inside a Python string literal compiles fine and is not flagged.",
+  "user_inputs": [
+    "Bozuk içerikli dosyalar yaz."
+  ],
+  "approvals": [
+    "y",
+    "y"
+  ],
+  "model_replies": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "broken.py",
+            "content": "import re\nWORD = re.compile(r\"foo\")\b\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "broken.json",
+            "content": "{\"pattern\": \"\bfoo\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Her iki dosya da uyarı verdi."
+    }
+  ],
+  "expect": {
+    "executed_tools": [
+      "write_file",
+      "write_file"
+    ],
+    "confirm_prompts": 2,
+    "messages_contain": [
+      "SÖZDİZİMİ HATASI: broken.py",
+      "JSON HATASI: broken.json"
+    ],
+    "final_contains": "uyarı"
+  }
+}
