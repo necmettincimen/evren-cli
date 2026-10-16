@@ -101,7 +101,7 @@ def test_checkpoint_cannot_save_without_pending_task(tmp_path):
     "password=test-only-secret", 'password="test-only-secret"',
     '{"api_key":"test-only-secret"}', "Bearer test-only-secret",
     "postgresql://user:test-only-secret@192.0.2.1/db",
-    "-----BEGIN PRIVATE KEY-----\ntest-only-secret\n-----END PRIVATE KEY-----",
+    "-----BEGIN PRIVATE KEY-----\ntest-only-secret\n-----END PRIVATE KEY-----",  # check_text: ignore
 ])
 def test_secret_forms_are_masked(text):
     assert "test-only-secret" not in redact_text(text)
