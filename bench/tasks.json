@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "drone-failed",
+      "description": "Drone CI: son build'i hatalı repoları listeler (salt okuma; DRONE_SERVER/DRONE_TOKEN gerekir).",
+      "prompt": "Drone'da son build'i hata vermiş repoları listele",
+      "workspace": "cwd",
+      "max_steps": 15,
+      "requires": { "env": ["DRONE_SERVER", "DRONE_TOKEN"] },
+      "success": [
+        {
+          "type": "output_regex",
+          "pattern": "(?i)(failure|error|killed|başarısız|hatalı)",
+          "label": "hatalı build durumu"
+        },
+        { "type": "no_step_limit" }
+      ]
+    },
+    {
+      "id": "k8s-resources",
+      "description": "koyu3-k8s: pod resource request/limit tablosu (salt okuma).",
+      "prompt": "koyu3-k8s üzerindeki podların resource request/limit değerlerini listele",
+      "workspace": "cwd",
+      "max_steps": 12,
+      "requires": { "ssh_hosts": ["koyu3-k8s"] },
+      "success": [
+        {
+          "type": "output_regex",
+          "pattern": "(?is)(?=.*\\brequests?\\b)(?=.*\\blimits?\\b)(?=.*\\b(cpu|memory)\\b)",
+          "label": "request + limit + cpu/memory"
+        },
+        { "type": "no_step_limit" }
+      ]
+    },
+    {
+      "id": "k8s-advice",
+      "description": "koyu3-k8s: pod durumlarına göre öneri (salt okuma).",
+      "prompt": "koyu3-k8s üzerindeki pod durumlarına göre öneri ver",
+      "workspace": "cwd",
+      "max_steps": 15,
+      "requires": { "ssh_hosts": ["koyu3-k8s"] },
+      "success": [
+        {
+          "type": "output_regex",
+          "pattern": "(?i)(öneri|tavsiye|recommend)",
+          "label": "öneri bölümü"
+        },
+        {
+          "type": "output_regex",
+          "pattern": "(?i)(restart|crash|pending|running|ready|hazır)",
+          "label": "pod durumu"
+        },
+        { "type": "no_step_limit" }
+      ]
+    },
+    {
+      "id": "version-test",
+      "description": "Geçici klonda: yama sürümünü yükselt, testleri çalıştır, commit at.",
+      "prompt": "Sürümü yama düzeyinde yükselt, testleri çalıştır, commit at (push yapma)",
+      "workspace": "repo-clone",
+      "max_steps": 25,
+      "success": [
+        { "type": "new_commits", "min": 1 },
+        { "type": "version_bumped", "part": "patch" },
+        { "type": "command", "command": "{python} -m pytest -q" },
+        { "type": "no_step_limit" }
+      ]
+    },
+    {
+      "id": "skills-feature",
+      "description": "Geçici klonda: küçük, kendi içinde tamamlanan özellik (skill_counts) + test.",
+      "prompt": "src/skills.py içine skill_counts() fonksiyonu ekle: yerleşik ve kullanıcı becerilerinin sayısını {\"builtin\": N, \"user\": M} sözlüğü olarak döndürsün. /skills listesinin başlığını 'Beceriler (N; yerleşik X, kullanıcı Y):' biçimine getir ve tests/test_skills.py içine bu davranış için test yaz. Sonunda testleri çalıştır.",
+      "workspace": "repo-clone",
+      "max_steps": 40,
+      "success": [
+        { "type": "diff_nonempty" },
+        {
+          "type": "text_count",
+          "pattern": "def skill_counts",
+          "paths": ["src/skills.py"],
+          "min": 1
+        },
+        { "type": "paths_changed", "any": ["tests/"] },
+        { "type": "command", "command": "{python} -m pytest -q" },
+        { "type": "no_step_limit" }
+      ]
+    },
+    {
+      "id": "brand-cleanup",
+      "description": "Geçici klonda: README'deki eski marka ifadesini (Foreman) EVREN ile değiştir.",
+      "prompt": "README.md içinde geçen eski marka ifadelerini ('Foreman') EVREN ile değiştir; cümleler anlamlı kalsın.",
+      "workspace": "repo-clone",
+      "max_steps": 15,
+      "preconditions": [
+        {
+          "type": "text_count",
+          "pattern": "Foreman",
+          "paths": ["README.md"],
+          "flags": "i",
+          "min": 1
+        }
+      ],
+      "success": [
+        {
+          "type": "text_count",
+          "pattern": "Foreman",
+          "paths": ["README.md"],
+          "flags": "i",
+          "max": 0
+        },
+        { "type": "paths_changed", "any": ["README.md"] },
+        { "type": "command", "command": "{python} -m pytest -q" },
+        { "type": "no_step_limit" }
+      ]
+    }
+  ]
+}
