@@ -391,6 +391,7 @@ HELP_TEXT = """
   [green]/models[/green]               EVREN API'deki tüm modelleri çeker ve listeler
   [green]/quota[/green]                Tüm API anahtarlarının kalan/limit/reset kotasını gösterir
   [green]/tokens[/green]               Bağlam/token bütçesi raporunu gösterir
+  [green]/debug [N][/green]            Son görevin adım tablosunu gösterir (istek, araç, süre; N = sondan N. görev)
   [green]/docs [alt komut][/green]      agent.md/changelog.md durumu; refresh|unmark|path
   [green]/keys[/green]                 API anahtar havuzunu listeler (maskeli) ve yönetir
   [green]/keys add/remove[/green]      Anahtar ekler/çıkarır (~/.evren-cli/config.json)
@@ -452,6 +453,17 @@ HELP_TEXT = """
   Uzun yapıştırmalar (80 satır / 6000 karakter üstü) .evren/tmp/paste-N.txt'ye kaydedilir;
   modele baş/son satırlar ve hata satırları gider (EVREN_PASTE_MAX_LINES, EVREN_PASTE_MAX_CHARS).
 """
+
+
+def _handle_debug_command(arg: str, workspace_root) -> None:
+    """`/debug [last] [N]` — step table of the N-th last task (.evren/logs/trace.jsonl)."""
+    from src.trace import print_last_task
+
+    words = [word for word in (arg or "").split() if word.lower() != "last"]
+    if words and not words[0].isdigit():
+        print_warning("Kullanım: /debug [last] [N]  (N: sondan N. görev, varsayılan 1)")
+        return
+    print_last_task(workspace_root, int(words[0]) if words else 1)
 
 
 def _handle_docs_command(arg: str, session, workspace_root) -> None:
@@ -658,6 +670,7 @@ EVREN CLI Komutları:
   /models       - Modelleri listele
   /quota        - Kalan token kotası
   /tokens       - Bağlam/token bütçesi raporu
+  /debug [N]    - Son görevin adım tablosu (sondan N. görev)
   /steps [n]    - Adım tavanını göster veya ayarla (tasarruf: düşük tut)
   /keys         - API anahtar havuzunu yönet
   /keys next    - Sıradaki API anahtarına geç
@@ -981,6 +994,9 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                                   f"önbellek isabeti %{round(summary.get('cache_ratio', 0) * 100)}")
                     except Exception:
                         pass
+
+                elif cmd == "/debug":
+                    _handle_debug_command(arg, workspace_root)
 
                 elif cmd == "/steps":
                     from src.config import default_max_steps

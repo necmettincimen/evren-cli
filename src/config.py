@@ -374,6 +374,12 @@ def paste_max_chars() -> int:
     return _env_int("EVREN_PASTE_MAX_CHARS", 6000, 1000, 100_000_000)
 
 
+def trace_enabled() -> bool:
+    """EVREN_TRACE (varsayılan açık): her görevin adım izi `.evren/logs/trace.jsonl`
+    dosyasına yazılır; false/0/off/no değeri kapatır (`evren debug last` ile okunur)."""
+    raw = (os.getenv("EVREN_TRACE") or "").strip().lower()
+    return raw not in ("false", "0", "off", "no", "hayır", "hayir")
+
 # SSL/TLS verification configuration.
 # - EVREN_CA_BUNDLE : optional path to a custom CA bundle (PEM). Use this when the
 #   server presents a self-signed / corporate certificate you want to trust explicitly.

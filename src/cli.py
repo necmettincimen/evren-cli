@@ -289,6 +289,14 @@ def cmd_docs(args):
     print(f"  • Token bütçesi : {status['token_budget']}")
 
 
+def cmd_debug(args):
+    """Debug helpers; `debug last` prints the step table of the last agent task."""
+    from src.trace import print_last_task
+
+    workspace = get_workspace_dir(getattr(args, "workspace", None))
+    print_last_task(workspace, getattr(args, "task", 1))
+
+
 def cmd_scan(args):
     """Scans and visualizes project file structure."""
     from src.project_scanner import generate_tree, scan_workspace
@@ -558,6 +566,18 @@ def main():
         help="Onay sormadan uygula (yalnızca unmark için)",
     )
     p_docs.set_defaults(func=cmd_docs)
+
+    # debug command (task trace: .evren/logs/trace.jsonl)
+    p_debug = subparsers.add_parser("debug", help="Hata ayıklama araçları (görev izi)")
+    debug_sub = p_debug.add_subparsers(dest="debug_action")
+    p_debug_last = debug_sub.add_parser(
+        "last", help="Son ajan görevinin adım tablosunu göster (istek, araç, süre, token)"
+    )
+    p_debug_last.add_argument(
+        "--task", "-n", type=int, default=1, metavar="N",
+        help="Sondan N. görevi göster (varsayılan: 1 = son görev)",
+    )
+    p_debug.set_defaults(func=cmd_debug, debug_action="last", task=1)
 
     # ssh command
     p_ssh = subparsers.add_parser("ssh", help="Kayıtlı SSH host'larını yönet ve kullan")
