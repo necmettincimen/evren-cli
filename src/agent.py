@@ -32,6 +32,7 @@ from src.modes import AgentMode, parse_mode_prefix
 from src.prompt_frame import PromptFrame, build_user_content, compose_system
 from src.tool_gateway import check_tool_allowed
 from src.secret_vault import SecretVault, set_active_vault
+from src.paste import compact_paste, paste_info
 from src.ui import (
     print_tool_call,
     print_tool_result,
@@ -554,6 +555,9 @@ class AgentSession:
             error = "HATA: Uygulanacak önceki görev yok; önce somut bir Brief yazın."
             print_warning(error)
             return error
+        # A follow-up can be a big paste too (fresh build errors after "devam").
+        set_active_vault(self.vault)
+        text = self._compact_pasted_text(self.vault.capture(text))
         goal = self.task_goal
         mode = self.mode
         self.mode = self.pending_mode or self.mode
@@ -814,8 +818,16 @@ class AgentSession:
             )
         return result_text
 
+    def _compact_pasted_text(self, text: str) -> str:
+        """Shrinks an oversized (already secret-masked) paste; see src/paste.py."""
+        compact, saved = compact_paste(text, self.workspace_root)
+        if saved is not None:
+            print_info(paste_info(text, saved))
+        return compact
+
     def run_step(
         self, user_input: str, max_steps: int | None = None, *, route: bool = True,
+        compact: bool = False,
     ) -> str:
         """
         Executes an agentic goal loop.
@@ -830,6 +842,10 @@ class AgentSession:
         planner model (read-only, few steps) and then executed by the executor
         model with thinking off; plan mode runs on the planner model. `/continue`
         and follow-ups pass `route=False` and keep the last executor profile.
+
+        `compact=True` marks text the user typed or pasted (not a skill or
+        template prompt): above the paste limits it is saved to
+        `.evren/tmp/paste-N.txt` and only a compact form joins the history.
         """
         explicit_steps = max_steps is not None or self.max_steps is not None
         if max_steps is None:
@@ -843,6 +859,9 @@ class AgentSession:
         # changelog, checkpoints) sees the task text.
         set_active_vault(self.vault)
         cleaned_input = self.vault.capture(cleaned_input)
+        if compact:
+            # After capture: the saved paste file then holds placeholders only.
+            cleaned_input = self._compact_pasted_text(cleaned_input)
         effective_mode = turn_mode or self.mode
         self.pending_mode = None
         self.interrupted = False

@@ -215,10 +215,12 @@ def cmd_agent(args):
     print_info(f"Otonom ajan başlatılıyor • {session.model} • {Path(workspace).name or workspace}")
     try:
         if frame.is_empty():
-            session.run_step(prompt, max_steps=args.max_steps)
+            session.run_step(prompt, max_steps=args.max_steps, compact=True)
         else:
             print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(frame)}")
-            session.run_step(session.apply_frame(frame, extra=prompt), max_steps=args.max_steps)
+            session.run_step(
+                session.apply_frame(frame, extra=prompt), max_steps=args.max_steps, compact=True,
+            )
     finally:
         # One-shot mode must not leave background command trees orphaned.
         try:

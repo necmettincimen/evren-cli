@@ -27,6 +27,7 @@ from src.agent import AgentSession
 from src.project_scanner import scan_workspace, generate_tree
 from src.file_ops import rollback_last_backup, resolve_workspace_path
 from src.terms import ensure_terms_accepted, ensure_terms_for_keys, get_terms_status
+from src.commands import is_command_input, unknown_command_message
 from src.prompt_frame import (
     FORM_INTRO,
     collect_guided_prompt_frame,
@@ -149,7 +150,7 @@ def _take_interrupt_followup(session: AgentSession, read_line) -> tuple[str, str
         "Geçmiş duruyor. Düzeltme yazıp Enter'a basın; boş Enter kaldığı yerden devam eder."
     )
     text = (read_line("Düzeltme > ") or "").strip()
-    if text.startswith("/"):
+    if is_command_input(text):
         return ("command", text)
     session.interrupted = False
     if text:
@@ -192,8 +193,15 @@ def _collect_frame(session: AgentSession, pt_session, previous=None):
     )
 
 
-def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bool = False) -> None:
-    """Run or continue, then offer opt-in persistence outside auto-approval."""
+def _run_agent(
+    session: AgentSession, prompt: str | None = None, *, followup: bool = False,
+    compact: bool = False,
+) -> None:
+    """Run or continue, then offer opt-in persistence outside auto-approval.
+
+    `compact=True` is for text the user typed or pasted: a big paste is saved to
+    .evren/tmp and summarized (skill, template and playbook prompts stay whole).
+    """
     from src.workflow_state import clear_checkpoint
 
     if followup:
@@ -206,7 +214,7 @@ def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bo
         session.continue_task()
     else:
         clear_checkpoint(session.workspace_root)
-        session.run_step(prompt)
+        session.run_step(prompt, compact=compact)
 
     if session.interrupted:
         return
@@ -440,6 +448,9 @@ HELP_TEXT = """
 
 [bold]Serbest istek:[/bold]
   Kalıbı boş geçince yazdığın metin eskisi gibi tek prompt olarak gider.
+  İlk sözcüğü kayıtlı bir komut değilse (örn. yapıştırılan /src/x.csproj : error ...) metin görev sayılır.
+  Uzun yapıştırmalar (80 satır / 6000 karakter üstü) .evren/tmp/paste-N.txt'ye kaydedilir;
+  modele baş/son satırlar ve hata satırları gider (EVREN_PASTE_MAX_LINES, EVREN_PASTE_MAX_CHARS).
 """
 
 
@@ -807,7 +818,10 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
                     from src.workflow_state import clear_checkpoint
                     clear_checkpoint(workspace_root)
-                    _run_agent(session, session.apply_frame(collected, replace_identity=True))
+                    _run_agent(
+                        session, session.apply_frame(collected, replace_identity=True),
+                        compact=True,
+                    )
                     continue
                 else:
                     user_input = _read_line(pt_session, "İstek > ")
@@ -827,7 +841,7 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                         session.restore_checkpoint()
                 _run_agent(session)
                 continue
-            if user_input.startswith("/"):
+            if is_command_input(user_input):
                 parts = user_input.split(maxsplit=1)
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else ""
@@ -1316,11 +1330,11 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print_success("Sohbet geçmişi, kalıp ve aktif bağlam temizlendi.")
 
                 else:
-                    print_warning(f"Bilinmeyen komut: '{cmd}'. Komut listesi için /help yazın.")
+                    print_warning(unknown_command_message(cmd))
                 continue
 
             # Regular prompt: run autonomous agent loop
-            _run_agent(session, user_input)
+            _run_agent(session, user_input, compact=True)
 
         except KeyboardInterrupt:
             if session.task_goal:
