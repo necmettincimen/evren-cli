@@ -7,6 +7,20 @@ sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kura
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-17
+
+### Düzeltildi
+- Araç döngüsü: aynı araç aynı argümanla, arada dosya değişmeden tekrar çağrılırsa çalıştırılmaz
+  (`TEKRAR ENGELLENDİ`); aynı çıktı tekrar gelirse işaretlenir; 3 tekrardan sonra sonraki tur araçsız
+  özet ister. Bir REPL oturumunda aynı `git grep` tur başına 25+ kez çalışıp ~2M token yakıyordu.
+- Dosya değiştirebilen komutlar (git checkout/pull/commit, install, rm/mv, yönlendirme) ayrı bir
+  sezgiyle tespit edilir; okuma komutları (`git grep`, findstr, testler, build) korumayı sıfırlamaz.
+- Yeni görevde önceki görevlerin büyük araç çıktıları baş/son kısmına kırpılır.
+- `edit_file`: tüm `edits` maddelerinde aynı `path` varsa üst seviyeye taşınır.
+- Çok satırlı hedef eşleşmediğinde hata mesajı ilk farklı satırı gösterir.
+- REPL açılışında `docs_result` NameError'u giderildi; açılış duman testi eklendi.
+- Banner ve açılış sadeleştirildi; tek seferlik komutlarda kullanım şartları satırı basılmaz.
+
 ## [2.1.1] - 2026-10-15
 
 ### Değişti
