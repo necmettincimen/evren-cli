@@ -346,6 +346,18 @@ def normalize_tool_arguments(
         result[field] = coerce_value(result[field], expected, field)
 
     if tool_name == "edit_file" and "edits" in result:
+        # Models sometimes put `path` inside every edit item instead of at the
+        # top level ("zorunlu parametreler eksik: path"). Lift it when all
+        # items agree on one file.
+        items = result.get("edits")
+        if not result.get("path") and isinstance(items, list) and items:
+            paths = {
+                item.get("path") for item in items
+                if isinstance(item, dict) and item.get("path")
+            }
+            if len(paths) == 1 and all(isinstance(i, dict) and i.get("path") for i in items):
+                result["path"] = paths.pop()
+                result["edits"] = [{k: v for k, v in i.items() if k != "path"} for i in items]
         result["edits"] = _normalize_edit_items(result.get("edits"))
 
     missing = [

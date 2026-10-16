@@ -278,6 +278,37 @@ def ssh_target_note(text: str, workspace_root) -> str:
     )
 
 
+# Commands that can change files, so an identical later call may legitimately
+# return something new. Deliberately not the ask-mode gateway whitelist: that
+# one rejects `git grep` and pipes, which made every looping grep reset the
+# repeat guard.
+_MUTATING_COMMAND_RE = re.compile(
+    r"(?ix)"
+    r"\bgit\s+(?:-C\s+\S+\s+)?(?:checkout|switch|pull|merge|rebase|reset|apply|am|stash|cherry-pick|revert|"
+    r"commit|restore|clean|mv|rm|fetch)\b"
+    r"|\b(?:pip|pip3|npm|pnpm|yarn|dotnet|cargo|go|poetry|uv)\s+(?:install|add|remove|uninstall|restore|"
+    r"update|upgrade|new|publish|tool)\b"
+    r"|(?:^|[\s;&|(])(?:rm|del|erase|rmdir|rd|mv|move|cp|copy|xcopy|robocopy|mkdir|md|ren|rename|touch|"
+    r"truncate|tee)\b"
+    r"|\bsed\s+-i\b"
+    r"|\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item|Rename-Item)\b"
+)
+_REDIRECT_RE = re.compile(r"(?<![0-9&<>])>>?\s*(?!&|nul\b|NUL\b|/dev/null|\$null)\S")
+
+
+def command_may_modify_files(command: str) -> bool:
+    """Heuristic: True when a shell command can change files on disk."""
+    return bool(_MUTATING_COMMAND_RE.search(command or "") or _REDIRECT_RE.search(command or ""))
+
+
+# Tools whose repeated identical calls are legitimate (polling, user turns).
+_REPEAT_EXEMPT_TOOLS = frozenset({
+    "check_background", "stop_background", "ask_user", "todo_write", "delegate",
+})
+# Blocked/flagged repeats after which the next turn must answer without tools.
+_LOOP_BLOCK_LIMIT = 3
+
+
 def domain_hints(text: str) -> str:
     """Returns topic notes relevant to this task text, or an empty string."""
     lowered = (text or "").casefold()
@@ -338,6 +369,8 @@ class AgentSession:
         # Set once a plain "list X" task has shown its full output to the user:
         # the next turn may only summarise (tool_choice="none").
         self._listing_done = False
+        # Repeat guard (see _repeat_guard): identical tool calls within a task.
+        self._reset_repeat_guard()
 
         # Working mode (normal / ask / plan). Persisted across turns; can be
         # overridden per-turn via an "ask:" / "plan:" message prefix.
@@ -836,6 +869,11 @@ class AgentSession:
             str(m.get("content") or "") for m in self.messages if m.get("role") == "user"
         )
         self._listing_done = False
+        self._reset_repeat_guard()
+        # Outputs of earlier tasks in this session are re-sent on every step of
+        # the new one; keep only their head and tail (a REPL session reached 270
+        # messages of old grep output and ~70k prompt tokens per step).
+        self._trim_previous_tool_outputs()
         for notes in (
             domain_hints(cleaned_input),
             ssh_target_note(cleaned_input, self.workspace_root),
@@ -1020,6 +1058,72 @@ class AgentSession:
             return None
         return text
 
+    # ------------------------------------------------------------------ #
+    # Repeat guard
+    # ------------------------------------------------------------------ #
+
+    def _reset_repeat_guard(self) -> None:
+        self._call_epochs: dict[str, int] = {}
+        self._output_seen: dict[tuple[str, int], int] = {}
+        self._write_epoch = 0
+        self._loop_blocks = 0
+
+    @staticmethod
+    def _call_signature(fn_name: str, args: dict) -> str:
+        try:
+            return fn_name + ":" + json.dumps(args, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return fn_name + ":" + repr(sorted(args.items()))
+
+    def _repeat_guard(self, fn_name: str, args: dict) -> str:
+        """Refuses an identical call already made since the last write.
+
+        A REPL session ran the same `git grep` 25+ times per turn with the
+        same output, burning every step and ~2M tokens. Re-running after an
+        edit (tests, a fresh grep) stays allowed: writes bump the epoch.
+        """
+        if fn_name in _REPEAT_EXEMPT_TOOLS:
+            return ""
+        signature = self._call_signature(fn_name, args)
+        if self._call_epochs.get(signature) == self._write_epoch:
+            self._loop_blocks += 1
+            return (
+                "TEKRAR ENGELLENDİ: Bu çağrı bu görevde aynı argümanlarla zaten çalıştı ve o zamandan beri "
+                "hiçbir dosya değişmedi; sonucu yukarıda. Aynı aracı aynı argümanla tekrar çağırma: bulduğun "
+                "bilgiyle sıradaki adıma geç (edit_file ile düzenle, testi çalıştır) ya da sonucu bildir."
+            )
+        self._call_epochs[signature] = self._write_epoch
+        return ""
+
+    def _after_tool(self, fn_name: str, args: dict, result: str) -> str:
+        """Tracks writes and flags results already seen in this task."""
+        if fn_name in ("edit_file", "write_file", "ssh_write_file") and result.startswith("BAŞARILI"):
+            self._write_epoch += 1
+            return result
+        if fn_name in ("run_command", "ssh_run") and command_may_modify_files(str(args.get("command", ""))):
+            # git checkout/pull, installs, rm/mv, redirects...: files may differ now.
+            self._write_epoch += 1
+            return result
+        if fn_name in _REPEAT_EXEMPT_TOOLS or len(result) < 200:
+            return result
+        key = (fn_name, hash(result))
+        seen = self._output_seen.get(key, 0) + 1
+        self._output_seen[key] = seen
+        if seen >= 2:
+            self._loop_blocks += 1
+            return result + (
+                f"\n[EVREN] Bu çıktının aynısı bu görevde {seen}. kez geldi; aynı bilgiyi yeniden arama, "
+                "sıradaki adıma geç."
+            )
+        return result
+
+    def _trim_previous_tool_outputs(self) -> None:
+        from src.history_compactor import _truncate_tool_content
+
+        for message in self.messages:
+            if message.get("role") == "tool" and isinstance(message.get("content"), str):
+                message["content"] = _truncate_tool_content(message["content"])
+
     @staticmethod
     def _step_notes(step_count: int, max_steps: int, stalled_steps: int) -> str:
         """Short per-step reminders; empty on an ordinary step."""
@@ -1149,6 +1253,11 @@ class AgentSession:
                     # stay byte-identical between steps so the server's prompt cache
                     # keeps hitting. Nothing is sent on an ordinary step.
                     step_notes = self._step_notes(step_count, max_steps, stalled_steps)
+                    if self._loop_blocks >= _LOOP_BLOCK_LIMIT:
+                        step_notes = (step_notes + "\n" if step_notes else "") + (
+                            "[EVREN] DÖNGÜ: aynı araç çağrılarını tekrarlıyorsun. Bu tur araç kullanma; "
+                            "şimdiye kadarki bulgularla yapılanı, kalan işi ve tek somut sonraki adımı yaz."
+                        )
                     if self._listing_done:
                         step_notes = (step_notes + "\n" if step_notes else "") + (
                             "[EVREN] Liste kullanıcının terminalinde tam gösterildi. Araç çağırma; "
@@ -1163,7 +1272,9 @@ class AgentSession:
                         max_tokens=output_budget,
                         tools=tools_for_mode(effective_mode),
                         # Same tool list keeps the cached prefix; "none" only forbids calls.
-                        tool_choice="none" if self._listing_done else None,
+                        tool_choice="none" if (
+                            self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT
+                        ) else None,
                         on_reasoning=_on_reasoning,
                         on_content=_on_content,
                         # A stall almost always means the hidden reasoning ate the
@@ -1345,6 +1456,17 @@ class AgentSession:
                         })
                         continue
 
+                    blocked = self._repeat_guard(fn_name, args)
+                    if blocked:
+                        print_tool_result(fn_name, "tekrar eden çağrı engellendi", is_error=True)
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": fn_name,
+                            "content": blocked,
+                        })
+                        continue
+
                     # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
                     result = execute_tool_call(
                         name=fn_name,
@@ -1362,6 +1484,7 @@ class AgentSession:
 
                     # A file or command output may still echo a known secret.
                     result = self.vault.mask(result)
+                    result = self._after_tool(fn_name, args, result)
                     if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
                         self._listing_done = True
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
