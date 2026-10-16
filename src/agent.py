@@ -33,6 +33,7 @@ from src.prompt_frame import PromptFrame, build_user_content, compose_system
 from src.tool_gateway import check_tool_allowed
 from src.secret_vault import SecretVault, set_active_vault
 from src.paste import compact_paste, paste_info
+from src.trace import TaskTrace
 from src.ui import (
     print_tool_call,
     print_tool_result,
@@ -381,6 +382,8 @@ class AgentSession:
         self.task_goal = ""
         # Lightweight audit trail of the current task (feeds changelog.md).
         self.tool_trace: list[dict[str, Any]] = []
+        # Step trace of the running task (.evren/logs/trace.jsonl, see src/trace.py).
+        self._trace_writer: TaskTrace | None = None
 
     def _read_git_block(self) -> str:
         try:
@@ -750,6 +753,46 @@ class AgentSession:
         except Exception:
             pass
 
+    # Step trace -> .evren/logs/trace.jsonl. Not to be confused with `tool_trace`
+    # above (the changelog audit); TaskTrace swallows its own errors.
+
+    def _trace_task_begin(self, text: str, mode: AgentMode) -> None:
+        try:
+            self._trace_writer = TaskTrace(self.workspace_root)
+            self._trace_writer.start(
+                model=self.model, mode=getattr(mode, "value", str(mode)), text=text,
+            )
+        except Exception:
+            self._trace_writer = None
+
+    def _trace_request(self, response: Any, started: float, *, error: bool = False) -> None:
+        if self._trace_writer is None:
+            return
+        try:
+            finish_reason = response.choices[0].finish_reason
+        except Exception:
+            finish_reason = None
+        self._trace_writer.request(
+            getattr(response, "usage", None),
+            ms=(time.perf_counter() - started) * 1000,
+            finish_reason=finish_reason,
+            model=self.model,
+            error=error,
+        )
+
+    def _trace_tool(
+        self, name: str, args: Any, started: float, result: str, *, blocked: bool = False,
+    ) -> None:
+        if self._trace_writer is not None:
+            self._trace_writer.tool(
+                name, args, ms=(time.perf_counter() - started) * 1000, result=result, blocked=blocked,
+            )
+
+    def _trace_task_end(self, result: str | None) -> None:
+        writer, self._trace_writer = self._trace_writer, None
+        if writer is not None:
+            writer.end(result)
+
     def changelog_entry(self, final_text: str = "") -> dict:
         """Builds the changelog payload for the task that just finished."""
         files: list[str] = []
@@ -909,6 +952,8 @@ class AgentSession:
         text_continuations = 0
 
         session_model = self.model
+        self._trace_task_begin(cleaned_input, effective_mode)
+        outcome: str | None = None  # stays None when an exception escapes
         try:
             # Size is judged on what the user wrote (plus attached files), not on
             # the domain/target notes EVREN appended, which made short briefs
@@ -918,23 +963,26 @@ class AgentSession:
             )
             if not explicit_steps:
                 max_steps = self._planned_step_budget(max_steps)
-            return self._finish_task(
+            outcome = self._finish_task(
                 self._run_steps(
                     max_steps, effective_mode, step_count, stalled_steps, text_continuations,
                 ),
                 effective_mode,
             )
+            return outcome
         except KeyboardInterrupt:
             self.note_interrupt(effective_mode)
             print_warning(
                 "İşlem Ctrl+C ile durduruldu. Geçmiş duruyor; düzeltme yazarak devam edebilirsiniz."
             )
-            return "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+            outcome = "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+            return outcome
         finally:
             # The session model (/model) is what the user chose; routing only
             # borrows other models for the duration of one task.
             self.model = session_model
             self._thinking = None
+            self._trace_task_end(outcome)
 
     # ------------------------------------------------------------------ #
     # Planner / executor routing
@@ -1229,6 +1277,7 @@ class AgentSession:
                 else f"[Adım {step_count}/{max_steps}] Model analiz ediyor... [{self.model}]"
             )
 
+            request_started = time.perf_counter()
             try:
                 from src.ui import StatusTracker, HAVE_RICH, console
                 estimated = self.token_manager.estimate_messages(self.messages)
@@ -1309,7 +1358,9 @@ class AgentSession:
                 # Calibrate the estimator against server-reported usage.
                 self.token_manager.calibrate_from_response(estimated, response)
                 self._record_usage(response, step=step_count)
+                self._trace_request(response, request_started)
             except Exception as e:
+                self._trace_request(None, request_started, error=True)
                 if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
                     stalled_steps += 1
                     print_warning(
@@ -1416,6 +1467,7 @@ class AgentSession:
                 # Execute each tool call
                 for tc in tool_calls:
                     fn_name = tc.function.name
+                    t_tool = time.perf_counter()
                     raw_args = tc.function.arguments
                     try:
                         if isinstance(raw_args, dict):
@@ -1432,6 +1484,7 @@ class AgentSession:
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
                         print_tool_result(fn_name, result, is_error=True)
+                        self._trace_tool(fn_name, {"raw": raw_args}, t_tool, result)
                         self.messages.append({
                             "role": "tool", "tool_call_id": tc.id,
                             "name": fn_name, "content": result,
@@ -1446,6 +1499,7 @@ class AgentSession:
                     if not allowed:
                         result = f"REDDEDİLDİ: {deny_reason}"
                         print_tool_result(fn_name, deny_reason, is_error=True)
+                        self._trace_tool(fn_name, args, t_tool, result)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -1467,6 +1521,7 @@ class AgentSession:
                         summary = (result.splitlines()[0] if result else "Tamamlandı")
                         print_tool_result(fn_name, summary, is_error=is_err)
                         self._note_tool_call(fn_name, args, result)
+                        self._trace_tool(fn_name, args, t_tool, result)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -1478,6 +1533,7 @@ class AgentSession:
                     blocked = self._repeat_guard(fn_name, args)
                     if blocked:
                         print_tool_result(fn_name, "tekrar eden çağrı engellendi", is_error=True)
+                        self._trace_tool(fn_name, args, t_tool, blocked, blocked=True)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -1514,6 +1570,7 @@ class AgentSession:
                         summary = result
                     print_tool_result(fn_name, summary, is_error=is_err)
                     self._note_tool_call(fn_name, args, result)
+                    self._trace_tool(fn_name, args, t_tool, result)
 
                     # Add tool response to messages
                     self.messages.append({

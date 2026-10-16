@@ -33,6 +33,7 @@ COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "/tokens": (),
     "/steps": (),
     "/docs": (),
+    "/debug": (),
     "/skills": (),
     "/skill": ("/apply",),
     "/diagnose": (),
