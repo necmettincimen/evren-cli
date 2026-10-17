@@ -324,7 +324,13 @@ def print_markdown_stream(chunk: str):
             live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
             live.start()
             _STREAM["live"] = live
-        _STREAM["live"].update(Markdown("".join(_STREAM["buffer"])))
+            _STREAM["last"] = 0.0
+        # Throttle: re-render markdown at most every 120 ms (flush renders the rest).
+        import time as _t
+        now = _t.monotonic()
+        if now - _STREAM.get("last", 0.0) >= 0.12:
+            _STREAM["last"] = now
+            _STREAM["live"].update(Markdown("".join(_STREAM["buffer"])))
     elif not HAVE_RICH:
         _STREAM["pending"] += chunk
         while "\n" in _STREAM["pending"]:
