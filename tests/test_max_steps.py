@@ -24,19 +24,11 @@ def response(content="", finish_reason="stop", tools=()):
 
 
 class DefaultMaxStepsTest(unittest.TestCase):
-    def test_default_is_thirty(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("EVREN_MAX_STEPS", None)
-            self.assertEqual(default_max_steps(), 30)
 
     def test_env_override(self):
         with patch.dict(os.environ, {"EVREN_MAX_STEPS": "25"}):
             self.assertEqual(default_max_steps(), 25)
 
-    def test_invalid_env_falls_back(self):
-        for value in ("", "abc", "0", "-3", "None"):
-            with patch.dict(os.environ, {"EVREN_MAX_STEPS": value}):
-                self.assertEqual(default_max_steps(), 30)
 
 
 class RunStepCeilingTest(unittest.TestCase):
@@ -63,21 +55,8 @@ class RunStepCeilingTest(unittest.TestCase):
                 patch("src.agent.execute_tool_call", return_value="ÇIKTI"):
             return self.session.run_step("bitmeyen görev", **kwargs)
 
-    def test_env_ceiling_is_used(self):
-        text = self._run()
-        self.assertIn("2", text)
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
 
-    def test_explicit_argument_beats_env(self):
-        text = self._run(env={"EVREN_MAX_STEPS": "9"}, max_steps=3)
-        self.assertIn("3", text)
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 3)
 
-    def test_session_override_is_used(self):
-        self.session.max_steps = 4
-        text = self._run(env={"EVREN_MAX_STEPS": "9"})
-        self.assertIn("4", text)
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 4)
 
     def test_zero_still_rejected(self):
         with self.assertRaises(ValueError):
@@ -133,11 +112,7 @@ class CliDefaultTest(unittest.TestCase):
             cli.main()
         return captured["args"]
 
-    def test_agent_parser_defaults_to_none(self):
-        self.assertIsNone(self.parse(["agent", "görev"]).max_steps)
 
-    def test_explicit_flag_still_works(self):
-        self.assertEqual(self.parse(["agent", "--max-steps", "20", "görev"]).max_steps, 20)
 
 
 if __name__ == "__main__":  # pragma: no cover

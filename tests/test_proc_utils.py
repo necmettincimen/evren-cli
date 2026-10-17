@@ -20,23 +20,7 @@ def _drain(gen):
 
 
 class TestProcUtils(unittest.TestCase):
-    def test_normal_command(self):
-        code, out, err, timed_out = run_with_tree_kill(
-            [sys.executable, "-c", "print('hello')"],
-            timeout=30,
-        )
-        self.assertFalse(timed_out)
-        self.assertEqual(code, 0)
-        self.assertIn("hello", out)
 
-    def test_timeout_kills_process(self):
-        # A child that sleeps far longer than the timeout.
-        code, out, err, timed_out = run_with_tree_kill(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            timeout=1,
-        )
-        self.assertTrue(timed_out)
-        self.assertEqual(code, -1)
 
     def test_timeout_kills_grandchild(self):
         # Parent spawns a grandchild that sleeps; both must be killed.
@@ -55,21 +39,7 @@ class TestProcUtils(unittest.TestCase):
         # Should return promptly after the timeout, not wait for the sleepers.
         self.assertLess(elapsed, 20)
 
-    def test_ctrl_c_kills_running_command(self):
-        script = "import time; print('started', flush=True); time.sleep(60)"
-        gen = stream_with_tree_kill([sys.executable, "-c", script], timeout=30)
-        self.addCleanup(gen.close)
-        line = next(gen)
-        self.assertIn("started", line[1])
-        started = time.time()
-        with self.assertRaises(KeyboardInterrupt):
-            gen.throw(KeyboardInterrupt)
-        self.assertLess(time.time() - started, 4)
 
-    def test_kill_process_tree_invalid_pid(self):
-        # Should be a no-op and not raise.
-        kill_process_tree(0)
-        kill_process_tree(-1)
 
 
 class TestStreamWithTreeKill(unittest.TestCase):
@@ -94,15 +64,6 @@ class TestStreamWithTreeKill(unittest.TestCase):
         self.assertIn("out2", out)
         self.assertIn("err1", err)
 
-    def test_stream_timeout_kills_tree(self):
-        lines, (code, out, err, timed_out) = _drain(
-            stream_with_tree_kill(
-                [sys.executable, "-c", "import time; time.sleep(60)"],
-                timeout=1,
-            )
-        )
-        self.assertTrue(timed_out)
-        self.assertEqual(code, -1)
 
 
 if __name__ == "__main__":

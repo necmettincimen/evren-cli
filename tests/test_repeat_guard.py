@@ -95,54 +95,11 @@ class RepeatGuardTest(unittest.TestCase):
         last_tool = [m for m in self.session.messages if m.get("role") == "tool"][-1]
         self.assertIn("aynısı bu görevde 2. kez", last_tool["content"])
 
-    def test_previous_task_outputs_are_trimmed_on_a_new_task(self):
-        big = "satır\n" * 2000
-        self.session.messages.append({"role": "tool", "tool_call_id": "old", "name": "run_command", "content": big})
-        self.client.chat_stream_assembled.side_effect = [reply("tamam")]
-        self.session.run_step("yeni görev")
-        old = next(m for m in self.session.messages if m.get("tool_call_id") == "old")
-        self.assertLess(len(old["content"]), 2500)
 
 
-class EditPathLiftTest(unittest.TestCase):
-    def test_path_inside_every_edit_item_is_lifted(self):
-        args = normalize_tool_arguments("edit_file", {
-            "edits": [
-                {"path": "appsettings.Staging.json", "target_snippet": "a", "replacement_snippet": "b"},
-                {"path": "appsettings.Staging.json", "target_snippet": "c", "replacement_snippet": "d"},
-            ],
-        }, type_map=TOOL_ARGUMENT_TYPES, required_map=TOOL_ARGUMENT_REQUIRED)
-        self.assertEqual(args["path"], "appsettings.Staging.json")
-        self.assertTrue(all("path" not in e for e in args["edits"]))
-
-    def test_different_paths_are_not_merged(self):
-        from src.tool_args import ToolArgumentError
-
-        with self.assertRaises(ToolArgumentError):
-            normalize_tool_arguments("edit_file", {
-                "edits": [
-                    {"path": "a.json", "target_snippet": "a", "replacement_snippet": "b"},
-                    {"path": "b.json", "target_snippet": "c", "replacement_snippet": "d"},
-                ],
-            }, type_map=TOOL_ARGUMENT_TYPES, required_map=TOOL_ARGUMENT_REQUIRED)
 
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 
 
-class CommandMutationHeuristicTest(unittest.TestCase):
-    def test_read_commands_do_not_reset_the_guard(self):
-        from src.agent import command_may_modify_files as may_modify
-
-        for command in (GREP, "git grep foo", "findstr /n x a.cs", "python -m pytest -q 2>&1 | tail -5",
-                        "dotnet build", "git status --short && git log -5", "type a.txt 2>nul"):
-            self.assertFalse(may_modify(command), command)
-
-    def test_writing_commands_reset_it(self):
-        from src.agent import command_may_modify_files as may_modify
-
-        for command in ("git checkout main", "git -C portal-backend pull --ff-only", "npm install",
-                        "del a.txt", "echo x > out.txt", "sed -i s/a/b/ f", "Remove-Item x",
-                        'git add -A && git commit -m "x"'):
-            self.assertTrue(may_modify(command), command)

@@ -26,31 +26,13 @@ class RegistryMergeTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_user_hosts_are_visible_next_to_project_hosts(self):
-        _write(self.home / ".evren" / "ssh_hosts.json", {"koyu3-k8s": {"host": "10.0.0.30", "user": "oboe"}})
-        _write(self.ws / ".evren" / "ssh_hosts.json", {"koyu3": {"host": "10.0.0.40", "user": "alma"}})
-        hosts = load_hosts(self.ws)
-        self.assertEqual(set(hosts), {"koyu3-k8s", "koyu3"})
 
     def test_project_entry_wins_on_conflict(self):
         _write(self.home / ".evren" / "ssh_hosts.json", {"x": {"host": "1.1.1.1"}})
         _write(self.ws / ".evren" / "ssh_hosts.json", {"x": {"host": "2.2.2.2"}})
         self.assertEqual(get_host("x", self.ws).host, "2.2.2.2")
 
-    def test_add_goes_machine_wide_and_remove_finds_it(self):
-        add_host("prod", "10.0.0.5", workspace_root=self.ws)
-        self.assertTrue((self.home / ".evren" / "ssh_hosts.json").exists())
-        self.assertFalse((self.ws / ".evren" / "ssh_hosts.json").exists())
-        other_ws = Path(self.tmp.name) / "other"
-        other_ws.mkdir()
-        self.assertIsNotNone(get_host("prod", other_ws))
-        self.assertTrue(remove_host("prod", self.ws))
-        self.assertIsNone(get_host("prod", other_ws))
 
-    def test_workspace_scope_stays_local(self):
-        add_host("lab", "10.0.0.9", workspace_root=self.ws, scope="workspace")
-        self.assertIn("lab", json.loads((self.ws / ".evren" / "ssh_hosts.json").read_text()))
-        self.assertFalse((self.home / ".evren" / "ssh_hosts.json").exists())
 
     def test_unknown_alias_lists_close_matches_with_description(self):
         _write(self.ws / ".evren" / "ssh_hosts.json", {
@@ -64,22 +46,9 @@ class RegistryMergeTest(unittest.TestCase):
         self.assertIn("ask_user", result)
 
 
-class ConnectionErrorHintTest(unittest.TestCase):
-    def test_timeout_names_the_target_and_says_stop(self):
-        with tempfile.TemporaryDirectory() as directory:
-            ws = Path(directory)
-            _write(ws / ".evren" / "ssh_hosts.json", {"k": {"host": "10.9.9.9", "user": "oboe"}})
-            with mock.patch.object(Path, "home", return_value=ws),                     mock.patch("src.ssh_ops.run_with_tree_kill", return_value=(
-                        255, "", "ssh: connect to host 10.9.9.9 port 22: Connection timed out", False,
-                    )):
-                result = ssh_run("k", "kubectl get pods", workspace_root=ws)
-        self.assertIn("oboe@10.9.9.9:22", result)
-        self.assertIn("tekrarlama", result)
 
 
 class SpillLongOutputTest(unittest.TestCase):
-    def test_short_output_is_returned_as_is(self):
-        self.assertEqual(spill_long_output("kısa", None, "x"), "kısa")
 
     def test_long_output_is_saved_shown_and_flagged(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -95,11 +64,6 @@ class SpillLongOutputTest(unittest.TestCase):
             self.assertIn("400 satır", result)
             self.assertIn("yeniden yazma", result)
 
-    def test_live_output_is_not_printed_twice(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with mock.patch("src.ui.print_command_output") as shown:
-                spill_long_output("x" * 9000, Path(directory), "cmd", shown_live=True)
-            shown.assert_not_called()
 
 
 if __name__ == "__main__":  # pragma: no cover

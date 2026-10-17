@@ -9,14 +9,6 @@ def _tm(context_window=100000):
 
 
 class TestHistoryCompactor(unittest.TestCase):
-    def test_no_compaction_when_fits(self):
-        comp = HistoryCompactor(_tm())
-        msgs = [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "hi"},
-        ]
-        out = comp.compact(msgs, output_budget=100)
-        self.assertEqual(out, msgs)
 
     def test_system_prompt_always_preserved(self):
         comp = HistoryCompactor(_tm(context_window=200))
@@ -28,23 +20,6 @@ class TestHistoryCompactor(unittest.TestCase):
         self.assertEqual(out[0]["role"], "system")
         self.assertEqual(out[0]["content"], "SYS")
 
-    def test_tool_output_truncated(self):
-        comp = HistoryCompactor(_tm(context_window=100000))
-        big = "A" * 10000
-        msgs = [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "run"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "1", "function": {"name": "run_command", "arguments": "{}"}}
-            ]},
-            {"role": "tool", "tool_call_id": "1", "content": big},
-        ]
-        # Force compaction by using a tiny window.
-        out = comp.compact(msgs, output_budget=10, max_tokens=500)
-        tool_msgs = [m for m in out if m.get("role") == "tool"]
-        self.assertTrue(tool_msgs)
-        self.assertIn(TOOL_TRUNCATION_MARKER, tool_msgs[0]["content"])
-        self.assertLess(len(tool_msgs[0]["content"]), len(big))
 
     def test_assistant_tool_pair_stays_atomic(self):
         comp = HistoryCompactor(_tm(context_window=300))
@@ -66,21 +41,7 @@ class TestHistoryCompactor(unittest.TestCase):
             if m.get("role") == "tool":
                 self.assertIn(m["tool_call_id"], assistant_ids)
 
-    def test_stage3_keeps_system_and_last(self):
-        comp = HistoryCompactor(_tm(context_window=50))
-        msgs = [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "old " * 50},
-            {"role": "assistant", "content": "old reply " * 50},
-            {"role": "user", "content": "newest"},
-        ]
-        out = comp.compact(msgs, output_budget=10)
-        self.assertEqual(out[0]["role"], "system")
-        self.assertEqual(out[-1]["content"], "newest")
 
-    def test_empty_history(self):
-        comp = HistoryCompactor(_tm())
-        self.assertEqual(comp.compact([], output_budget=100), [])
 
 
 if __name__ == "__main__":

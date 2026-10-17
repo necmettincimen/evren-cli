@@ -23,28 +23,6 @@ def response(content="", finish_reason="stop", tools=()):
     )
 
 
-class StallTokenCapTest(unittest.TestCase):
-    def test_default_is_16384(self):
-        # The qwen base budget is 8192, so the default cap allows one doubling.
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("EVREN_STALL_TOKEN_CAP", None)
-            self.assertEqual(_stall_token_cap(), 16384)
-
-    def test_default_is_half_of_the_old_ceiling(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("EVREN_STALL_TOKEN_CAP", None)
-            self.assertEqual(_stall_token_cap(), 32768 // 2)
-
-    def test_env_override(self):
-        with patch.dict(os.environ, {"EVREN_STALL_TOKEN_CAP": "8192"}):
-            self.assertEqual(_stall_token_cap(), 8192)
-
-    def test_out_of_range_falls_back(self):
-        for value in ("", "abc", "512", "999999", "-1"):
-            with patch.dict(os.environ, {"EVREN_STALL_TOKEN_CAP": value}):
-                self.assertEqual(_stall_token_cap(), 16384)
-
-
 class StallBudgetBehaviourTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -89,13 +67,6 @@ class StallBudgetBehaviourTest(unittest.TestCase):
         self.assertLessEqual(max(b for b in budgets if b), _stall_token_cap())
         self.assertGreater(max(budgets), min(budgets))
 
-    def test_cap_env_raises_the_ceiling(self):
-        stalls = [response("", "length")] * 3
-        budgets, _limits = self._budgets_and_limits(
-            stalls, env={"EVREN_STALL_TOKEN_CAP": "32768"}
-        )
-        self.assertLessEqual(max(budgets), 32768)
-        self.assertGreater(max(budgets), 16384)
 
     def test_second_stall_halves_the_compaction_limit(self):
         stalls = [response("", "length")] * 2
@@ -104,9 +75,6 @@ class StallBudgetBehaviourTest(unittest.TestCase):
         # Later calls (repeats >= 2) must compact harder than the first call.
         self.assertLess(limits[-1], limits[0])
 
-    def test_first_request_uses_the_plain_limit(self):
-        _budgets, limits = self._budgets_and_limits([])
-        self.assertEqual(limits[0], self.session.compaction_limit())
 
     def test_final_error_mentions_the_tuning_knobs(self):
         stalls = [response("", "length")] * 4

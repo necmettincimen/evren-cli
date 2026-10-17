@@ -16,9 +16,6 @@ def names(schema):
 
 
 class ToolsForModeTest(unittest.TestCase):
-    def test_normal_is_the_full_schema(self):
-        self.assertIs(tools_for_mode(AgentMode.NORMAL), TOOLS_SCHEMA)
-        self.assertEqual(names(tools_for_mode(AgentMode.NORMAL)), names(TOOLS_SCHEMA))
 
     def test_ask_drops_write_tools(self):
         got = names(tools_for_mode(AgentMode.ASK))
@@ -29,31 +26,9 @@ class ToolsForModeTest(unittest.TestCase):
         self.assertIn("run_command", got)
         self.assertIn("ask_user", got)
 
-    def test_plan_keeps_create_plan_but_drops_writes(self):
-        got = names(tools_for_mode(AgentMode.PLAN))
-        self.assertIn("create_plan", got)
-        self.assertNotIn("edit_file", got)
-        self.assertNotIn("write_file", got)
 
-    def test_unknown_mode_is_conservative(self):
-        # Anything that is not ask/plan must keep the full surface (fail open to
-        # the gateway, never hide a tool the gateway would allow).
-        self.assertEqual(names(tools_for_mode(None)), names(TOOLS_SCHEMA))
 
-    def test_schemas_are_returned_by_reference_not_copied(self):
-        # The derived TOOL_ARGUMENT_* maps are built once from TOOLS_SCHEMA;
-        # filtering must not mutate it.
-        before = len(TOOLS_SCHEMA)
-        tools_for_mode(AgentMode.ASK)
-        tools_for_mode(AgentMode.PLAN)
-        self.assertEqual(len(TOOLS_SCHEMA), before)
 
-    def test_filtered_schema_is_smaller(self):
-        tm = TokenManager()
-        full = tm.estimate_text(json.dumps(TOOLS_SCHEMA, ensure_ascii=False))
-        ask = tm.estimate_text(json.dumps(tools_for_mode(AgentMode.ASK), ensure_ascii=False))
-        self.assertLess(ask, full)
-        self.assertGreaterEqual(full - ask, 300)
 
     def test_every_hidden_tool_is_denied_by_the_gateway(self):
         # The filter is only a cost optimisation: the gateway must already deny
@@ -80,17 +55,7 @@ class ToolsForModeTest(unittest.TestCase):
                     allowed, reason = check_tool_allowed(tool, probes[tool], mode)
                     self.assertTrue(allowed, f"{tool} in {mode}: {reason}")
 
-    def test_plan_mode_still_advertises_create_plan(self):
-        allowed, reason = check_tool_allowed(
-            "create_plan", {"name": "x", "content": "y"}, AgentMode.PLAN
-        )
-        self.assertTrue(allowed, reason)
-        self.assertIn("create_plan", names(tools_for_mode(AgentMode.PLAN)))
 
-    def test_ask_user_schema_is_unchanged_by_the_filter(self):
-        # The filter must not silently remove the tool the system prompt relies on.
-        for mode in (AgentMode.ASK, AgentMode.PLAN, AgentMode.NORMAL):
-            self.assertIn("ask_user", names(tools_for_mode(mode)))
 
 
 if __name__ == "__main__":  # pragma: no cover

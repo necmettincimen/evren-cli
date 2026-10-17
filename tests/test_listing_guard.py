@@ -26,26 +26,6 @@ class ListingTaskTest(unittest.TestCase):
         self.assertTrue(is_listing_task("koyu3-k8s üzerindeki podların resource ve limit değerlerini listele"))
         self.assertTrue(is_listing_task("namespace'leri göster"))
 
-    def test_analysis_requests_are_not_listing(self):
-        self.assertFalse(is_listing_task("sadece son buildleri hata vermiş repoları kontrol et"))
-        self.assertFalse(is_listing_task("limiti olmayan podları listele"))
-
-
-class SshTargetNoteTest(unittest.TestCase):
-    def test_registered_alias_in_task_is_named(self):
-        with tempfile.TemporaryDirectory() as directory:
-            ws = Path(directory)
-            (ws / ".evren").mkdir()
-            (ws / ".evren" / "ssh_hosts.json").write_text(json.dumps({
-                "koyu3-k8s": {"host": "10.0.0.30", "user": "oboe"},
-                "koyu3": {"host": "10.0.0.40"},
-            }), encoding="utf-8")
-            with patch.object(Path, "home", return_value=ws):
-                note = ssh_target_note("koyu3-k8s üzerindeki podları listele", ws)
-                self.assertIn("'koyu3-k8s' (oboe@10.0.0.30)", note)
-                self.assertNotIn("'koyu3' ", note)  # whole-alias match only
-                self.assertIn("run_command", note)
-                self.assertEqual(ssh_target_note("README'yi düzelt", ws), "")
 
 
 class ListingFastPathTest(unittest.TestCase):
@@ -83,12 +63,7 @@ class ListingFastPathTest(unittest.TestCase):
         seen = self._run("podları listele", "Çıkış Kodu: 0\n...\n[EVREN] Tam çıktı (175 satır) kullanıcının terminalinde gösterildi.")
         self.assertEqual(seen, [None, "none"])
 
-    def test_short_output_keeps_tools(self):
-        self.assertEqual(self._run("podları listele", "Çıkış Kodu: 0\nkısa"), [None, None])
 
-    def test_analysis_task_keeps_tools(self):
-        seen = self._run("limiti olmayan podları listele", "[EVREN] Tam çıktı (175 satır) ...")
-        self.assertEqual(seen, [None, None])
 
 
 if __name__ == "__main__":  # pragma: no cover

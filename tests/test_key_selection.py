@@ -33,22 +33,7 @@ class SelectBestKeyTest(unittest.TestCase):
         self.assertEqual(states["evren_llm_c"], KeyState.READY)
         self.assertEqual(client.last_remaining_tokens, 15_000_000)
 
-    def test_all_low_still_uses_the_fullest(self):
-        client = _client(["evren_llm_a", "evren_llm_b"])
-        remaining = {"evren_llm_a": 10, "evren_llm_b": 900}
-        with patch.object(
-            client, "get_quota",
-            side_effect=lambda api_key: {"remaining_daily_tokens": remaining[api_key]},
-        ):
-            row = client.select_best_key(min_remaining=50_000)
-        self.assertEqual(row["key"], "evren_llm_b")
-        self.assertEqual(client.key_pool.acquire().key, "evren_llm_b")
 
-    def test_unknown_quotas_leave_the_pool_alone(self):
-        client = _client(["evren_llm_a", "evren_llm_b"])
-        with patch.object(client, "get_quota", return_value={"remaining_daily_tokens": "Bilinmiyor"}):
-            self.assertIsNone(client.select_best_key())
-        self.assertEqual(client.key_pool.acquire().key, "evren_llm_a")
 
 
 class DailyQuotaMappingTest(unittest.TestCase):

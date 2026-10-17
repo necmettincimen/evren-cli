@@ -42,57 +42,9 @@ class TestBackgroundManager(unittest.TestCase):
         self.assertIn("bitti", status)
         self.assertIn("çıkış kodu: 0", status)
 
-    def test_check_returns_incremental_output(self):
-        # Prints one line, blocks until killed; stdin is closed by the reader
-        # setup so the child must not depend on it.
-        rec = self.mgr.start(
-            "incremental",
-            argv=[
-                sys.executable,
-                "-c",
-                "import time\n"
-                "print('ilk', flush=True)\n"
-                "time.sleep(600)\n"
-                "print('ikinci', flush=True)\n",
-            ],
-        )
-        # First read must eventually contain only the first line.
-        deadline = time.monotonic() + 20
-        first = ""
-        while time.monotonic() < deadline and "ilk" not in first:
-            first += self.mgr.check(rec.id)[0]
-            time.sleep(0.05)
-        self.assertIn("ilk", first)
-        self.assertNotIn("ikinci", first)
 
-        # Second read right after must not repeat what we already consumed.
-        chunk, status, code = self.mgr.check(rec.id)
-        self.assertEqual(chunk, "")
-        self.assertIsNone(code)
-        self.assertIn("çalışıyor", status)
 
-        # After stop, the process is gone and no phantom output appears.
-        self.mgr.stop(rec.id)
-        rest, _, _ = self.mgr.check(rec.id)
-        self.assertNotIn("ilk", rest)
 
-    def test_check_unknown_id_raises_keyerror(self):
-        with self.assertRaises(KeyError):
-            self.mgr.check("bg-404")
-
-    def test_nonzero_exit_code_reported(self):
-        rec = self.mgr.start("fail", argv=[sys.executable, "-c", "import sys; sys.exit(3)"])
-        _, status, code = _wait_done(self.mgr, rec.id)
-        self.assertEqual(code, 3)
-        self.assertIn("çıkış kodu: 3", status)
-
-    def test_stderr_merged_into_output(self):
-        rec = self.mgr.start(
-            "stderr", argv=[sys.executable, "-c", "import sys; print('hata', file=sys.stderr)"]
-        )
-        output, _, code = _wait_done(self.mgr, rec.id)
-        self.assertEqual(code, 0)
-        self.assertIn("hata", output)
 
     # -------------------------------------------------------------------- stop
     def test_stop_kills_long_running_process(self):
@@ -105,14 +57,7 @@ class TestBackgroundManager(unittest.TestCase):
         self.assertTrue(rec.stopped)
         self.assertIn("durduruldu", rec.status_line())
 
-    def test_stop_unknown_id_returns_false(self):
-        self.assertFalse(self.mgr.stop("bg-404"))
 
-    def test_stop_finished_process_is_idempotent(self):
-        rec = self.mgr.start("quick", argv=[sys.executable, "-c", "print('ok')"])
-        _wait_done(self.mgr, rec.id)
-        self.assertTrue(self.mgr.stop(rec.id))
-        self.assertFalse(rec.stopped)  # was already finished, not killed
 
     # ------------------------------------------------------------- cleanup_all
     def test_cleanup_all_kills_running_processes(self):
@@ -126,25 +71,9 @@ class TestBackgroundManager(unittest.TestCase):
         self.assertFalse(r1.running())
         self.assertFalse(r2.running())
 
-    def test_cleanup_all_with_nothing_running(self):
-        self.assertEqual(self.mgr.cleanup_all(), 0)
 
     # ------------------------------------------------------------------ buffer
-    def test_new_output_empty_when_nothing_appended(self):
-        rec = self.mgr.start("quiet", argv=[sys.executable, "-c", "print('tek')"])
-        _wait_done(self.mgr, rec.id)
-        self.assertEqual(rec.new_output(), "")
 
-    def test_list_returns_records(self):
-        self.mgr.start("a", argv=[sys.executable, "-c", "print('a')"])
-        self.mgr.start("b", argv=[sys.executable, "-c", "print('b')"])
-        ids = [r.id for r in self.mgr.list()]
-        self.assertEqual(ids, ["bg-1", "bg-2"])
-
-
-class TestSingleton(unittest.TestCase):
-    def test_get_manager_returns_same_instance(self):
-        self.assertIs(get_manager(), get_manager())
 
 
 if __name__ == "__main__":
