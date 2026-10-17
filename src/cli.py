@@ -488,6 +488,9 @@ def main():
         help="Başsız kip çıktı biçimi (json: sonuç, değişen dosyalar, token, çıkış kodu)",
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Başsız kip adım tavanı")
+    parser.add_argument("--allowed-tools", default=None, help="Başsız kip: onaysız çalışacak araçlar (virgülle: edit_file,run_command)")
+    parser.add_argument("--yes", action="store_true", help="Başsız kip: tüm onayları otomatik ver")
+    parser.add_argument("--continue", dest="continue_last", action="store_true", help="Son oturumu devam ettir")
 
     _add_backup_arg(parser)
 
@@ -623,7 +626,8 @@ def main():
     if not args.subcommand:
         try:
             from src.repl import start_repl
-            start_repl(workspace_path=args.workspace, initial_model=args.model)
+            start_repl(workspace_path=args.workspace, initial_model=args.model,
+                       continue_last=args.continue_last)
         except ImportError as e:
             print_error(f"Gerekli paketler eksik ({e}). Lütfen 'pip install -r requirements.txt' çalıştırın.")
     else:

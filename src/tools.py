@@ -466,6 +466,9 @@ TOOLS_SCHEMA = [
     },
 ]
 
+from src.apply_patch import SCHEMA as _APPLY_PATCH_SCHEMA
+TOOLS_SCHEMA.append(_APPLY_PATCH_SCHEMA)
+
 # Derived once from TOOLS_SCHEMA: {tool: {param: declared json type}} and
 # {tool: [required params]}. Used to normalize lenient model arguments.
 SEARCH_CODE_SCHEMA = {
@@ -1420,4 +1423,8 @@ def execute_tool_call(
         )
         return result
     else:
+        from src.tool_ext import dispatch as _ext_dispatch
+        ext = _ext_dispatch(name, arguments, root, auto_approve)
+        if ext is not None:
+            return ext
         return f"HATA: Tanınmayan araç çağrısı: '{name}'"

@@ -535,7 +535,13 @@ def run_headless(args) -> int:
 
     workspace = get_workspace_dir(args.workspace)
     client = EvrenClient(default_model=args.model)
-    session = AgentSession(client=client, workspace_root=workspace, model=args.model, auto_approve=True)
+    from src import settings as _settings
+
+    _settings.set_workspace(workspace)
+    _settings.EXTRA_ALLOW[:] = [t.strip() for t in (getattr(args, "allowed_tools", None) or "").split(",") if t.strip()]
+    # No forced auto-approve: only --yes (or allowed tools / settings rules) skip prompts.
+    session = AgentSession(client=client, workspace_root=workspace, model=args.model,
+                           auto_approve=bool(getattr(args, "yes", False)))
     text, _warn = expand_mentions(args.print_prompt, workspace)
     result, code = "", 0
     import contextlib
