@@ -251,9 +251,21 @@ def _offer_plan_execution(session: AgentSession) -> None:
     session.mode = AgentMode.NORMAL
     print_info("Normal moda geçildi.")
     rel = plans[-1].relative_to(session.workspace_root).as_posix()
+    try:
+        plan_text = plans[-1].read_text(encoding="utf-8")
+    except OSError:
+        plan_text = ""
+    steps = [ln for ln in plan_text.splitlines() if re.match(r"^\s*(\d{1,2}[.)]|[-*])\s+\S", ln)]
+    # A two-step plan was applied with four todo_write calls and a full test run.
+    if len(steps) > 3:
+        session._plan_to_todos(plan_text)
+        how = "Adımlar görev listesine yüklendi; maddeleri bitirdikçe toplu işaretle."
+    else:
+        how = "Plan kısa: todo_write kullanma, doğrudan uygula."
     _run_agent(
         session,
-        f"{rel} dosyasındaki planı uygula. Önce adımları todo_write ile görev listesine dök, sonra sırayla yap.",
+        f"{rel} planını uygula (içerik aşağıda; dosyayı yeniden okuma). {how} "
+        "Doğrulamada yalnız ilgili testleri çalıştır.\n\n" + plan_text[:6000],
     )
 
 

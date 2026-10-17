@@ -290,6 +290,8 @@ _IMPERATIVE_RE = re.compile(
 )
 # Same command family (pytest, dotnet test...) runs allowed between writes.
 _FAMILY_RUN_LIMIT = 4
+# Inline python probes between writes before a "decide and edit" nudge.
+_PROBE_NUDGE_AT = 4
 
 
 _CODE_EXTS = frozenset({".py", ".cs", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt"})
@@ -1383,6 +1385,8 @@ class AgentSession:
         self._idle_steps = 0
         self._idle_epoch = 0
         self._family_runs: dict[str, tuple[int, int]] = {}
+        self._probe_runs: dict[int, int] = {}
+        self._probe_note = ""
 
     @staticmethod
     def _call_signature(fn_name: str, args: dict) -> str:
@@ -1409,6 +1413,18 @@ class AgentSession:
                 "bilgiyle sıradaki adıma geç (edit_file ile düzenle, testi çalıştır) ya da sonucu bildir."
             )
         self._call_epochs[signature] = self._write_epoch
+        if fn_name == "run_command" and (
+            args.get("use_python") or str(args.get("command") or "").lstrip().startswith(("python -c", "py -c"))
+        ):
+            # Ten `python -c "import difflib; ..."` probes for one small fix:
+            # nudge once per write-free stretch instead of blocking.
+            probes = self._probe_runs.get(self._write_epoch, 0) + 1
+            self._probe_runs[self._write_epoch] = probes
+            if probes == _PROBE_NUDGE_AT:
+                self._probe_note = (
+                    f"[EVREN] {probes} deneme betiği çalıştırdın ve dosya değişmedi. Deneme yeter: bulguna göre "
+                    "kodu şimdi düzenle (edit_file) ve tek doğrulama çalıştır."
+                )
         family = self._command_family(fn_name, args)
         if family:
             runs = self._family_runs.get(family)
@@ -1694,6 +1710,9 @@ class AgentSession:
         idle = self._idle_note()
         if idle:
             step_notes = (step_notes + "\n" if step_notes else "") + idle
+        if getattr(self, "_probe_note", ""):
+            step_notes = (step_notes + "\n" if step_notes else "") + self._probe_note
+            self._probe_note = ""
         return step_notes
 
     def _idle_note(self) -> str:
