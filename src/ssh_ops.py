@@ -14,6 +14,7 @@ Safety model:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -133,6 +134,9 @@ def _audit_log(workspace_root: Path | None, alias: str, action: str, detail: str
         pass
 
 
+_SUDO_RE = re.compile(r"(^|[;&|(]\s*|\s)sudo\s+(?!-n\b|--non-interactive\b)")
+
+
 def ssh_run(
     alias: str,
     command: str,
@@ -152,6 +156,9 @@ def ssh_run(
     timeout = timeout_seconds or DEFAULT_SSH_TIMEOUT
     timeout = max(1, min(timeout, MAX_SSH_TIMEOUT))
 
+    # No terminal to type a password into: `sudo` must fail fast instead of
+    # waiting for the timeout (a restart analysis hung 23 s on bursa3-k8s).
+    command = _SUDO_RE.sub(r"\1sudo -n ", command)
     argv = build_ssh_command(host, command)
     try:
         code, out, err, timed_out = run_with_tree_kill(
