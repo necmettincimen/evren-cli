@@ -1253,6 +1253,15 @@ def tool_todo_write(todos: Any = None) -> str:
     return get_store().render() or "Görev listesi temizlendi."
 
 
+_TOOL_NAME_ALIASES = {
+    "read_file": "view_file", "cat": "view_file", "open_file": "view_file",
+    "grep": "find_files", "search_files": "find_files", "search": "find_files",
+    "ls": "list_directory", "list_dir": "list_directory", "list_files": "list_directory",
+    "bash": "run_command", "shell": "run_command", "execute_command": "run_command",
+    "create_file": "write_file", "str_replace": "edit_file", "replace_in_file": "edit_file",
+}
+
+
 def execute_tool_call(
     name: str,
     arguments: dict[str, Any],
@@ -1261,6 +1270,8 @@ def execute_tool_call(
 ) -> str:
     """Dispatches a tool call to the respective handler."""
     root = workspace_root or get_workspace_dir()
+    # Names models borrow from other agents; a wrong name cost a whole step.
+    name = _TOOL_NAME_ALIASES.get(name, name)
 
     # Models sometimes send structured parameters as double-encoded JSON
     # strings ("edits='[{...}]'") or use aliased key names. Normalize them to
