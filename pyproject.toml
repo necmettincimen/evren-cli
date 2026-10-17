@@ -26,3 +26,6 @@ evren-cli = "src.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.setuptools.package-data]
+src = ["agents/*.md"]

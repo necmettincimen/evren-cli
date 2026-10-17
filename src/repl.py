@@ -1401,6 +1401,18 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                 elif cmd == "/rol":
                     handle_role(arg, session)
 
+                elif cmd == "/agent":
+                    from src.agent_library import handle_agent
+                    handle_agent(arg, session)
+
+                elif cmd == "/agents":
+                    from src.agent_library import handle_agents
+                    handle_agents(arg, session)
+
+                elif cmd == "/team":
+                    from src.agent_library import handle_team
+                    handle_team(arg, session, _run_agent)
+
                 elif cmd in custom_commands:
                     _run_agent(session, render_custom_command(custom_commands[cmd], arg), compact=True)
 
@@ -1413,6 +1425,13 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                 else:
                     print_warning(unknown_command_message(cmd))
                 continue
+
+            mention = re.match(r"@([A-Za-z0-9][\w-]*)\s+(\S.*)", user_input, re.S)
+            if mention:
+                from src.agent_library import get_agent, run_with_agent
+                if get_agent(mention.group(1), workspace_root):
+                    run_with_agent(session, mention.group(1), mention.group(2), _run_agent)
+                    continue
 
             # Regular prompt: run autonomous agent loop (expand @file mentions first)
             user_input, mention_warnings = expand_mentions(user_input, workspace_root)
