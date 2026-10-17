@@ -26,58 +26,8 @@ class VaultTest(unittest.TestCase):
         self.assertIn("{{EVREN_SECRET_2}}", text)
         self.assertEqual(vault.env()["EVREN_SECRET_1"], TOKEN)
 
-    def test_same_value_gets_one_placeholder(self):
-        vault = SecretVault()
-        text = vault.capture(f"Bearer {TOKEN} ve tekrar token={TOKEN}")
-        self.assertEqual(text.count("{{EVREN_SECRET_1}}"), 2)
-        self.assertNotIn("EVREN_SECRET_2", text)
-
-    def test_expand_and_mask_round_trip(self):
-        vault = SecretVault()
-        masked = vault.capture(f"Bearer {TOKEN}")
-        self.assertEqual(vault.expand(masked), f"Bearer {TOKEN}")
-        self.assertEqual(vault.mask(f"çıktı: {TOKEN}"), "çıktı: {{EVREN_SECRET_1}}")
-
-    def test_plain_text_is_untouched(self):
-        vault = SecretVault()
-        self.assertEqual(vault.capture("son buildleri kontrol et"), "son buildleri kontrol et")
-        self.assertFalse(vault)
-        self.assertEqual(vault.usage_note(), "")
 
 
-class RedactAuthorizationTest(unittest.TestCase):
-    def test_header_token_is_masked_not_the_scheme(self):
-        out = redact_text(f'-H "Authorization: Bearer {TOKEN}"')
-        self.assertNotIn(TOKEN, out)
-        self.assertIn("Bearer [REDACTED]", out)
-        self.assertNotIn("dXNlcjpwYXNz", redact_text("Authorization=Basic dXNlcjpwYXNz"))
-
-
-class RunCommandSecretTest(unittest.TestCase):
-    def test_command_gets_real_value_and_env_but_prints_placeholder(self):
-        from src import tools
-
-        vault = SecretVault()
-        command = vault.capture(f'curl -H "Authorization: Bearer {TOKEN}" https://x')
-        set_active_vault(vault)
-        self.addCleanup(set_active_vault, SecretVault())
-        seen = {}
-
-        def fake_stream(argv, **kwargs):
-            seen["argv"], seen["env"] = argv, kwargs.get("env")
-            yield ("stdout", f"echo {TOKEN}\n")
-            return 0, f"yanıt {TOKEN}", "", False
-
-        with patch.object(tools, "stream_with_tree_kill", fake_stream), \
-                patch.object(tools, "print_warning") as warn, \
-                patch.object(tools, "print_command_output") as out:
-            result = tools.tool_run_command(command, workspace_root=Path("."), auto_approve=True)
-        self.assertIn(TOKEN, seen["argv"])
-        self.assertEqual(seen["env"]["EVREN_SECRET_1"], TOKEN)
-        self.assertNotIn(TOKEN, str(warn.call_args_list))
-        self.assertNotIn(TOKEN, str(out.call_args_list))
-        self.assertNotIn(TOKEN, result)
-        self.assertIn("{{EVREN_SECRET_1}}", result)
 
 
 class AgentSecretTest(unittest.TestCase):

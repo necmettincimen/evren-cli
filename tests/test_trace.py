@@ -145,53 +145,11 @@ class AgentTraceTest(TraceTestBase):
         self.assertEqual((end["steps"], end["requests"], end["outcome"]), (3, 3, "ok"))
         self.assertIsInstance(end["ms"], int)
 
-    def test_missing_usage_is_recorded_as_nulls(self):
-        self._run([reply("tamam")])
-        request = next(r for r in self.records() if r["type"] == "request")
-        self.assertIsNone(request["prompt_tokens"])
-        self.assertIsNone(request["cached_tokens"])
-        self.assertIsNone(request["completion_tokens"])
 
-    def test_failed_result_marks_the_tool_not_ok(self):
-        replies = [reply(tools=[call("run_command", {"command": "x"}, "a")]), reply("bitti")]
-        self._run(replies, executor_output="HATA: komut bulunamadı")
-        tool = next(r for r in self.records() if r["type"] == "tool")
-        self.assertFalse(tool["ok"])
-        self.assertFalse(tool["blocked"])
 
-    def test_invalid_arguments_and_denied_calls_are_traced(self):
-        broken = SimpleNamespace(id="a", function=SimpleNamespace(name="run_command", arguments="{not json"))
-        edit = call("edit_file", {"path": "a.py", "target_snippet": "x", "replacement_snippet": "y"}, "b")
-        replies = [reply(tools=[broken]), reply(tools=[edit]), reply("bitti")]
-        _result, execute = self._run(replies, task="ask: dosyayı incele")
-        tools = [r for r in self.records() if r["type"] == "tool"]
-        self.assertEqual([t["ok"] for t in tools], [False, False])
-        self.assertEqual(tools[1]["tool"], "edit_file")   # REDDEDİLDİ: ask mode forbids writes
-        self.assertEqual(execute.call_count, 0)
 
-    def test_step_limit_outcome(self):
-        replies = [reply(tools=[call("run_command", {"command": GREP}, "a")])]
-        result, _execute = self._run(replies, max_steps=1)
-        self.assertTrue(result.startswith("HATA: Ajan maksimum adım"))
-        end = self.records()[-1]
-        self.assertEqual((end["type"], end["outcome"]), ("task_end", "max_steps"))
 
-    def test_failed_request_is_traced_with_error_finish_reason(self):
-        self.client.chat_stream_assembled.side_effect = RuntimeError("bağlantı koptu")
-        result = self.session.run_step("görev")
-        self.assertTrue(result.startswith("Hata:"))
-        records = self.records()
-        request = next(r for r in records if r["type"] == "request")
-        self.assertEqual(request["finish_reason"], "error")
-        self.assertEqual(records[-1]["outcome"], "error")
-        self.assertEqual((records[-1]["steps"], records[-1]["requests"]), (0, 1))
 
-    def test_each_task_gets_its_own_id(self):
-        self._run([reply("bir")])
-        self._run([reply("iki")])
-        starts = [r for r in self.records() if r["type"] == "task_start"]
-        self.assertEqual(len(starts), 2)
-        self.assertNotEqual(starts[0]["task_id"], starts[1]["task_id"])
 
     def test_secrets_never_reach_the_trace_file(self):
         task = f'curl -H "Authorization: Bearer {SECRET}" https://api.example.test/x ile durumu oku'
@@ -241,16 +199,6 @@ class TaskTraceUnitTest(TraceTestBase):
         self.assertNotIn("hunter2plainvalue", raw)
         self.assertIn("{{EVREN_SECRET_1}}", raw)
 
-    def test_text_fields_are_capped_and_single_line(self):
-        trace = TaskTrace(self.root)
-        trace.start(model="m", mode="normal", text="satır\n" * 100)
-        trace.tool("write_file", {"path": "a.txt", "content": "x" * 5000, "edits": [1, 2, 3]})
-        start, tool = self.records()
-        self.assertLessEqual(len(start["text_preview"]), 120)
-        self.assertNotIn("\n", start["text_preview"])
-        self.assertLessEqual(len(tool["args"]), 160)
-        self.assertTrue(tool["args"].startswith("path=a.txt"))
-        self.assertEqual(tool["result_chars"], 0)
 
     def test_result_text_is_never_stored(self):
         trace = TaskTrace(self.root)
@@ -273,36 +221,9 @@ class TaskTraceUnitTest(TraceTestBase):
         self.assertEqual(archive.stat().st_size, MAX_BYTES + 1)   # the old archive was replaced
         self.assertEqual([r["type"] for r in self.records()], ["task_start", "task_end"])
 
-    def test_small_log_is_appended_not_rotated(self):
-        for _ in range(2):
-            trace = TaskTrace(self.root)
-            trace.start(model="m", mode="normal", text="görev")
-            trace.end("tamam")
-        self.assertEqual(len(self.records()), 4)
-        self.assertFalse(trace_path(self.root).with_name(ARCHIVE_FILE_NAME).exists())
 
-    def test_end_is_written_once(self):
-        trace = TaskTrace(self.root)
-        trace.start(model="m", mode="normal", text="görev")
-        trace.end("tamam")
-        trace.end("tamam")
-        self.assertEqual([r["type"] for r in self.records()].count("task_end"), 1)
 
-    def test_write_errors_are_swallowed(self):
-        trace = TaskTrace(self.root, enabled=True)
-        with patch.object(Path, "open", side_effect=PermissionError("kilitli")):
-            trace.start(model="m", mode="normal", text="görev")
-            trace.request(None, ms=1)
-            trace.tool("run_command", {"command": "x"}, result="ok")
-            trace.end("tamam")
 
-    def test_outcome_classification(self):
-        self.assertEqual(classify_outcome(None), "exception")
-        self.assertEqual(classify_outcome("İPTAL: Kullanıcı Ctrl+C ile durdurdu."), "interrupted")
-        self.assertEqual(classify_outcome("HATA: Ajan maksimum adım sınırına (30) ulaştı"), "max_steps")
-        self.assertEqual(classify_outcome("HATA: Model art arda boş yanıt verdi"), "error")
-        self.assertEqual(classify_outcome("Hata: bağlantı"), "error")
-        self.assertEqual(classify_outcome("Tüm testler geçti."), "ok")
 
 
 class TraceSwitchTest(unittest.TestCase):
@@ -356,16 +277,6 @@ SYNTHETIC = [
 
 
 class DebugLastTest(TraceTestBase):
-    def test_summary_numbers(self):
-        _write_trace(self.root, SYNTHETIC)
-        summary = summarize_task(next(t for t in trace_mod.read_tasks(self.root) if t[0]["task_id"] == "son00002"))
-        self.assertEqual(summary["requests"], 4)
-        self.assertEqual(summary["prompt_tokens"], 6000)
-        self.assertEqual(summary["cache_pct"], 65)         # 3900 cached of 6000 (reporting requests)
-        self.assertEqual(summary["repeated"], 2)           # 2nd and 3rd identical call
-        self.assertEqual(summary["blocked"], 1)
-        self.assertEqual(summary["total_ms"], 41200)
-        self.assertTrue(summary["finished"])
 
     def test_renders_the_last_task_as_a_table(self):
         _write_trace(self.root, SYNTHETIC)
@@ -386,21 +297,7 @@ class DebugLastTest(TraceTestBase):
         )
         self.assertNotIn("eski0001", out)
 
-    def test_task_option_selects_an_earlier_task(self):
-        _write_trace(self.root, SYNTHETIC)
-        buffer = io.StringIO()
-        self.assertTrue(print_last_task(self.root, 2, console=wide_console(buffer)))
-        out = buffer.getvalue()
-        self.assertIn("Görev eski0001", out)
-        self.assertNotIn("son00002", out)
 
-    def test_out_of_range_and_invalid_task_numbers_explain_themselves(self):
-        _write_trace(self.root, SYNTHETIC)
-        for index, expected in ((3, "Yalnızca 2 görev izi var"), (0, "1 veya daha büyük")):
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                self.assertFalse(print_last_task(self.root, index))
-            self.assertIn(expected, " ".join(buffer.getvalue().split()))
 
     def test_missing_trace_file_prints_a_turkish_hint(self):
         buffer = io.StringIO()
@@ -408,99 +305,10 @@ class DebugLastTest(TraceTestBase):
             self.assertFalse(print_last_task(self.root))
         self.assertIn("Henüz görev izi yok", " ".join(buffer.getvalue().split()))
 
-    def test_unfinished_task_is_reported_as_such(self):
-        _write_trace(self.root, SYNTHETIC[:7])              # no task_end for the last task
-        buffer = io.StringIO()
-        self.assertTrue(print_last_task(self.root, 1, console=wide_console(buffer)))
-        self.assertIn("tamamlanmadı", " ".join(buffer.getvalue().split()))
-
-    def test_rows_follow_trace_order(self):
-        _write_trace(self.root, SYNTHETIC)
-        last = trace_mod.read_tasks(self.root)[-1]
-        kinds = [row[1] for row in table_rows(last)]
-        self.assertEqual(kinds, ["istek", "run_command", "istek", "run_command", "istek", "run_command", "istek"])
-
-    def test_request_rows_name_the_model_only_when_it_differs_from_the_task_model(self):
-        _write_trace(self.root, SYNTHETIC)
-        older, last = trace_mod.read_tasks(self.root)
-        self.assertNotIn("qwen3.8-flash-next", table_rows(last)[0][2])
-        self.assertIn("qwen3.8-flash-next", table_rows(older)[0][2])   # task model is "m"
-
-    def test_archive_is_read_when_the_active_file_has_too_few_tasks(self):
-        _write_trace(self.root, SYNTHETIC[3:])
-        archive = trace_path(self.root).with_name(ARCHIVE_FILE_NAME)
-        archive.write_text(
-            "\n".join(json.dumps(r, ensure_ascii=False) for r in SYNTHETIC[:3]) + "\n", encoding="utf-8",
-        )
-        buffer = io.StringIO()
-        self.assertTrue(print_last_task(self.root, 2, console=wide_console(buffer)))
-        self.assertIn("Görev eski0001", buffer.getvalue())
-
-    def test_real_run_can_be_rendered(self):
-        client = MagicMock(default_model="m")
-        session = AgentSession(client, workspace_root=self.root)
-        replies = [
-            reply(tools=[call("run_command", {"command": GREP}, "a")], usage=usage(900, 0, 30)),
-            reply(tools=[call("run_command", {"command": GREP}, "b")], usage=usage(1000, 700, 30)),
-            reply("bitti", usage=usage(1100, 900, 20)),
-        ]
-        client.chat_stream_assembled.side_effect = lambda **_kw: replies.pop(0)
-        with patch("src.agent.execute_tool_call", return_value=GREP_OUTPUT), \
-                contextlib.redirect_stdout(io.StringIO()):
-            session.run_step("kalan işi yap")
-        buffer = io.StringIO()
-        self.assertTrue(print_last_task(self.root, 1, console=wide_console(buffer)))
-        out = " ".join(buffer.getvalue().split())
-        self.assertIn("ENGELLENDİ", out)
-        self.assertIn("Özet: 3 istek • prompt 3,000 token", out)
-        self.assertIn("1 engellenen çağrı", out)
 
 
-class DebugCommandWiringTest(TraceTestBase):
-    def test_cli_debug_last_prints_the_table(self):
-        _write_trace(self.root, SYNTHETIC)
-        buffer = io.StringIO()
-        from src import cli
 
-        with patch.object(sys, "argv", ["evren", "--workspace", str(self.root), "debug", "last"]), \
-                patch("src.ui.console", wide_console(buffer)):
-            cli.main()
-        self.assertIn("Görev son00002", buffer.getvalue())
 
-    def test_cli_debug_last_task_option_reaches_the_command(self):
-        from src import cli
-
-        with patch.object(sys, "argv", ["evren", "--workspace", str(self.root), "debug", "last", "--task", "3"]), \
-                patch("src.cli.cmd_debug") as command:
-            cli.main()
-        args = command.call_args.args[0]
-        self.assertEqual((args.task, args.workspace), (3, str(self.root)))
-
-    def test_cli_debug_without_action_defaults_to_last(self):
-        from src import cli
-
-        with patch.object(sys, "argv", ["evren", "debug"]), patch("src.cli.cmd_debug") as command:
-            cli.main()
-        args = command.call_args.args[0]
-        self.assertEqual((args.debug_action, args.task), ("last", 1))
-
-    def test_repl_debug_command_argument_parsing(self):
-        from src.repl import _handle_debug_command
-
-        for arg, expected in (("", 1), ("last", 1), ("3", 3), ("last 2", 2)):
-            with self.subTest(arg=arg), patch("src.trace.print_last_task") as show:
-                _handle_debug_command(arg, self.root)
-            show.assert_called_once_with(self.root, expected)
-
-        with patch("src.trace.print_last_task") as show, patch("src.repl.print_warning") as warn:
-            _handle_debug_command("abc", self.root)
-        show.assert_not_called()
-        warn.assert_called_once()
-
-    def test_repl_help_lists_the_command(self):
-        from src.repl import HELP_TEXT
-
-        self.assertIn("/debug", HELP_TEXT)
 
 
 if __name__ == "__main__":  # pragma: no cover

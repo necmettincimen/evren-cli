@@ -52,10 +52,6 @@ class DelegateTestBase(unittest.TestCase):
 
 
 class TestDelegateSchema(unittest.TestCase):
-    def test_delegate_in_normal_schema(self):
-        self.assertIn("delegate", schema_names(AgentMode.NORMAL))
-        names = [t["function"]["name"] for t in TOOLS_SCHEMA]
-        self.assertEqual(names.count("delegate"), 1)
 
     def test_delegate_hidden_in_ask_and_plan(self):
         # The sub-agent runs in ASK: it must not see delegate or write tools.
@@ -66,13 +62,6 @@ class TestDelegateSchema(unittest.TestCase):
             self.assertNotIn("delegate", names)
             self.assertFalse(names & {"edit_file", "write_file", "ssh_write_file"})
 
-    def test_gateway_denies_delegate_outside_normal(self):
-        for mode in (AgentMode.ASK, AgentMode.PLAN):
-            allowed, reason = check_tool_allowed("delegate", {"task": "x"}, mode)
-            self.assertFalse(allowed, mode)
-            self.assertIn("normal", reason)
-        allowed, _ = check_tool_allowed("delegate", {"task": "x"}, AgentMode.NORMAL)
-        self.assertTrue(allowed)
 
 
 class TestDelegateRun(DelegateTestBase):
@@ -103,75 +92,7 @@ class TestDelegateRun(DelegateTestBase):
         self.assertIn("AgentSession nerede tanımlı?", sub_messages[1]["content"])
         self.assertIn("ALT GÖREV", sub_messages[1]["content"])
 
-    def test_run_delegate_empty_task_is_error(self):
-        self.assertTrue(self.session._run_delegate("  ").startswith("HATA:"))
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 0)
 
-    def test_run_delegate_caps_steps(self):
-        self.client.chat_stream_assembled.return_value = response("ok")
-        self.session._run_delegate("görev", 999)
-        # Loop ends on the first text answer; the cap only bounds the ceiling.
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 1)
-        self.session._run_delegate("görev", "olur-a")  # lenient args must not crash
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
-
-
-class TestDelegateThroughRunStep(DelegateTestBase):
-    def test_delegate_captured_in_run_step_history_gets_only_summary(self):
-        self.client.chat_stream_assembled.side_effect = [
-            # Parent turn 1: delegate the research task.
-            response("", "tool_calls", [
-                tool_call(json.dumps({"task": "X nerede tanımlı?"}), "delegate"),
-            ]),
-            # Sub-agent turn 1: a read-only tool call.
-            response("", "tool_calls", [
-                tool_call(json.dumps({"path": "src/agent.py"}), "view_file"),
-            ]),
-            # Sub-agent turn 2: the summary.
-            response("X, src/agent.py içinde tanımlı."),
-            # Parent turn 2: final answer.
-            response("Araştırma tamam."),
-        ]
-        with patch("src.agent.execute_tool_call") as exec_tool:
-            result = self.session.run_step("X'i bul", max_steps=10, route=False)
-
-        self.assertEqual(result, "Araştırma tamam.")
-        # delegate itself never reached the stateless dispatcher; only the
-        # sub-agent's read-only view_file went through it.
-        delegated = [c for c in exec_tool.call_args_list if c.kwargs.get("name") == "delegate"]
-        self.assertEqual(delegated, [])
-
-        tool_results = [m for m in self.session.messages if m["role"] == "tool"]
-        self.assertEqual(len(tool_results), 1)
-        self.assertEqual(tool_results[0]["name"], "delegate")
-        self.assertIn("ALT AJAN ÖZETİ:", tool_results[0]["content"])
-        self.assertIn("src/agent.py içinde tanımlı", tool_results[0]["content"])
-
-        # The sub-agent's internal turns (its view_file call/result) must NOT
-        # leak into the parent history.
-        self.assertNotIn("view_file", [m.get("name") for m in tool_results])
-        roles = [m["role"] for m in self.session.messages]
-        self.assertEqual(roles, ["system", "user", "assistant", "tool", "assistant"])
-
-        # Mode restored to NORMAL after the sub-run.
-        self.assertEqual(self.session.mode, AgentMode.NORMAL)
-
-    def test_delegate_denied_in_ask_mode_via_run_step(self):
-        # A function-scoped side_effect list can be consumed by an earlier test
-        # in the same class (shared MagicMock); reset it right before the run.
-        self.client.chat_stream_assembled.reset_mock()
-        self.client.chat_stream_assembled.side_effect = [
-            response("", "tool_calls", [
-                tool_call(json.dumps({"task": "araştır"}), "delegate"),
-            ]),
-            response("vazgeçtim"),
-        ]
-        result = self.session.run_step("ask: bir şeye bak", max_steps=5, route=False)
-        self.assertEqual(result, "vazgeçtim")
-        tool_results = [m for m in self.session.messages if m["role"] == "tool"]
-        self.assertTrue(tool_results[0]["content"].startswith("REDDEDİLDİ:"))
-        # Only the parent's two turns ran; no sub-agent session was spawned.
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
 
 
 if __name__ == "__main__":

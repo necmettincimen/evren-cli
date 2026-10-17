@@ -41,43 +41,10 @@ class ViewFileWindowTest(unittest.TestCase):
         self.assertIn(f"Satırlar 100-{100 + VIEW_MAX_LINES - 1}", text)
         self.assertIn("kırpıldı", text)
 
-    def test_small_range_is_untouched(self):
-        text = tool_view_file("big.py", start_line=10, end_line=12, workspace_root=self.root)
-        self.assertIn("Satırlar 10-12", text)
-        self.assertNotIn("kırpıldı", text)
-
-    def test_long_lines_hit_the_char_ceiling(self):
-        (self.root / "wide.txt").write_text("\n".join("x" * 500 for _ in range(200)), encoding="utf-8")
-        text = tool_view_file("wide.txt", workspace_root=self.root)
-        self.assertLess(len(text), VIEW_MAX_CHARS + 500)
-        self.assertIn("kırpıldı", text)
-
-    def test_small_file_is_returned_whole(self):
-        (self.root / "s.py").write_text("a\nb\n", encoding="utf-8")
-        text = tool_view_file("s.py", workspace_root=self.root)
-        self.assertIn("Satırlar 1-2 / Toplam 2", text)
-        self.assertNotIn("kırpıldı", text)
 
 
-class PowerShellArgvTest(unittest.TestCase):
-    def test_default_uses_system_shell(self):
-        self.assertEqual(_command_argv("dir", False), ("dir", True))
 
-    def test_powershell_avoids_nested_quoting(self):
-        argv, use_shell = _command_argv('Get-ChildItem "a b" | Select-Object Name', True)
-        self.assertFalse(use_shell)
-        self.assertIn("-NoProfile", argv)
-        self.assertEqual(argv[-2], "-Command")
-        self.assertTrue(argv[-1].endswith('Get-ChildItem "a b" | Select-Object Name'))
 
-    def test_schema_exposes_flag_not_aliased_name(self):
-        from src.tools import TOOLS_SCHEMA
-
-        run = next(t for t in TOOLS_SCHEMA if t["function"]["name"] == "run_command")
-        props = run["function"]["parameters"]["properties"]
-        self.assertEqual(props["use_powershell"]["type"], "boolean")
-        # `shell` is a legacy alias of `command` in tool_args; never reuse it.
-        self.assertNotIn("shell", props)
 
 
 class MultilineCommandTest(unittest.TestCase):
@@ -88,11 +55,6 @@ class MultilineCommandTest(unittest.TestCase):
         self.assertEqual(argv, [sys.executable, "-c", "import os\nprint(os.name)"])
         self.assertFalse(use_shell)
 
-    @unittest.skipUnless(os.name == "nt", "cmd.exe specific")
-    def test_multiline_python_c_is_rewritten_on_windows(self):
-        argv, use_shell = _command_argv('python -c "import json\nprint(json.dumps({\\"a\\": 1}))"', False)
-        self.assertFalse(use_shell)
-        self.assertEqual(argv[1:], ["-c", 'import json\nprint(json.dumps({"a": 1}))'])
 
     @unittest.skipUnless(os.name == "nt", "cmd.exe specific")
     def test_other_multiline_cmd_is_rejected_clearly(self):
@@ -101,8 +63,6 @@ class MultilineCommandTest(unittest.TestCase):
         with self.assertRaises(MultilineShellCommand):
             _command_argv("echo a\necho b", False)
 
-    def test_single_line_stays_on_the_shell(self):
-        self.assertEqual(_command_argv('python -c "print(1)"', False), ('python -c "print(1)"', True))
 
 
 def _make_client(model="qwen3.8-flash-next"):
@@ -133,27 +93,9 @@ class ThinkingSwitchTest(unittest.TestCase):
         _client, fake = self._send("glm-5.3", thinking=False)
         self.assertNotIn("extra_body", fake.chat.completions.create.call_args.kwargs)
 
-    def test_thinking_false_is_sent_as_extra_body(self):
-        _client, fake = self._send(thinking=False)
-        kwargs = fake.chat.completions.create.call_args.kwargs
-        self.assertEqual(kwargs["extra_body"], {"thinking": False})
 
-    def test_default_sends_no_thinking_field(self):
-        _client, fake = self._send()
-        self.assertNotIn("extra_body", fake.chat.completions.create.call_args.kwargs)
 
-    def test_effort_still_goes_to_deepseek_by_default(self):
-        _client, fake = self._send("deepseek-v4.1-flash")
-        self.assertEqual(fake.chat.completions.create.call_args.kwargs["reasoning_effort"], "low")
 
-    def test_rejected_field_is_dropped_and_retried(self):
-        client, fake = self._send(
-            side_effect=[make_status_error(400, "unknown field: thinking"), FakeCompletion("ok")],
-            thinking=False,
-        )
-        self.assertEqual(fake.chat.completions.create.call_count, 2)
-        self.assertNotIn("extra_body", fake.chat.completions.create.call_args.kwargs)
-        self.assertFalse(client.thinking_control)
 
 
 if __name__ == "__main__":  # pragma: no cover

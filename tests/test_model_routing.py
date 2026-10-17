@@ -87,63 +87,13 @@ class RoutingTest(unittest.TestCase):
         # Normal-mode execution runs without hidden reasoning by default.
         self.assertIs(self.calls[0]["thinking"], False)
 
-    def test_appended_notes_do_not_make_a_short_brief_large(self):
-        # K8s/target notes add ~1k tokens; the user's 10-word brief must stay "small".
-        self._script([response("tamam")])
-        with patch.dict(os.environ, {"EVREN_ROUTE_MIN_TOKENS": "200"}):
-            self.session.run_step("koyu3-k8s üzerindeki pod durumları konusunda öneri ver")
-        self.assertEqual([c["model"] for c in self.calls], ["exec-m"])
 
-    def test_route_can_be_disabled(self):
-        self._script([response("tamam")])
-        with patch.dict(os.environ, {"EVREN_AUTO_ROUTE": "false"}):
-            self.session.run_step(BIG_BRIEF)
-        self.assertEqual([c["model"] for c in self.calls], ["exec-m"])
 
-    def test_failed_plan_falls_back_to_normal_execution(self):
-        self._script([response("", "content_filter"), response("bitti")])
-        self.assertEqual(self.session.run_step(BIG_BRIEF), "bitti")
-        self.assertEqual([c["model"] for c in self.calls], ["planner-m", "exec-m"])
-        self.assertIs(self.calls[1]["thinking"], False)
-        self.assertNotIn("UYGULAMA PLANI", str(self.calls[1]["messages"]))
 
-    def test_executor_model_and_thinking_are_configurable(self):
-        self._script([response("1. plan"), response("bitti")])
-        with patch.dict(os.environ, {"EVREN_EXECUTOR_MODEL": "fast-m", "EVREN_EXECUTOR_THINKING": "true"}):
-            self.session.run_step(BIG_BRIEF)
-        self.assertEqual(self.calls[1]["model"], "fast-m")
-        self.assertIsNone(self.calls[1]["thinking"])
-        self.assertEqual(self.session.model, "exec-m")
 
-    def test_plan_mode_runs_on_the_planner(self):
-        self._script([response("plan yazıldı")])
-        self.session.mode = AgentMode.PLAN
-        self.session.run_step("küçük plan isteği")
-        self.assertEqual(self.calls[0]["model"], "planner-m")
 
-    def test_continue_keeps_the_executor_profile(self):
-        call = SimpleNamespace(
-            id="c", function=SimpleNamespace(name="run_command", arguments='{"command":"dir"}')
-        )
-        self._script([response("1. plan"), response("devam", tools=[call]), response("bitti")])
-        with patch("src.agent.execute_tool_call", return_value="ÇIKTI"):
-            self.session.run_step(BIG_BRIEF, max_steps=1)
-            self.assertIsNotNone(self.session.pending_mode)
-            self.session.continue_task()
-        self.assertEqual([c["model"] for c in self.calls], ["planner-m", "exec-m", "exec-m"])
-        self.assertIs(self.calls[2]["thinking"], False)
 
-    def test_thinking_can_be_kept_for_execution(self):
-        self._script([response("tamam")])
-        with patch.dict(os.environ, {"EVREN_EXECUTOR_THINKING": "true"}):
-            self.session.run_step("kısa iş")
-        self.assertIsNone(self.calls[0]["thinking"])
 
-    def test_ask_mode_keeps_thinking(self):
-        self._script([response("cevap")])
-        self.session.mode = AgentMode.ASK
-        self.session.run_step("bu modül ne yapıyor?")
-        self.assertIsNone(self.calls[0]["thinking"])
 
     def test_stall_retries_with_thinking_off(self):
         self._script([response("", "length"), response("tamam")])

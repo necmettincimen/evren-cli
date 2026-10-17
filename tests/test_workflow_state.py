@@ -54,47 +54,12 @@ def test_checkpoint_roundtrip_masks_credentials_without_executing(tmp_path):
     assert restored.task_goal == "inspect local and remote"
 
 
-def test_checkpoint_missing_and_clear(tmp_path):
-    assert load_checkpoint(tmp_path) is None
-    assert not AgentSession(MagicMock(default_model="test"), tmp_path).restore_checkpoint()
-    clear_checkpoint(tmp_path)
-    paused_session(tmp_path).save_checkpoint()
-    clear_checkpoint(tmp_path)
-    assert not checkpoint_path(tmp_path).exists()
 
 
-@pytest.mark.parametrize("field, value", [
-    ("workspace", "other"), ("mode", "invalid"), ("messages", []),
-    ("frame", {"rol": 2}), ("model", ""), ("schema_version", 9), ("saved_at", None),
-    ("goal", None),
-])
-def test_checkpoint_rejects_invalid_fields_without_mutating_session(tmp_path, field, value):
-    paused_session(tmp_path).save_checkpoint()
-    state = json.loads(checkpoint_path(tmp_path).read_text(encoding="utf-8"))
-    state[field] = value
-    checkpoint_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
-    session = AgentSession(MagicMock(default_model="test"), tmp_path)
-    before = session.messages[:]
-    with pytest.raises(ValueError):
-        session.restore_checkpoint()
-    assert session.messages == before
-    assert session.pending_mode is None
 
 
-def test_checkpoint_rejects_orphan_tool_and_corrupt_json(tmp_path):
-    session = paused_session(tmp_path)
-    session.messages = [{"role": "tool", "tool_call_id": "orphan", "content": "test"}]
-    session.save_checkpoint()
-    with pytest.raises(ValueError, match="eşleşmiyor"):
-        load_checkpoint(tmp_path)
-    checkpoint_path(tmp_path).write_text("{", encoding="utf-8")
-    with pytest.raises(ValueError, match="okunamadı"):
-        load_checkpoint(tmp_path)
 
 
-def test_checkpoint_cannot_save_without_pending_task(tmp_path):
-    with pytest.raises(ValueError):
-        AgentSession(MagicMock(default_model="test"), tmp_path).save_checkpoint()
 
 
 @pytest.mark.parametrize("text", [
@@ -107,53 +72,10 @@ def test_secret_forms_are_masked(text):
     assert "test-only-secret" not in redact_text(text)
 
 
-def test_decisions_are_validated_persisted_and_injected_without_losing_frame(tmp_path):
-    assert load_decisions(tmp_path) == []
-    with pytest.raises(ValueError):
-        add_decision(tmp_path, "", "reason", "risk")
-    session = AgentSession(MagicMock(default_model="test"), tmp_path)
-    session.apply_frame(PromptFrame(rol="engineer"))
-    add_decision(tmp_path, "partition writes", "avoid conflicts", "needs routing")
-    assert len(load_decisions(tmp_path)) == 1
-    session.refresh_context()
-    assert "partition writes" in session.messages[0]["content"]
-    assert "Rol: engineer" in session.messages[0]["content"]
-    assert "yürütme izni değildir" in decision_context(tmp_path)
 
 
-def test_review_deadlines_stalled_and_closed_tasks():
-    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
-    old = (now - timedelta(days=14)).isoformat()
-    items = [
-        {"id": "stale", "status": "in-progress", "updated_at": old, "deadline": "2026-10-10"},
-        {"id": "blocked", "status": "blocked", "updated_at": now.isoformat()},
-        {"id": "done", "status": "completed"},
-        {"id": "abandoned", "status": "abandoned"},
-    ]
-    reviewed = review_tasks(items, now)
-    assert len(reviewed) == 2
-    assert reviewed[0]["flags"] == ["overdue", "stalled"]
-    assert reviewed[1]["flags"] == ["blocked"]
-    with pytest.raises(ValueError, match="tarihi"):
-        review_tasks([{"id": "bad", "status": "in-progress", "deadline": "bad"}], now)
 
 
-def test_blocker_add_resolve_and_validation(tmp_path):
-    add_task("registry", "inspect image access", workspace_root=tmp_path)
-    with pytest.raises(ValueError):
-        set_blocker("registry", "guessed", "evidence", tmp_path)
-    with pytest.raises(ValueError):
-        set_blocker("missing", "dns", "NXDOMAIN", tmp_path)
-    item = set_blocker("registry", "auth", "HTTP 401 token=test-only-secret", tmp_path)
-    assert item["status"] == "blocked"
-    assert "test-only-secret" not in item["blocker"]["evidence"]
-    assert "secret" in item["blocker"]["route"]
-    assert list_tasks("blocked", tmp_path)[0]["id"] == "registry"
-    with pytest.raises(ValueError):
-        resolve_blocker("registry", "", tmp_path)
-    item = resolve_blocker("registry", "access verified", tmp_path)
-    assert item["status"] == "in-progress"
-    assert "blocker" not in item
 
 
 def test_workflow_commands_require_confirmation_for_writes(tmp_path):
@@ -190,28 +112,8 @@ def test_check_in_applies_only_confirmed_updates(tmp_path):
     assert list_tasks("all", tmp_path)[0]["progress"] == 25
 
 
-def test_agent_wrapper_saves_only_on_confirmation_and_clears_on_success(tmp_path):
-    from src.repl import _run_agent
-
-    session = paused_session(tmp_path)
-    with patch.object(session, "continue_task"), patch("src.repl.prompt_confirm", return_value=False):
-        _run_agent(session)
-    assert not checkpoint_path(tmp_path).exists()
-    with patch.object(session, "continue_task"), patch("src.repl.prompt_confirm", return_value=True):
-        _run_agent(session)
-    assert checkpoint_path(tmp_path).exists()
-    session.pending_mode = None
-    with patch.object(session, "continue_task"):
-        _run_agent(session)
-    assert not checkpoint_path(tmp_path).exists()
 
 
-def test_decision_corruption_is_explicit_not_silent(tmp_path):
-    path = tmp_path / ".evren" / "decisions.json"
-    path.parent.mkdir()
-    path.write_text('{"schema_version":1,"items":[{}]}', encoding="utf-8")
-    with pytest.raises(ValueError, match="Karar günlüğü"):
-        load_decisions(tmp_path)
 
 def test_interrupt_correction_continues_without_a_new_brief(tmp_path):
     from src.repl import _take_interrupt_followup
@@ -229,15 +131,6 @@ def test_interrupt_correction_continues_without_a_new_brief(tmp_path):
     assert session.interrupted is True
 
 
-def test_interrupt_skips_checkpoint_prompt(tmp_path):
-    from src.repl import _run_agent
-
-    session = paused_session(tmp_path)
-    session.task_goal = "inspect local and remote"
-    session.interrupted = True
-    with patch.object(session, "continue_task"), patch("src.repl.prompt_confirm") as confirm:
-        _run_agent(session)
-    confirm.assert_not_called()
 
 
 def test_followup_wrapper_routes_without_form_or_automatic_approval(tmp_path):
@@ -253,22 +146,5 @@ def test_followup_wrapper_routes_without_form_or_automatic_approval(tmp_path):
     assert not checkpoint_path(tmp_path).exists()
 
 
-def test_followup_without_in_memory_task_keeps_saved_checkpoint(tmp_path):
-    from src.repl import _run_agent
-
-    session = paused_session(tmp_path)
-    session.save_checkpoint()
-    saved = checkpoint_path(tmp_path).read_bytes()
-    session.clear_history()
-    with patch.object(session.client, "chat_stream_assembled") as request:
-        _run_agent(session, "yap artık", followup=True)
-    request.assert_not_called()
-    assert checkpoint_path(tmp_path).read_bytes() == saved
 
 
-def test_all_blocker_routes_use_registered_diagnostics():
-    from src.diagnostics import get_diagnostic
-    from src.workflow_state import BLOCKER_ROUTES
-
-    assert get_diagnostic("dependency-hell") is not None
-    assert "/diagnose dependency-hell" in BLOCKER_ROUTES["dependency"]

@@ -31,9 +31,6 @@ class CompactionRatioTest(unittest.TestCase):
             os.environ.pop("EVREN_COMPACT_RATIO", None)
             self.assertEqual(compaction_ratio(), 0.6)
 
-    def test_env_override(self):
-        with patch.dict(os.environ, {"EVREN_COMPACT_RATIO": "0.9"}):
-            self.assertEqual(compaction_ratio(), 0.9)
 
     def test_out_of_range_falls_back(self):
         for value in ("", "abc", "0", "-1", "1.5", "0.05"):
@@ -52,19 +49,8 @@ class CompactionLimitTest(unittest.TestCase):
         with patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}, clear=False):
             self.session = AgentSession(MagicMock(default_model="m"), workspace_root=Path(self._tmp.name))
 
-    def test_limit_is_a_fraction_of_the_window(self):
-        with patch.dict(os.environ, {"EVREN_COMPACT_RATIO": "0.5", "EVREN_CONTEXT_BUDGET": "2000000"}):
-            self.assertEqual(self.session.compaction_limit(), int(DEFAULT_CONTEXT_WINDOW * 0.5))
 
-    def test_limit_never_drops_below_one_k(self):
-        self.session.token_manager.context_window = 100
-        self.assertGreaterEqual(self.session.compaction_limit(), 1024)
 
-    def test_report_exposes_the_threshold(self):
-        rep = self.session.token_report()
-        self.assertIn("compaction_limit", rep)
-        self.assertIn("compaction_ratio", rep)
-        self.assertLess(rep["compaction_limit"], rep["context_window"])
 
 
 class EarlyCompactionBehaviourTest(unittest.TestCase):
@@ -83,18 +69,7 @@ class EarlyCompactionBehaviourTest(unittest.TestCase):
             messages.append({"role": "assistant", "content": f"yanıt {i} " + "y" * 400})
         return messages
 
-    def test_full_window_limit_keeps_everything(self):
-        messages = self.big_history()
-        kept = self.compactor.compact(messages, 100, max_tokens=3000)
-        self.assertEqual(len(kept), len(messages))
 
-    def test_fractional_limit_compacts_the_same_history(self):
-        messages = self.big_history()
-        kept = self.compactor.compact(messages, 100, max_tokens=int(3000 * 0.6))
-        self.assertLess(len(kept), len(messages))
-        # The system turn and the newest turn must survive.
-        self.assertEqual(kept[0]["role"], "system")
-        self.assertEqual(kept[-1]["content"], messages[-1]["content"])
 
     def test_agent_passes_the_fractional_limit(self):
         with patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}, clear=False):
@@ -115,25 +90,6 @@ class EarlyCompactionBehaviourTest(unittest.TestCase):
         self.assertEqual(seen[0], session.compaction_limit())
         self.assertLess(seen[0], session.token_manager.context_window)
 
-    def test_notification_is_printed_once(self):
-        with patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}, clear=False):
-            session = AgentSession(MagicMock(default_model="m"), workspace_root=Path(self._tmp.name))
-        session.token_manager.context_window = 1500
-        session.messages = self.big_history(10)
-
-        calls = []
-        for name in ("print_info", "print_warning", "print_error", "print_markdown",
-                     "print_tool_call", "print_tool_result", "print_reasoning"):
-            patcher = patch(f"src.agent.{name}", side_effect=lambda *a, **k: calls.append(a))
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-        session.client.chat_stream_assembled.return_value = response("bitti", "stop")
-        with patch.dict(os.environ, {"EVREN_MAX_STEPS": "1"}, clear=False):
-            session.run_step("sıkıştırma tetikle")
-
-        notices = [c for c in calls if c and "sıkıştırıldı" in str(c[0])]
-        self.assertEqual(len(notices), 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

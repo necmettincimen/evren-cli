@@ -2,7 +2,6 @@
 
 import builtins
 import os
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 from src.agent import AgentSession
 from src.commands import (
-    KNOWN_COMMANDS,
     first_token,
     is_command,
     is_command_input,
@@ -26,7 +24,6 @@ from src.prompt_frame import (
     PromptFrame,
     build_user_content,
     collect_guided_prompt_frame,
-    collect_prompt_frame,
 )
 
 BUILD_ERROR = (
@@ -53,83 +50,59 @@ def make_build_log(lines=1327, errors=40):
 
 
 class CommandInputTest(unittest.TestCase):
-    def test_path_like_first_token_is_task_text(self):
+    """Routing of pasted text vs. commands at the token level."""
+
+    def test_path_like_and_non_slash_text_is_task_text(self):
         for text in (
             BUILD_ERROR,
             "/home/a",
             "/usr/bin/x: command not found",
             "/c:/work/x.cs(1,1): error CS1002",
-            "/etc/hosts değişmiş, bakar mısın",
             "//comment style line",
-            "/clear.txt dosyasını sil",
+            "/home is full, free some space",
+            "/src klasörünü incele",
+            "",
+            "   ",
+            "clear",
+            "devam et",
+            "ask: /clear",
         ):
             with self.subTest(text=text):
                 self.assertFalse(is_command(text))
                 self.assertFalse(is_unknown_command(text))
                 self.assertFalse(is_command_input(text))
 
-    def test_known_commands_and_aliases_stay_commands(self):
+    def test_known_commands_stay_commands(self):
         for text in (
             "/clear", "/ssh list", "/help", "/exit", "/q", "/?", "/CLEAR", "/Model qwen",
-            "/check-in update", "/run echo hi", "/apply root-cause-debug", "/continue",
-            "/execute yap artık", "/ssh add a u@h 22",
+            "/run echo hi", "/continue", "/ssh add a u@h 22", "/run echo a\necho b",
         ):
             with self.subTest(text=text):
                 self.assertTrue(is_command(text))
                 self.assertTrue(is_command_input(text))
 
-    def test_non_slash_text_is_never_a_command(self):
-        for text in ("", "   ", "clear", "devam et", "ask: /clear"):
-            with self.subTest(text=text):
+    def test_multiline_paste_and_typos(self):
+        # Unknown first token in a multiline paste is task text; a typo is a command.
+        for text in ("/cleare\nikinci satır", "/foo\n/bar.cs(1,1): error CS1002"):
+            with self.subTest(paste=text):
                 self.assertFalse(is_command_input(text))
-
-    def test_multiline_paste_with_unknown_first_token_is_task_text(self):
-        self.assertFalse(is_command_input("/cleare\nikinci satır"))
-        self.assertFalse(is_command_input("/foo\n/bar.cs(1,1): error CS1002"))
-        paste = f"{BUILD_ERROR}\n{BUILD_ERROR}\n  Build FAILED."
-        self.assertFalse(is_command_input(paste))
-
-    def test_multiline_input_with_known_first_token_stays_a_command(self):
-        self.assertTrue(is_command_input("/run echo a\necho b"))
-
-    def test_mistyped_command_is_still_routed_to_the_command_handler(self):
-        for text in ("/cleare", "/hlep", "/exti", "/zzzzzz", "/cleare all"):
-            with self.subTest(text=text):
+        self.assertTrue(is_command_input("/exti now"))  # close-match typo with args stays a command
+        for text in ("/cleare", "/hlep", "/zzzzzz"):
+            with self.subTest(typo=text):
                 self.assertFalse(is_command(text))
                 self.assertTrue(is_unknown_command(text))
                 self.assertTrue(is_command_input(text))
 
-    def test_slash_word_with_arguments_but_no_close_command_is_task_text(self):
-        for text in ("/home is full, free some space", "/etc is broken", "/src klasörünü incele"):
-            with self.subTest(text=text):
-                self.assertFalse(is_command_input(text))
-        self.assertTrue(is_command_input("/exti now"))
-
-    def test_suggestion_for_typo(self):
+    def test_suggestion_and_first_token(self):
         self.assertEqual(suggest_command("/cleare"), "/clear")
         self.assertEqual(suggest_command("/hlep"), "/help")
-        self.assertEqual(suggest_command("/models"), "/models")
         self.assertIsNone(suggest_command("/zzzzzz"))
-        self.assertIn("Bunu mu demek istediniz: /clear?", unknown_command_message("/cleare"))
-        self.assertIn("Komut listesi için /help", unknown_command_message("/cleare"))
+        message = unknown_command_message("/cleare")
+        self.assertIn("Bunu mu demek istediniz: /clear?", message)
+        self.assertIn("Komut listesi için /help", message)
         self.assertNotIn("Bunu mu", unknown_command_message("/zzzzzz"))
-
-    def test_first_token(self):
         self.assertEqual(first_token("  /ssh   list "), "/ssh")
         self.assertEqual(first_token(""), "")
-
-    def test_registry_matches_the_repl_dispatch(self):
-        """Every command the REPL dispatches is registered, and the other way round."""
-        from src import repl
-
-        source = Path(repl.__file__).read_text(encoding="utf-8")
-        handled = set()
-        for line in source.splitlines():
-            if re.search(r"\bcmd (?:==|in|not in)\s", line):
-                handled.update(re.findall(r'"(/[A-Za-z?][A-Za-z?-]*)"', line))
-        handled.update(repl._COMMAND_TABLE)  # 2.4: the dispatch is a command table
-        handled.add("/continue")  # handled before the dispatch chain
-        self.assertEqual(KNOWN_COMMANDS, handled)
 
 
 class PromptFrameRoutingTest(unittest.TestCase):
@@ -144,40 +117,27 @@ class PromptFrameRoutingTest(unittest.TestCase):
         inputs = iter(answers)
         return collect_guided_prompt_frame(lambda _: next(inputs), guidance or MagicMock())
 
-    def test_pasted_build_error_becomes_the_brief(self):
-        frame = self.collect([BUILD_ERROR])
-        self.assertIsInstance(frame, PromptFrame)
-        self.assertEqual(frame.brief, BUILD_ERROR)
-
-    def test_multiline_paste_starting_with_slash_becomes_the_brief(self):
+    def test_pasted_error_becomes_the_brief_and_commands_return_as_text(self):
         paste = f"{BUILD_ERROR}\n/src/Portal.Api/B.cs(3,4): error CS1002: ; expected"
-        frame = self.collect([paste])
-        self.assertIsInstance(frame, PromptFrame)
-        self.assertEqual(frame.brief, paste)
-
-    def test_commands_still_return_as_text(self):
-        for text in ("/clear", "/ssh list", "/help", "/cleare"):
-            with self.subTest(text=text):
+        for text in (BUILD_ERROR, paste):
+            with self.subTest(brief=text[:20]):
+                frame = self.collect([text])
+                self.assertIsInstance(frame, PromptFrame)
+                self.assertEqual(frame.brief, text)
+        for text in ("/clear", "/ssh list", "/cleare"):
+            with self.subTest(command=text):
                 self.assertEqual(self.collect([text]), text)
+        # A command typed during clarification still aborts the frame.
+        with patch.dict(os.environ, {"EVREN_CLARIFY_ROUNDS": "2"}):
+            abort = MagicMock(return_value=FrameGuidance(question="Hangi hata?"))
+            self.assertEqual(self.collect(["derle", "/clear"], abort), "/clear")
 
     def test_pasted_clarification_answer_is_an_answer_not_a_command(self):
         guidance = MagicMock(side_effect=[FrameGuidance(question="Hangi hata?"), FrameGuidance()])
         with patch.dict(os.environ, {"EVREN_CLARIFY_ROUNDS": "2"}):
             frame = self.collect(["derle", BUILD_ERROR], guidance)
-        self.assertIsInstance(frame, PromptFrame)
-        self.assertIn("error CS0246", frame.clarifications)
-
-    def test_command_during_clarification_still_aborts(self):
-        guidance = MagicMock(return_value=FrameGuidance(question="Hangi hata?"))
-        with patch.dict(os.environ, {"EVREN_CLARIFY_ROUNDS": "2"}):
-            self.assertEqual(self.collect(["derle", "/clear"], guidance), "/clear")
-
-    def test_legacy_five_line_form(self):
-        answers = iter([BUILD_ERROR, "", "", "", ""])
-        frame = collect_prompt_frame(lambda _: next(answers))
-        self.assertIsInstance(frame, PromptFrame)
-        self.assertEqual(frame.rol, BUILD_ERROR)
-        self.assertEqual(collect_prompt_frame(lambda _: "/help"), "/help")
+            self.assertIsInstance(frame, PromptFrame)
+            self.assertIn("error CS0246", frame.clarifications)
 
 
 class ReplRoutingTest(unittest.TestCase):
@@ -223,22 +183,16 @@ class ReplRoutingTest(unittest.TestCase):
             run_agent=run_agent, ssh=ssh, show_help=show_help, warn=warn, session=session,
         )
 
-    def test_pasted_build_error_goes_to_the_agent_not_the_command_handler(self):
-        result = self.run_repl([BUILD_ERROR, "/exit"])
-        result.run_agent.assert_called_once()
-        prompt = result.run_agent.call_args.args[1]
-        self.assertIn("error CS0246", prompt)
-        self.assertTrue(result.run_agent.call_args.kwargs["compact"])
-        self.assertFalse([c for c in result.warn.call_args_list if "Bilinmeyen" in str(c)])
-
-    def test_multiline_paste_at_the_request_prompt_goes_to_the_agent(self):
+    def test_pasted_error_goes_to_the_agent_and_known_commands_work(self):
         paste = f"{BUILD_ERROR}\n/src/Portal.Api/B.cs(3,4): error CS1002: ; expected"
-        result = self.run_repl([paste, "/exit"])
-        result.run_agent.assert_called_once()
-        self.assertIn("error CS1002", result.run_agent.call_args.args[1])
-        result.warn.assert_not_called()
-
-    def test_known_commands_keep_working(self):
+        for text in (BUILD_ERROR, paste):
+            with self.subTest(text=text[:20]):
+                result = self.run_repl([text, "/exit"])
+                result.run_agent.assert_called_once()
+                prompt = result.run_agent.call_args.args[1]
+                self.assertIn("error CS", prompt)
+                self.assertTrue(result.run_agent.call_args.kwargs["compact"])
+                self.assertFalse([c for c in result.warn.call_args_list if "Bilinmeyen" in str(c)])
         result = self.run_repl(["/help", "/ssh list", "/clear", "/exit"])
         result.show_help.assert_called_once()
         result.ssh.assert_called_once()
@@ -247,19 +201,17 @@ class ReplRoutingTest(unittest.TestCase):
         result.run_agent.assert_not_called()
         result.warn.assert_not_called()
 
-    def test_mistyped_command_warns_with_a_suggestion(self):
-        result = self.run_repl(["/cleare", "/exit"])
+    def test_mistyped_command_warns_with_or_without_a_suggestion(self):
+        result = self.run_repl(["/cleare", "/zzzzzz", "/exit"])
+        messages = [str(c) for c in result.warn.call_args_list]
+        typed = next(m for m in messages if "'/cleare'" in m)
+        self.assertIn("Bilinmeyen komut: '/cleare'", typed)
+        self.assertIn("Bunu mu demek istediniz: /clear?", typed)
+        plain = next(m for m in messages if "'/zzzzzz'" in m)
+        self.assertIn("Bilinmeyen komut: '/zzzzzz'", plain)
+        self.assertNotIn("Bunu mu", plain)
         result.run_agent.assert_not_called()
         result.session.clear_history.assert_not_called()
-        message = str(result.warn.call_args_list[0])
-        self.assertIn("Bilinmeyen komut: '/cleare'", message)
-        self.assertIn("Bunu mu demek istediniz: /clear?", message)
-
-    def test_unknown_command_without_a_close_match_keeps_the_plain_warning(self):
-        result = self.run_repl(["/zzzzzz", "/exit"])
-        message = str(result.warn.call_args_list[0])
-        self.assertIn("Bilinmeyen komut: '/zzzzzz'", message)
-        self.assertNotIn("Bunu mu", message)
 
     def test_interrupt_followup_with_a_pasted_error_is_not_a_command(self):
         from src.repl import _take_interrupt_followup
@@ -274,7 +226,7 @@ class ReplRoutingTest(unittest.TestCase):
 
 
 class PasteConfigTest(unittest.TestCase):
-    def test_defaults_and_overrides(self):
+    def test_defaults_overrides_and_invalid_values(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EVREN_PASTE_MAX_LINES", None)
             os.environ.pop("EVREN_PASTE_MAX_CHARS", None)
@@ -283,8 +235,6 @@ class PasteConfigTest(unittest.TestCase):
         with patch.dict(os.environ, {"EVREN_PASTE_MAX_LINES": "200", "EVREN_PASTE_MAX_CHARS": "20000"}):
             self.assertEqual(paste_max_lines(), 200)
             self.assertEqual(paste_max_chars(), 20000)
-
-    def test_invalid_values_fall_back_to_defaults(self):
         for value in ("abc", "0", "-5", ""):
             with self.subTest(value=value), patch.dict(
                 os.environ, {"EVREN_PASTE_MAX_LINES": value, "EVREN_PASTE_MAX_CHARS": value},
@@ -305,48 +255,44 @@ class CompactPasteTest(unittest.TestCase):
         os.environ.pop("EVREN_PASTE_MAX_CHARS", None)
 
     def test_text_within_the_limits_passes_through_untouched(self):
-        text = "\n".join(f"satır {i}" for i in range(80))
-        self.assertEqual(compact_paste(text, self.root), (text, None))
-        self.assertEqual(compact_paste("kısa görev", self.root), ("kısa görev", None))
-        self.assertEqual(compact_paste("", self.root), ("", None))
+        for text in ("kısa görev", "", "\n".join(f"satır {i}" for i in range(80))):
+            with self.subTest(text=text[:15]):
+                self.assertEqual(compact_paste(text, self.root), (text, None))
         self.assertFalse((self.root / ".evren").exists())
+        # Text that would not shrink is also left alone (nothing saved).
+        text = "\n".join(f"s{i}" for i in range(60))
+        self.assertEqual(compact_paste(text, self.root, max_lines=40), (text, None))
+        self.assertEqual(list((self.root / ".evren" / "tmp").glob("paste-*.txt")), [])
+        # Unwritable target returns the original text.
+        text = make_build_log(lines=300, errors=5)
+        with patch("src.paste._save_paste", return_value=None):
+            self.assertEqual(compact_paste(text, self.root), (text, None))
 
-    def test_44k_paste_shrinks_to_about_10k_and_keeps_the_error_lines(self):
+    def test_44k_paste_shrinks_keeps_errors_and_saves_the_full_text(self):
         text = make_build_log()
         self.assertGreater(len(text), 44_000)
-        self.assertGreater(text.count("\n"), 1300)
         compact, path = compact_paste(text, self.root)
         self.assertIsNotNone(path)
         self.assertLessEqual(len(compact), 10_500)
         self.assertLess(len(compact), len(text) // 4)
-        error_lines = [line for line in text.splitlines() if "error CS0246" in line]
-        self.assertEqual(len(error_lines), 40)
-        for line in error_lines:
+        for line in [line for line in text.splitlines() if "error CS0246" in line]:
             self.assertIn(line, compact)
         self.assertIn("Build FAILED.", compact)  # tail
         self.assertIn("Build started 12:00:01", compact)  # head
-        self.assertNotIn("Compiling Portal.Api.Module700 ", compact)  # noise from the middle is gone
-
-    def test_marker_and_note_name_the_saved_file(self):
-        text = make_build_log()
-        compact, path = compact_paste(text, self.root)
+        self.assertNotIn("Compiling Portal.Api.Module700 ", compact)  # middle noise is gone
+        # Marker and note name the saved file; the full text is on disk; numbers increment.
         count = len(text.splitlines())
         self.assertTrue(compact.startswith(
             f"[Yapıştırılan metin #1: {count} satır, {len(text)} karakter → .evren/tmp/paste-1.txt]"
         ))
         self.assertIn("view_file", compact)
-        self.assertIn(".evren/tmp/paste-1.txt dosyasında", compact)
         self.assertEqual(path, self.root / ".evren" / "tmp" / "paste-1.txt")
-
-    def test_full_text_is_saved_and_numbers_increment(self):
-        first = make_build_log()
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
         second = make_build_log(lines=900, errors=10)
-        _, path1 = compact_paste(first, self.root)
         compact2, path2 = compact_paste(second, self.root)
-        self.assertEqual(path1.read_text(encoding="utf-8"), first)
-        self.assertEqual(path2.read_text(encoding="utf-8"), second)
         self.assertEqual(path2.name, "paste-2.txt")
         self.assertIn("#2", compact2)
+        self.assertEqual(path2.read_text(encoding="utf-8"), second)
         gitignore = (self.root / ".evren" / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("tmp/", gitignore.splitlines())
 
@@ -371,63 +317,44 @@ class CompactPasteTest(unittest.TestCase):
         self.assertLessEqual(len(long_line), 300 + len("... [+1007 karakter]"))
         self.assertIn("karakter]", long_line)
         self.assertNotIn("ok step 120 passed", compact)
-
-    def test_at_most_sixty_error_lines_from_the_middle(self):
-        lines = ["üst"] * 15
-        lines += [f"item {i}: error E{i:04d} unique failure" for i in range(200)]
-        lines += ["alt"] * 15
+        # At most sixty error lines are shown from the middle, with a counter.
+        lines = ["üst"] * 15 + [f"item {i}: error E{i:04d} unique failure" for i in range(200)] + ["alt"] * 15
         compact, _ = compact_paste("\n".join(lines), self.root, max_lines=50)
         shown = [line for line in compact.splitlines() if line.startswith("item ")]
         self.assertEqual(len(shown), 60)
         self.assertIn("(60/200)", compact)
         self.assertEqual(shown[0], "item 0: error E0000 unique failure")
 
-    def test_many_long_error_lines_stay_near_the_budget(self):
-        lines = ["üst"] * 15
-        lines += [f"{i} error " + "z" * 290 for i in range(300)]
-        lines += ["alt"] * 15
+    def test_char_budgets_clipping_crlf_and_env_limits(self):
+        # Many long error lines stay near the budget.
+        lines = ["üst"] * 15 + [f"{i} error " + "z" * 290 for i in range(300)] + ["alt"] * 15
         compact, _ = compact_paste("\n".join(lines), self.root, max_lines=50)
         self.assertLessEqual(len(compact), 11_000)
-
-    def test_long_single_line_paste_is_clipped(self):
+        # A long single line is clipped but fully saved.
         text = "x" * 20_000
         compact, path = compact_paste(text, self.root)
         self.assertIsNotNone(path)
         self.assertLess(len(compact), 1500)
         self.assertEqual(path.read_text(encoding="utf-8"), text)
-
-    def test_few_but_very_long_lines_trigger_on_chars(self):
+        # Few but very long lines trigger compaction on characters.
         text = "\n".join(f"{i} " + "q" * 400 for i in range(40))
         self.assertGreater(len(text), 6000)
         compact, path = compact_paste(text, self.root)
         self.assertIsNotNone(path)
         self.assertLess(len(compact), len(text))
-
-    def test_crlf_input_is_normalized_in_the_saved_file(self):
+        # CRLF input is normalized in the saved file.
         text = "\r\n".join(f"satır {i} " + "w" * 60 for i in range(120)) + "\r\n"
         compact, path = compact_paste(text, self.root)
         self.assertIsNotNone(path)
-        raw = path.read_bytes()
-        self.assertNotIn(b"\r", raw)
+        self.assertNotIn(b"\r", path.read_bytes())
         self.assertIn("120 satır", compact)
-
-    def test_env_limits_apply(self):
+        # Env limits apply.
         text = "\n".join(f"satır {i} " + "v" * 60 for i in range(120))
         with patch.dict(os.environ, {"EVREN_PASTE_MAX_LINES": "500", "EVREN_PASTE_MAX_CHARS": "50000"}):
             self.assertEqual(compact_paste(text, self.root), (text, None))
         with patch.dict(os.environ, {"EVREN_PASTE_MAX_LINES": "100"}):
             compact, path = compact_paste(text, self.root)
             self.assertIsNotNone(path)
-
-    def test_text_that_would_not_shrink_is_left_alone(self):
-        text = "\n".join(f"s{i}" for i in range(60))
-        self.assertEqual(compact_paste(text, self.root, max_lines=40), (text, None))
-        self.assertEqual(list((self.root / ".evren" / "tmp").glob("paste-*.txt")), [])
-
-    def test_unwritable_target_returns_the_original_text(self):
-        text = make_build_log(lines=300, errors=5)
-        with patch("src.paste._save_paste", return_value=None):
-            self.assertEqual(compact_paste(text, self.root), (text, None))
 
     def test_paste_info_is_a_one_line_turkish_notice(self):
         text = make_build_log(lines=300, errors=5)
@@ -511,29 +438,24 @@ class AgentPasteTest(unittest.TestCase):
         self.assertIn("{{EVREN_SECRET_1}}", self.sent[0])
         self.assertNotIn(TOKEN, self.session.task_goal)
 
-    def test_small_text_is_unchanged_even_with_compact_on(self):
+    def test_small_text_and_generated_prompts_are_never_compacted(self):
         self.session.run_step("testleri çalıştır", compact=True)
         self.assertEqual(self.session.task_goal, "testleri çalıştır")
         self.assertEqual(self.pasted_files(), [])
         self.assertEqual(self.infos, [])
-
-    def test_generated_prompts_are_never_compacted(self):
+        self.sent.clear()
         text = make_build_log()
         self.session.run_step(text)  # compact defaults to False (skills, templates, playbooks)
         self.assertEqual(self.pasted_files(), [])
         self.assertIn("Compiling Portal.Api.Module700 ", self.sent[0])
 
-    def test_big_followup_paste_is_compacted_too(self):
+    def test_followup_paste_is_compacted_and_numbers_increment(self):
         self.session.run_step("projeyi derle", compact=True)
-        text = make_build_log(lines=800, errors=12)
-        self.session.execute_followup(text)
+        self.session.execute_followup(make_build_log(lines=800, errors=12))
         self.assertEqual(len(self.pasted_files()), 1)
         self.assertIn("[Yapıştırılan metin #1:", self.sent[-1])
         self.assertIn("projeyi derle", self.sent[-1])
         self.assertNotIn("Compiling Portal.Api.Module400 ", self.sent[-1])
-
-    def test_second_paste_gets_the_next_number(self):
-        self.session.run_step(make_build_log(), compact=True)
         self.session.run_step(make_build_log(lines=900, errors=9), compact=True)
         self.assertEqual([p.name for p in self.pasted_files()], ["paste-1.txt", "paste-2.txt"])
         self.assertIn("[Yapıştırılan metin #2:", self.sent[-1])

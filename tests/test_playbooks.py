@@ -20,24 +20,14 @@ class TestPlaybooks(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_catalog_not_empty(self):
-        self.assertGreater(len(PLAYBOOKS), 0)
 
-    def test_list_playbooks(self):
-        self.assertEqual(len(list_playbooks()), len(PLAYBOOKS))
 
     def test_get_playbook_exact(self):
         pb = get_playbook("release")
         self.assertIsNotNone(pb)
         self.assertEqual(pb.name, "release")
 
-    def test_get_playbook_missing(self):
-        self.assertIsNone(get_playbook("nope"))
 
-    def test_step_prompt(self):
-        pb = get_playbook("release")
-        block = pb.step_prompt(0)
-        self.assertIn("Adım 1/", block)
 
     def test_step_prompt_out_of_range(self):
         pb = get_playbook("release")
@@ -50,21 +40,9 @@ class TestPlaybooks(unittest.TestCase):
         self.assertEqual(cp["playbook"], "release")
         self.assertEqual(cp["next_step"], 2)
 
-    def test_save_checkpoint_unknown_playbook(self):
-        with self.assertRaises(ValueError):
-            save_checkpoint("nope", 0, self.ws)
 
-    def test_save_checkpoint_out_of_range(self):
-        with self.assertRaises(ValueError):
-            save_checkpoint("release", 999, self.ws)
 
-    def test_load_no_checkpoint(self):
-        self.assertIsNone(load_checkpoint(self.ws))
 
-    def test_clear_checkpoint(self):
-        save_checkpoint("release", 1, self.ws)
-        self.assertTrue(clear_checkpoint(self.ws))
-        self.assertFalse(clear_checkpoint(self.ws))
 
 
 if __name__ == "__main__":

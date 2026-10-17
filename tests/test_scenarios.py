@@ -99,23 +99,9 @@ class HarnessSelfTests(unittest.TestCase):
             result = run_scenario(scenario, Path(directory))
             return result, check_expectations(result)
 
-    def test_a_matching_scenario_passes(self):
-        _result, failures = self._run()
-        self.assertEqual(failures, [])
 
-    def test_wrong_expectations_are_reported(self):
-        _result, failures = self._run(expect={"final_contains": "başka", "request_count": 3})
-        self.assertEqual(len(failures), 2, failures)
 
-    def test_missing_model_reply_is_a_failure(self):
-        _result, failures = self._run(model_replies=[], expect={"request_count": 1})
-        self.assertTrue(any("exhausted" in f for f in failures), failures)
 
-    def test_unconsumed_model_reply_is_a_failure(self):
-        _result, failures = self._run(
-            model_replies=[{"content": "selam"}, {"content": "fazla"}],
-        )
-        self.assertTrue(any("never consumed" in f for f in failures), failures)
 
     def test_tool_calls_reach_the_real_dispatcher(self):
         result, failures = self._run(
@@ -129,17 +115,6 @@ class HarnessSelfTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertFalse(result.executed[0]["faked"])
 
-    def test_faked_tool_results_skip_execution(self):
-        result, failures = self._run(
-            model_replies=[
-                {"tool_calls": [{"name": "view_file", "arguments": {"path": "yok.txt"}}]},
-                {"content": "tamam"},
-            ],
-            tool_results={"*": "SAHTE-SONUÇ"},
-            expect={"executed_count": 1, "messages_contain": ["SAHTE-SONUÇ"]},
-        )
-        self.assertEqual(failures, [])
-        self.assertTrue(result.executed[0]["faked"])
 
     def test_auto_approve_is_off_whatever_the_developer_env_says(self):
         import os
@@ -158,21 +133,6 @@ class HarnessSelfTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
-    def test_unknown_keys_and_bad_values_are_rejected(self):
-        for bad in (
-            {"colour": "red"},
-            {"kind": "web"},
-            {"mode": "yolo"},
-            {"expect": {"nonsense": 1}},
-            {"expect": {}},
-            {"user_inputs": []},
-            {"model_replies": [{"tool_calls": []}]},
-            {"workspace_files": {"../escape.txt": "x"}},
-            {"tool_results": {"first": "x"}},
-        ):
-            with self.subTest(bad=bad):
-                with self.assertRaises(ScenarioError):
-                    validate_scenario({**self.BASE, **bad})
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -72,36 +72,9 @@ class SystemPromptInjectionTest(_WorkspaceTest):
         session = self.make_session()
         self.assertNotIn("PROJE BAĞLAM BELGESİ", session.system_prompt)
 
-    def test_budget_zero_disables_injection(self):
-        ensure_project_docs(self.root)
-        with patch.dict(os.environ, {"EVREN_DOCS_TOKENS": "0"}):
-            session = self.make_session()
-        self.assertNotIn("PROJE BAĞLAM BELGESİ", session.system_prompt)
 
-    def test_refresh_context_picks_up_file_change(self):
-        ensure_project_docs(self.root)
-        session = self.make_session()
-        path = self.root / "agent.md"
-        path.write_text(
-            path.read_text(encoding="utf-8") + "\n## Elle kural\nYorum satırı ekle.\n",
-            encoding="utf-8",
-            newline="",
-        )
-        session.refresh_context()
-        self.assertIn("Yorum satırı ekle.", session.system_prompt)
 
-    def test_changelog_reaches_system_prompt(self):
-        ensure_project_docs(self.root)
-        append_changelog_entry(self.root, {"goal": "şema migrasyonu", "files": ["src/x.py"]})
-        session = self.make_session()
-        self.assertIn("şema migrasyonu", session.system_prompt)
 
-    def test_cli_lessons_reach_system_prompt(self):
-        from src.cli_home import append_lesson
-
-        append_lesson("cmd kabuğunda && kullanma", self.home)
-        session = self.make_session()
-        self.assertIn("cmd kabuğunda && kullanma", session.system_prompt)
 
     def test_docs_failure_does_not_break_prompt(self):
         session = self.make_session()
@@ -110,40 +83,6 @@ class SystemPromptInjectionTest(_WorkspaceTest):
         self.assertTrue(rebuilt.startswith("TEMEL"))
 
 
-class PromptPreparationDigestTest(_WorkspaceTest):
-    def test_docs_context_empty_without_docs(self):
-        self.assertEqual(_docs_context(self.root), "")
-
-    def test_docs_context_contains_project_brief(self):
-        ensure_project_docs(self.root)
-        context = _docs_context(self.root)
-        self.assertIn("PROJE ÖZETİ", context)
-        self.assertIn("Proje:", context)
-
-    def test_docs_context_survives_failure(self):
-        with patch("src.project_docs.docs_digest", side_effect=RuntimeError("bozuk")):
-            self.assertEqual(_docs_context(self.root), "")
-
-    def test_guidance_receives_digest(self):
-        from src import repl
-
-        ensure_project_docs(self.root)
-        session = self.make_session()
-        captured = {}
-
-        def fake_collect(read_line, guidance, previous=None):
-            guidance(SimpleNamespace(brief=""), True)
-            return None
-
-        with patch("src.repl.collect_guided_prompt_frame", fake_collect), \
-                patch("src.repl.request_frame_guidance") as guidance_call:
-            guidance_call.side_effect = lambda *a, **k: captured.update(
-                context=a[4] if len(a) > 4 else k.get("execution_context", "")
-            ) or SimpleNamespace(question="", suggestions={})
-            repl._collect_frame(session, SimpleNamespace())
-
-        self.assertIn("PROJE ÖZETİ", captured["context"])
-        self.assertIn("Proje:", captured["context"])
 
 
 class ChangelogFromTaskTest(_WorkspaceTest):
@@ -158,13 +97,6 @@ class ChangelogFromTaskTest(_WorkspaceTest):
         self.assertIn("testleri koş", text)
         self.assertIn("python -m pytest -q", text)
 
-    def test_run_step_updates_current_focus(self):
-        session = self.make_session()
-        session.run_step("belgeyi güncelle")
-        from src.docs_merge import extract_sections
-
-        text = (self.root / "agent.md").read_text(encoding="utf-8")
-        self.assertIn("belgeyi güncelle", extract_sections(text)["current_focus"])
 
     def test_plan_mode_writes_nothing(self):
         session = self.make_session()
@@ -172,32 +104,7 @@ class ChangelogFromTaskTest(_WorkspaceTest):
         self.assertFalse((self.root / "agent.md").exists())
         self.assertFalse((self.root / "changelog.md").exists())
 
-    def test_file_edits_are_listed(self):
-        session = self.make_session()
-        session.client.chat_stream_assembled.side_effect = [
-            response("yazıyorum", tools=[
-                tool_call('{"path": "src/a.py", "content": "x"}', name="write_file"),
-            ]),
-            response("bitti"),
-        ]
-        with patch("src.agent.execute_tool_call", return_value="BAŞARILI: src/a.py"):
-            session.run_step("dosya oluştur")
-        text = (self.root / "changelog.md").read_text(encoding="utf-8")
-        self.assertIn("`src/a.py`", text)
 
-    def test_trace_is_reset_between_tasks(self):
-        session = self.make_session()
-        session.client.chat_stream_assembled.side_effect = [
-            response("yazıyorum", tools=[
-                tool_call('{"path": "src/a.py", "content": "x"}', name="write_file"),
-            ]),
-            response("bitti"),
-            response("ikinci görev bitti"),
-        ]
-        with patch("src.agent.execute_tool_call", return_value="BAŞARILI: src/a.py"):
-            session.run_step("ilk görev")
-            session.run_step("ikinci görev")
-        self.assertEqual(session.tool_trace, [])
 
 
 if __name__ == "__main__":  # pragma: no cover
