@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 
 from src.api_client import EvrenClient, _TRANSIENT_RETRIES, normalize_chat_messages
 from src.api_key_pool import ApiKeyPool
-from src.errors import RateLimitError, QuotaExhaustedError, AuthError, ServerError
+from src.errors import RateLimitError, QuotaExhaustedError, ServerError
 from tests.helpers import FakeClock, make_connection_error, make_status_error, FakeCompletion
 
 
@@ -25,6 +25,58 @@ def _fake_client_with(side_effect):
     return mock_client
 
 
+def _make_stream(chunks):
+    """Builds a fake stream of chunk objects.
+
+    Each chunk is a dict with optional keys:
+      content, reasoning, tool_calls (list of dicts with index/id/name/arguments),
+      usage, finish_reason.
+    """
+    class _Fn:
+        def __init__(self, name=None, arguments=None):
+            self.name = name
+            self.arguments = arguments
+
+    class _ToolCallDelta:
+        def __init__(self, index, id=None, name=None, arguments=None):
+            self.index = index
+            self.id = id
+            self.type = "function"
+            self.function = _Fn(name, arguments)
+
+    class _Delta:
+        def __init__(self, content=None, reasoning=None, tool_calls=None):
+            self.content = content
+            self.reasoning = reasoning
+            self.reasoning_content = reasoning
+            self.tool_calls = tool_calls
+
+    class _Choice:
+        def __init__(self, delta, finish_reason=None):
+            self.delta = delta
+            self.finish_reason = finish_reason
+
+    class _Chunk:
+        def __init__(self, delta, usage=None, finish_reason=None):
+            self.choices = [_Choice(delta, finish_reason)] if delta is not None else []
+            self.usage = usage
+
+    result = []
+    for spec in chunks:
+        tcs = None
+        if spec.get("tool_calls"):
+            tcs = [_ToolCallDelta(**tc) for tc in spec["tool_calls"]]
+        delta = _Delta(
+            content=spec.get("content"),
+            reasoning=spec.get("reasoning"),
+            tool_calls=tcs,
+        )
+        result.append(_Chunk(
+            delta, usage=spec.get("usage"), finish_reason=spec.get("finish_reason"),
+        ))
+    return result
+
+
 class TestNormalizeChatMessages(unittest.TestCase):
     def test_later_system_messages_merge_into_the_first(self):
         sent = normalize_chat_messages([
@@ -42,9 +94,8 @@ class TestNormalizeChatMessages(unittest.TestCase):
         sent = normalize_chat_messages([{"role": "user", "content": "hi"}])
         self.assertEqual(sent, [{"role": "user", "content": "hi"}])
 
-
-class TestChatCompleteRetry(unittest.TestCase):
-    def test_complete_sends_system_message_first(self):
+    def test_chat_complete_sends_normalized_messages(self):
+        # chat_complete applies the same normalization before sending.
         client = _make_client()
         fake = _fake_client_with([FakeCompletion("ok")])
         with patch.object(client.key_pool, "get_client", return_value=fake):
@@ -57,28 +108,17 @@ class TestChatCompleteRetry(unittest.TestCase):
         self.assertEqual([message["role"] for message in sent], ["system", "user"])
         self.assertIn("adım", sent[0]["content"])
 
-    def test_success_first_try(self):
+
+class TestChatCompleteRetry(unittest.TestCase):
+    def test_success_and_retry_after_header(self):
+        # First-try success returns the model text; a 429 Retry-After header
+        # is honored as the sleep duration before the retry.
         client = _make_client()
         fake = _fake_client_with([FakeCompletion("hello")])
         with patch.object(client.key_pool, "get_client", return_value=fake):
             resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
         self.assertEqual(resp.choices[0].message.content, "hello")
 
-    def test_retry_on_429_then_success(self):
-        # Single key: 429 must cool down, wait, clear cooldown, then retry.
-        client = _make_client()
-        clock = FakeClock()
-        fake = _fake_client_with([
-            make_status_error(429, "rate limited"),
-            FakeCompletion("recovered"),
-        ])
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            with clock.patch():
-                resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-        self.assertEqual(resp.choices[0].message.content, "recovered")
-        self.assertEqual(len(clock.sleeps), 1)  # waited once before retrying
-
-    def test_retry_after_header_respected(self):
         client = _make_client()
         clock = FakeClock()
         fake = _fake_client_with([
@@ -87,10 +127,14 @@ class TestChatCompleteRetry(unittest.TestCase):
         ])
         with patch.object(client.key_pool, "get_client", return_value=fake):
             with clock.patch():
-                client.chat_complete(messages=[{"role": "user", "content": "hi"}])
+                resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.choices[0].message.content, "ok")
         self.assertEqual(clock.sleeps, [5.0])
 
     def test_retry_exhausted_raises_typed(self):
+        # Exhausted retries raise typed errors: ServerError for 503,
+        # QuotaExhaustedError when every key hits daily quota, RateLimitError
+        # when every key is already disabled.
         client = _make_client()
         clock = FakeClock()
         fake = _fake_client_with(make_status_error(503, "down"))
@@ -100,29 +144,35 @@ class TestChatCompleteRetry(unittest.TestCase):
                     client.chat_complete(messages=[{"role": "user", "content": "hi"}], max_retries=3)
         self.assertEqual(len(clock.sleeps), 2)  # 3 attempts -> 2 sleeps
 
-    def test_auth_error_disables_key(self):
-        client = _make_client(keys=["bad", "good"])
-        fake = _fake_client_with([
-            make_status_error(401, "bad key"),
-            FakeCompletion("ok with good key"),
-        ])
+        client = _make_client(keys=["k1"])
+        fake = _fake_client_with(make_status_error(429, "daily quota exceeded"))
         with patch.object(client.key_pool, "get_client", return_value=fake):
-            resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-        self.assertEqual(resp.choices[0].message.content, "ok with good key")
-        # The bad key must be disabled after the 401.
-        self.assertEqual(client.key_pool.keys[0].state.value, "disabled")
+            with self.assertRaises(QuotaExhaustedError):
+                client.chat_complete(messages=[{"role": "user", "content": "hi"}])
 
-    def test_rate_limit_failover_to_next_key(self):
-        client = _make_client(keys=["k1", "k2"])
-        fake = _fake_client_with([
-            make_status_error(429, "rate limited"),
-            FakeCompletion("served by k2"),
-        ])
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-        self.assertEqual(resp.choices[0].message.content, "served by k2")
-        # k1 should now be cooling.
-        self.assertEqual(client.key_pool.keys[0].state.value, "cooling")
+        client = _make_client(keys=["k1"])
+        client.key_pool.report_disabled("k1")
+        with self.assertRaises(RateLimitError):
+            client.chat_complete(messages=[{"role": "user", "content": "hi"}])
+
+    def test_key_state_transitions_on_errors(self):
+        # 401 disables the key, plain 429 cools it, quota 429 disables it.
+        cases = [
+            (["bad", "good"], make_status_error(401, "bad key"), "disabled", None),
+            (["k1", "k2"], make_status_error(429, "rate limited"), "cooling", None),
+            (["k1", "k2"], make_status_error(429, "insufficient_quota: daily quota exceeded"),
+             "disabled", "quota_exhausted"),
+        ]
+        for keys, error, expected_state, expected_last_error in cases:
+            with self.subTest(status=error):
+                client = _make_client(keys=keys)
+                fake = _fake_client_with([error, FakeCompletion("ok")])
+                with patch.object(client.key_pool, "get_client", return_value=fake):
+                    resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
+                self.assertEqual(resp.choices[0].message.content, "ok")
+                self.assertEqual(client.key_pool.keys[0].state.value, expected_state)
+                if expected_last_error:
+                    self.assertEqual(client.key_pool.keys[0].last_error, expected_last_error)
 
     def test_failover_does_not_consume_retry_budget(self):
         client = _make_client(keys=["k1", "k2", "k3"])
@@ -138,34 +188,8 @@ class TestChatCompleteRetry(unittest.TestCase):
             )
         self.assertEqual(resp.choices[0].message.content, "served by k3")
 
-    def test_daily_quota_disables_key_and_failover(self):
-        # A daily-quota 429 must DISABLE the key (not merely cool it) and
-        # immediately failover to the next key.
-        client = _make_client(keys=["k1", "k2"])
-        fake = _fake_client_with([
-            make_status_error(429, "insufficient_quota: daily quota exceeded"),
-            FakeCompletion("served by k2"),
-        ])
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            resp = client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-        self.assertEqual(resp.choices[0].message.content, "served by k2")
-        self.assertEqual(client.key_pool.keys[0].state.value, "disabled")
-        self.assertEqual(client.key_pool.keys[0].last_error, "quota_exhausted")
-
-    def test_daily_quota_all_keys_raises_quota_error(self):
-        client = _make_client(keys=["k1"])
-        fake = _fake_client_with(make_status_error(429, "daily quota exceeded"))
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            with self.assertRaises(QuotaExhaustedError):
-                client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-
-    def test_all_keys_unavailable_raises(self):
-        client = _make_client(keys=["k1"])
-        client.key_pool.report_disabled("k1")
-        with self.assertRaises(RateLimitError):
-            client.chat_complete(messages=[{"role": "user", "content": "hi"}])
-
     def test_all_keys_cooling_waits_then_retries(self):
+        # All keys cooling -> wait for the cooldown, then retry successfully.
         client = _make_client(keys=["k1"])
         clock = FakeClock()
         client.key_pool.report_rate_limited("k1", retry_after=2)
@@ -184,63 +208,26 @@ class TestChatCompleteRetry(unittest.TestCase):
 class TestChatStreamAssembled(unittest.TestCase):
     """Tests for chat_stream_assembled: live callbacks + assembled response."""
 
-    @staticmethod
-    def _make_stream(chunks):
-        """Builds a fake stream of chunk objects.
-
-        Each chunk is a dict with optional keys:
-          content, reasoning, tool_calls (list of dicts with index/id/name/arguments).
-        """
-        class _Fn:
-            def __init__(self, name=None, arguments=None):
-                self.name = name
-                self.arguments = arguments
-
-        class _ToolCallDelta:
-            def __init__(self, index, id=None, name=None, arguments=None):
-                self.index = index
-                self.id = id
-                self.type = "function"
-                self.function = _Fn(name, arguments)
-
-        class _Delta:
-            def __init__(self, content=None, reasoning=None, tool_calls=None):
-                self.content = content
-                self.reasoning = reasoning
-                self.reasoning_content = reasoning
-                self.tool_calls = tool_calls
-
-        class _Choice:
-            def __init__(self, delta, finish_reason=None):
-                self.delta = delta
-                self.finish_reason = finish_reason
-
-        class _Chunk:
-            def __init__(self, delta, usage=None, finish_reason=None):
-                self.choices = [_Choice(delta, finish_reason)] if delta is not None else []
-                self.usage = usage
-
-        result = []
-        for spec in chunks:
-            tcs = None
-            if spec.get("tool_calls"):
-                tcs = [_ToolCallDelta(**tc) for tc in spec["tool_calls"]]
-            delta = _Delta(
-                content=spec.get("content"),
-                reasoning=spec.get("reasoning"),
-                tool_calls=tcs,
-            )
-            result.append(_Chunk(
-                delta, usage=spec.get("usage"), finish_reason=spec.get("finish_reason"),
-            ))
-        return result
+    def test_stream_success_and_finish_reason(self):
+        # chat_stream yields content chunks and records key success; assembled
+        # response keeps the finish reason.
+        client = _make_client(keys=["k1"])
+        fake = MagicMock()
+        fake.chat.completions.create.return_value = _make_stream([
+            {"content": "Hel"}, {"content": "lo"},
+        ])
+        with patch.object(client.key_pool, "get_client", return_value=fake):
+            chunks = list(client.chat_stream(messages=[{"role": "user", "content": "hi"}]))
+        text = "".join(c["content"] for c in chunks if c["type"] == "content")
+        self.assertEqual(text, "Hello")
+        self.assertEqual(client.key_pool.keys[0].success_count, 1)
 
     def test_preserves_finish_reason(self):
         for reason in ("stop", "length", "tool_calls", "content_filter"):
             with self.subTest(reason=reason):
                 client = _make_client(keys=["k1"])
                 fake = MagicMock()
-                fake.chat.completions.create.return_value = self._make_stream([
+                fake.chat.completions.create.return_value = _make_stream([
                     {"reasoning": "thinking"},
                     {"finish_reason": reason},
                     {"usage": MagicMock()},
@@ -251,13 +238,17 @@ class TestChatStreamAssembled(unittest.TestCase):
                     )
                 self.assertEqual(response.choices[0].finish_reason, reason)
 
-    def test_assembles_content_and_calls_callbacks(self):
+    def test_assembles_content_reasoning_and_tool_calls(self):
+        # Assembled response keeps finish_reason, content, reasoning, callbacks
+        # and tool-call deltas merged across chunks.
         client = _make_client(keys=["k1"])
-        stream = self._make_stream([
+        stream = _make_stream([
             {"reasoning": "think "},
             {"reasoning": "more"},
             {"content": "Hel"},
             {"content": "lo"},
+            {"tool_calls": [{"index": 0, "id": "call_1", "name": "view_", "arguments": '{"pa'}]},
+            {"tool_calls": [{"index": 0, "name": "file", "arguments": 'th": "a.py"}'}]},
         ])
         fake = MagicMock()
         fake.chat.completions.create.return_value = stream
@@ -275,26 +266,15 @@ class TestChatStreamAssembled(unittest.TestCase):
         self.assertEqual("".join(reasoning_parts), "think more")
         self.assertEqual("".join(content_parts), "Hello")
         self.assertEqual(client.key_pool.keys[0].success_count, 1)
-
-    def test_assembles_tool_calls_across_deltas(self):
-        client = _make_client(keys=["k1"])
-        stream = self._make_stream([
-            {"tool_calls": [{"index": 0, "id": "call_1", "name": "view_", "arguments": '{"pa'}]},
-            {"tool_calls": [{"index": 0, "name": "file", "arguments": 'th": "a.py"}'}]},
-        ])
-        fake = MagicMock()
-        fake.chat.completions.create.return_value = stream
-
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            resp = client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
-
         tcs = resp.choices[0].message.tool_calls
         self.assertEqual(len(tcs), 1)
         self.assertEqual(tcs[0].id, "call_1")
         self.assertEqual(tcs[0].function.name, "view_file")
         self.assertEqual(tcs[0].function.arguments, '{"path": "a.py"}')
 
-    def test_stream_error_raises_typed(self):
+    def test_stream_transient_errors_retry_then_succeed_or_raise(self):
+        # Exhausted stream retries raise typed (ServerError / QuotaExhaustedError);
+        # a connection error retries once and succeeds.
         client = _make_client(keys=["k1"])
         clock = FakeClock()
         fake = _fake_client_with(make_status_error(503, "down"))
@@ -305,10 +285,15 @@ class TestChatStreamAssembled(unittest.TestCase):
         self.assertEqual(fake.chat.completions.create.call_count, 1 + _TRANSIENT_RETRIES)
         self.assertEqual(len(clock.sleeps), _TRANSIENT_RETRIES)
 
-    def test_connection_error_retries_then_succeeds(self):
+        client = _make_client(keys=["k1"])
+        fake = _fake_client_with(make_status_error(429, "daily quota exceeded"))
+        with patch.object(client.key_pool, "get_client", return_value=fake):
+            with self.assertRaises(QuotaExhaustedError):
+                client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
+
         client = _make_client(keys=["k1"])
         clock = FakeClock()
-        stream = self._make_stream([{"content": "Hello"}])
+        stream = _make_stream([{"content": "Hello"}])
         fake = MagicMock()
         fake.chat.completions.create.side_effect = [make_connection_error(), stream]
         with patch.object(client.key_pool, "get_client", return_value=fake):
@@ -318,10 +303,10 @@ class TestChatStreamAssembled(unittest.TestCase):
         self.assertEqual(len(clock.sleeps), 1)
         self.assertEqual(fake.chat.completions.create.call_count, 2)
 
-    def test_stream_quota_failover_before_output(self):
+    def test_stream_quota_failover_and_exhaustion(self):
         # Quota 429 before any token -> disable key and failover to next key.
         client = _make_client(keys=["k1", "k2"])
-        stream = self._make_stream([{"content": "Hello"}])
+        stream = _make_stream([{"content": "Hello"}])
         fake = MagicMock()
         fake.chat.completions.create.side_effect = [
             make_status_error(429, "insufficient_quota"),
@@ -332,13 +317,6 @@ class TestChatStreamAssembled(unittest.TestCase):
         self.assertEqual(resp.choices[0].message.content, "Hello")
         self.assertEqual(client.key_pool.keys[0].state.value, "disabled")
         self.assertEqual(client.key_pool.keys[0].last_error, "quota_exhausted")
-
-    def test_stream_quota_all_keys_raises(self):
-        client = _make_client(keys=["k1"])
-        fake = _fake_client_with(make_status_error(429, "daily quota exceeded"))
-        with patch.object(client.key_pool, "get_client", return_value=fake):
-            with self.assertRaises(QuotaExhaustedError):
-                client.chat_stream_assembled(messages=[{"role": "user", "content": "hi"}])
 
 
 class TestChatStreamNoRetry(unittest.TestCase):
@@ -356,26 +334,12 @@ class TestChatStreamNoRetry(unittest.TestCase):
         self.assertEqual(fake.chat.completions.create.call_count, 1 + _TRANSIENT_RETRIES)
         self.assertEqual(len(clock.sleeps), _TRANSIENT_RETRIES)
 
-    def test_stream_success_reports_success(self):
+        # Success path: content chunks are yielded and key success is recorded.
         client = _make_client(keys=["k1"])
-        # Build a minimal fake stream of chunks.
-        class _Delta:
-            def __init__(self, content):
-                self.content = content
-                self.reasoning = None
-                self.reasoning_content = None
-                self.tool_calls = None
-
-        class _Choice:
-            def __init__(self, content):
-                self.delta = _Delta(content)
-
-        class _Chunk:
-            def __init__(self, content):
-                self.choices = [_Choice(content)]
-
         fake = MagicMock()
-        fake.chat.completions.create.return_value = [_Chunk("Hel"), _Chunk("lo")]
+        fake.chat.completions.create.return_value = _make_stream([
+            {"content": "Hel"}, {"content": "lo"},
+        ])
         with patch.object(client.key_pool, "get_client", return_value=fake):
             chunks = list(client.chat_stream(messages=[{"role": "user", "content": "hi"}]))
         text = "".join(c["content"] for c in chunks if c["type"] == "content")
