@@ -136,14 +136,43 @@ def group_units(body: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return units
 
 
+def _current_task_reads(messages: list[dict[str, Any]], calls: dict) -> set[int]:
+    """ids of view_file results of the current task that were not re-read later.
+
+    Stubbing these made the agent read the same files again right after a
+    compaction (a 4-file rewrite task re-read every file, step after step).
+    """
+    task_start = 0
+    for i, m in enumerate(messages):
+        if m.get("role") == "user" and not str(m.get("content") or "").startswith(("[EVREN]", "[Önceki")):
+            task_start = i
+    keep: set[int] = set()
+    seen_paths: set[str] = set()
+    for m in reversed(messages[task_start:]):
+        if m.get("role") != "tool":
+            continue
+        name, args = calls.get(str(m.get("tool_call_id")), ("", {}))
+        if name != "view_file":
+            continue
+        key = f"{args.get('path')}:{args.get('start_line')}:{args.get('end_line')}"
+        if key in seen_paths:
+            continue  # an older copy of a range read again later
+        seen_paths.add(key)
+        keep.add(id(m))
+    return keep
+
+
 def stub_tool_results(
     messages: list[dict[str, Any]], keep_units: int = KEEP_RAW_UNITS_STUB,
+    *, keep_current_reads: bool = False,
 ) -> list[dict[str, Any]]:
     """Replaces old tool results (all but the last `keep_units` units) by stubs."""
     calls = _call_index(messages)
     start = 1 if messages and messages[0].get("role") == "system" else 0
     units = group_units(messages[start:])
     protected = {id(m) for unit in units[-keep_units:] for m in unit} if keep_units else set()
+    if keep_current_reads:
+        protected |= _current_task_reads(messages, calls)
     out = []
     for m in messages:
         content = m.get("content")
@@ -261,6 +290,11 @@ class HistoryCompactor:
         if self.smart:
             self.events += 1
             target = int(limit * self.target_ratio)
+            # First everything but the current task's file reads; those only
+            # go when the history still does not fit the limit.
+            working = stub_tool_results(working, keep_current_reads=True)
+            if self._fits(working, output_budget, limit):
+                return working
             working = stub_tool_results(working)
             if self._fits(working, output_budget, target):
                 return working
