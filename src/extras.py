@@ -28,12 +28,20 @@ def settings_path(workspace_root) -> Path:
     return Path(workspace_root) / ".evren" / "settings.json"
 
 
-def load_settings(workspace_root) -> dict[str, Any]:
+def _parse_settings(path) -> dict[str, Any]:
     try:
-        data = json.loads(settings_path(workspace_root).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def load_settings(workspace_root) -> dict[str, Any]:
+    import copy
+
+    from src.file_cache import cached
+
+    return copy.deepcopy(cached("project-settings", settings_path(workspace_root), _parse_settings))
 
 
 def save_settings(workspace_root, data: dict[str, Any]) -> None:
