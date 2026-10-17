@@ -60,7 +60,13 @@ def classify(text: str, labels: list[str], client=None) -> str | None:
             key = keys[0] if keys else ""
         if not key:
             return None
-        payload = {"model": "clef", "input": text[:2000], "labels": list(labels)}
+        # Verified shape: {"state": text, "questions": {name: {type, options}}}
+        # -> {"answers": {name: {"choice": ..., "confidence": ...}}}.
+        payload = {
+            "model": "clef",
+            "state": text[:2000],
+            "questions": {"niyet": {"type": "choice", "options": list(labels)}},
+        }
         resp = httpx.post(
             f"{base}/systemone",
             headers={"X-API-Key": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -70,11 +76,11 @@ def classify(text: str, labels: list[str], client=None) -> str | None:
         )
         if resp.status_code != 200:
             return None
-        try:
-            data = resp.json()
-        except ValueError:
-            data = resp.text
-        return _extract_label(data, list(labels))
+        answer = ((resp.json().get("answers") or {}).get("niyet") or {})
+        choice = answer.get("choice")
+        if choice not in labels or float(answer.get("confidence") or 0) < 0.6:
+            return None  # low confidence: let the regex decide
+        return choice
     except Exception:
         return None
 
