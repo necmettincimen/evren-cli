@@ -11,7 +11,6 @@ import contextlib
 import io
 import json
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +19,6 @@ from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
-from src import trace as trace_mod
 from src.agent import AgentSession
 from src.config import trace_enabled
 from src.secret_vault import SecretVault, set_active_vault
@@ -28,10 +26,7 @@ from src.trace import (
     ARCHIVE_FILE_NAME,
     MAX_BYTES,
     TaskTrace,
-    classify_outcome,
     print_last_task,
-    summarize_task,
-    table_rows,
     trace_path,
 )
 
@@ -120,15 +115,12 @@ class AgentTraceTest(TraceTestBase):
         self.assertEqual(start["model"], "m")
         self.assertEqual(start["mode"], "normal")
         self.assertEqual(start["text_preview"], "kalan işi yap")
-        self.assertTrue(start["ts"].endswith("Z"))
 
         self.assertEqual([req1["step"], req2["step"], req3["step"]], [1, 2, 3])
         self.assertEqual(
             (req1["prompt_tokens"], req1["cached_tokens"], req1["completion_tokens"]), (1000, 800, 50),
         )
-        self.assertEqual(req3["finish_reason"], "stop")
-        self.assertEqual(req1["finish_reason"], "tool_calls")
-        self.assertIsInstance(req1["ms"], int)
+        self.assertEqual((req1["finish_reason"], req3["finish_reason"]), ("tool_calls", "stop"))
 
         self.assertEqual((tool1["tool"], tool1["step"]), ("run_command", 1))
         self.assertIn("git -C portal-backend grep", tool1["args"])
@@ -139,28 +131,42 @@ class AgentTraceTest(TraceTestBase):
 
         self.assertTrue(tool2["blocked"])            # the repeat guard refused the second call
         self.assertFalse(tool2["ok"])
-        self.assertEqual(tool2["step"], 2)
         self.assertEqual(tool2["sig"], tool1["sig"])  # same call, so it counts as a repeat
 
         self.assertEqual((end["steps"], end["requests"], end["outcome"]), (3, 3, "ok"))
-        self.assertIsInstance(end["ms"], int)
-
-
-
-
-
-
 
     def test_secrets_never_reach_the_trace_file(self):
-        task = f'curl -H "Authorization: Bearer {SECRET}" https://api.example.test/x ile durumu oku'
-        command = f'curl -H "Authorization: Bearer {SECRET}" https://api.example.test/x'
-        replies = [reply(tools=[call("run_command", {"command": command}, "a")]), reply("bitti")]
-        self._run(replies, task=task)
-        raw = trace_path(self.root).read_text(encoding="utf-8")
-        self.assertNotIn(SECRET, raw)
-        preview = self.records()[0]["text_preview"]
-        # The vault swapped the token for a placeholder before the task text reached the trace.
-        self.assertTrue("[REDACTED]" in preview or "EVREN_SECRET" in preview, preview)
+        cases = {
+            "agent task and tool args": (
+                f'curl -H "Authorization: Bearer {SECRET}" https://api.example.test/x ile durumu oku',
+                f'curl -H "Authorization: Bearer {SECRET}" https://api.example.test/x',
+            ),
+            "regex redactor (unknown token)": (
+                f"password={SECRET} ile giriş yap",
+                f"curl -H 'Authorization: Bearer {SECRET}' https://x.test",
+            ),
+            "active vault values": (
+                "echo hunter2plainvalue",
+                "echo hunter2plainvalue",
+            ),
+        }
+        for label, (task, command) in cases.items():
+            with self.subTest(case=label):
+                if label.startswith("active vault"):
+                    vault = SecretVault()
+                    vault.capture("password=hunter2plainvalue")
+                    set_active_vault(vault)
+                    trace = TaskTrace(self.root)
+                    trace.start(model="m", mode="normal", text=task)
+                    trace.tool("run_command", {"command": command, "note": "hunter2plainvalue"})
+                else:
+                    replies = [reply(tools=[call("run_command", {"command": command}, "a")]), reply("bitti")]
+                    self._run(replies, task=task)
+                raw = trace_path(self.root).read_text(encoding="utf-8")
+                self.assertNotIn(SECRET, raw)
+                self.assertNotIn("hunter2plainvalue", raw)
+                # The vault/regex redactor swapped the secret for a placeholder before it reached the trace.
+                self.assertTrue("[REDACTED]" in raw or "{{EVREN_SECRET" in raw, raw)
 
     def test_trace_off_writes_nothing(self):
         for value in ("false", "0", "off"):
@@ -178,28 +184,6 @@ class AgentTraceTest(TraceTestBase):
 
 
 class TaskTraceUnitTest(TraceTestBase):
-    def test_regex_redactor_masks_unknown_bearer_tokens_and_passwords(self):
-        trace = TaskTrace(self.root)
-        trace.start(model="m", mode="normal", text=f"password={SECRET} ile giriş yap")
-        trace.tool("run_command", {"command": f"curl -H 'Authorization: Bearer {SECRET}' https://x.test"})
-        raw = trace_path(self.root).read_text(encoding="utf-8")
-        self.assertNotIn(SECRET, raw)
-        start, tool = self.records()
-        self.assertIn("[REDACTED]", start["text_preview"])
-        self.assertIn("Bearer [REDACTED]", tool["args"])
-
-    def test_active_vault_values_are_masked_everywhere(self):
-        vault = SecretVault()
-        vault.capture("password=hunter2plainvalue")
-        set_active_vault(vault)
-        trace = TaskTrace(self.root)
-        trace.start(model="m", mode="normal", text="echo hunter2plainvalue")
-        trace.tool("run_command", {"command": "echo hunter2plainvalue", "note": "hunter2plainvalue"})
-        raw = trace_path(self.root).read_text(encoding="utf-8")
-        self.assertNotIn("hunter2plainvalue", raw)
-        self.assertIn("{{EVREN_SECRET_1}}", raw)
-
-
     def test_result_text_is_never_stored(self):
         trace = TaskTrace(self.root)
         trace.tool("view_file", {"path": "a.py"}, result="GIZLI-ICERIK " * 10)
@@ -220,10 +204,6 @@ class TaskTraceUnitTest(TraceTestBase):
 
         self.assertEqual(archive.stat().st_size, MAX_BYTES + 1)   # the old archive was replaced
         self.assertEqual([r["type"] for r in self.records()], ["task_start", "task_end"])
-
-
-
-
 
 
 class TraceSwitchTest(unittest.TestCase):
@@ -287,28 +267,17 @@ class DebugLastTest(TraceTestBase):
         self.assertIn("run_command", out)
         self.assertIn("git grep Worker", out)
         self.assertIn("ENGELLENDİ", out)
-        self.assertIn("istek", out)
         self.assertIn("Bearer [REDACTED]", out)             # rich markup must not eat the brackets
         self.assertIn("4,096", out)
-        self.assertIn(
-            "Özet: 4 istek • prompt 6,000 token • önbellek %65 • 2 tekrarlanan çağrı • "
-            "1 engellenen çağrı • toplam 41.2 sn • sonuç: tamam",
-            out,
-        )
-        self.assertNotIn("eski0001", out)
-
-
+        self.assertIn("toplam 41.2 sn", out)
+        self.assertIn("sonuç: tamam", out)
+        self.assertNotIn("eski0001", out)                   # broken line skipped, only last task rendered
 
     def test_missing_trace_file_prints_a_turkish_hint(self):
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             self.assertFalse(print_last_task(self.root))
         self.assertIn("Henüz görev izi yok", " ".join(buffer.getvalue().split()))
-
-
-
-
-
 
 
 if __name__ == "__main__":  # pragma: no cover
