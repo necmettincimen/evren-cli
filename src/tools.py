@@ -949,6 +949,19 @@ class MultilineShellCommand(ValueError):
     """A multi-line command that cmd.exe would silently mangle."""
 
 
+_WIN_FILTER_RE = re.compile(r"(\|\s*)(find|sort)(?=\s+(?:/[a-zA-Z]|\"))", re.IGNORECASE)
+
+
+def _pin_windows_filters(command: str) -> str:
+    """`| find /c ...` and `| sort /r` must hit the Windows tools.
+
+    With Git's usr/bin on PATH, `find /c /v ""` ran GNU find over the whole C:
+    drive: one "count the files" task spent ~3 minutes and 100K tokens.
+    """
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return _WIN_FILTER_RE.sub(lambda m: f"{m.group(1)}{root}\\System32\\{m.group(2).lower()}.exe", command)
+
+
 def _command_argv(
     command: str, use_powershell: bool, use_python: bool = False,
 ) -> tuple[str | list[str], bool]:
@@ -980,6 +993,8 @@ def _command_argv(
                 "cmd.exe çok satırlı komut çalıştıramaz. Python kodu için use_python=true, "
                 "PowerShell için use_powershell=true ver ya da satırları && ile birleştir."
             )
+        if os.name == "nt":
+            command = _pin_windows_filters(command)
         return command, True
     exe = "powershell" if os.name == "nt" else "pwsh"
     # use_powershell=true plus a hand-written `powershell -Command "..."`
