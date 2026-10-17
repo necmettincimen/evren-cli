@@ -5,14 +5,12 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_text.py"
 
@@ -38,16 +36,14 @@ REAL_GHP = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
 
 
 class ControlCharTest(unittest.TestCase):
-
-    def test_backspace_is_reported_with_position(self):
-        text = "ilk satir\nikinci \x08satir\n"
-        self.assertEqual(check_text.find_control_chars(text), [(2, 8, 8)])
-
-
-
-
-    def test_turkish_letters_and_bom_are_fine(self):
-        self.assertEqual(check_text.find_control_chars("﻿çğıöşü İĞÖŞÜ"), [])
+    def test_control_chars_and_clean_text(self):
+        cases = [
+            ("ilk satir\nikinci \x08satir\n", [(2, 8, 8)]),
+            ("﻿çğıöşü İĞÖŞÜ", []),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(check_text.find_control_chars(text), expected)
 
 
 class SecretTest(unittest.TestCase):
@@ -55,12 +51,16 @@ class SecretTest(unittest.TestCase):
         return [kind for _, _, kind, _ in check_text.find_secrets(text)]
 
     def test_each_pattern_is_detected(self):
-        self.assertEqual(self.kinds(f"key = '{REAL_KEY}'"), ["evren_llm anahtarı"])
-        self.assertEqual(self.kinds(f"Authorization: {REAL_BEARER}"), ["Bearer belirteci"])
-        self.assertEqual(self.kinds(f"jwt={REAL_JWT}"), ["JWT"])
-        self.assertEqual(self.kinds(REAL_PEM), ["özel anahtar başlığı"])
-        self.assertEqual(self.kinds(f"token: {REAL_GHP}"), ["GitHub belirteci"])
-
+        cases = [
+            (f"key = '{REAL_KEY}'", ["evren_llm anahtarı"]),
+            (f"Authorization: {REAL_BEARER}", ["Bearer belirteci"]),
+            (f"jwt={REAL_JWT}", ["JWT"]),
+            (REAL_PEM, ["özel anahtar başlığı"]),
+            (f"token: {REAL_GHP}", ["GitHub belirteci"]),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(self.kinds(text), expected)
 
     def test_obvious_fakes_are_allowed(self):
         fakes = [
@@ -76,15 +76,10 @@ class SecretTest(unittest.TestCase):
             with self.subTest(fake=fake):
                 self.assertEqual(check_text.find_secrets(fake), [])
 
-
     def test_ignore_marker_skips_only_that_line(self):
         text = f"a = '{REAL_KEY}'  # check_text: ignore\nb = '{REAL_KEY}'\n"
         hits = check_text.find_secrets(text)
         self.assertEqual([line for line, _, _, _ in hits], [2])
-
-
-
-
 
 
 class ScanFileTest(unittest.TestCase):
@@ -100,10 +95,6 @@ class ScanFileTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual((findings[0].line, findings[0].col), (2, 7))
         self.assertEqual(findings[0].kind, "geçersiz UTF-8")
-
-
-
-
 
 
 @unittest.skipUnless(shutil.which("git"), "git gerekli")
@@ -128,8 +119,6 @@ class TrackedFilesTest(unittest.TestCase):
         )
 
 
-
-
 class MainTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -141,7 +130,6 @@ class MainTest(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = check_text.main([str(f) for f in files])
         return code, out.getvalue()
-
 
     def test_findings_exit_one_and_report_location(self):
         path = self.root / "kotu.py"
