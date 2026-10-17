@@ -7,6 +7,21 @@ sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kura
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-17
+
+Kararlılık ve hız planı (Faz 0-9) tamamlandı.
+
+### Eklendi
+- **Başsız (headless) kip:** `evren -p "İSTEK"` tek görevi REPL'siz çalıştırıp çıkar (`--max-steps` destekli).
+- **Görev izi:** her görev `.evren/logs/trace.jsonl`'e adım adım yazılır; `evren debug last [N]` ve REPL'de `/debug last` adım tablosunu gösterir.
+- **Yeni REPL komutları:** `/commit`, `/review`, `/init`, `/context`, `/compact`, `/rewind`, `/doctor`, `/rol` (kalıcı rol, ayarlarda saklanır), `/debug`; `.evren/commands/*.md` özel komutları otomatik kaydedilir.
+- **`@dosya` anması:** görev metnindeki `@yol` ifadeleri dosya içeriğiyle değiştirilir.
+- **Akıllı yapıştırma:** `/` ile başlayan ama kayıtlı komut olmayan metinler görev sayılır; uzun yapıştırmalar `.evren/tmp/paste-N.txt`'ye kaydedilip kısaltılır; yanlış yazılan komut için "bunu mu demek istediniz" önerisi.
+- **Canlı benchmark:** `bench/tasks.json` + `scripts/bench.py` ve GitHub Actions CI (metin/sır taraması dahil).
+
+### Değişti
+- Mutlak bağlam bütçesi ve akıllı sıkıştırma: büyük araç çıktıları çıktı türüne göre özetlenir, yeni görevde önceki görevlerin çıktıları baş/son kısmına kırpılır; sabit önek küçültüldü.
+
 ## [2.1.2] - 2026-10-17
 
 ### Düzeltildi
