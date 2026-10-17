@@ -279,6 +279,8 @@ from src.tool_registry import REPEAT_EXEMPT as _REG_REPEAT
 _REPEAT_EXEMPT_TOOLS = frozenset(_REG_REPEAT | {"stop_background"})
 # Blocked/flagged repeats after which the next turn must answer without tools.
 _LOOP_BLOCK_LIMIT = 3
+# Same command family (pytest, dotnet test...) runs allowed between writes.
+_FAMILY_RUN_LIMIT = 4
 
 
 _CODE_EXTS = frozenset({".py", ".cs", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt"})
@@ -1360,6 +1362,7 @@ class AgentSession:
         # still has open items (a planned change task that only explores).
         self._idle_steps = 0
         self._idle_epoch = 0
+        self._family_runs: dict[str, tuple[int, int]] = {}
 
     @staticmethod
     def _call_signature(fn_name: str, args: dict) -> str:
@@ -1386,6 +1389,40 @@ class AgentSession:
                 "bilgiyle sıradaki adıma geç (edit_file ile düzenle, testi çalıştır) ya da sonucu bildir."
             )
         self._call_epochs[signature] = self._write_epoch
+        family = self._command_family(fn_name, args)
+        if family:
+            runs = self._family_runs.get(family)
+            count = runs[1] + 1 if runs and runs[0] == self._write_epoch else 1
+            self._family_runs[family] = (self._write_epoch, count)
+            if count > _FAMILY_RUN_LIMIT:
+                self._loop_blocks += 1
+                return (
+                    f"TEKRAR ENGELLENDİ: '{family}' bu görevde dosya değişmeden {count - 1} kez çalıştı "
+                    "(farklı bayraklarla). Yeni ölçüm yapma: elindeki sonuçlarla bir düzenleme yap ya da "
+                    "bulguyu ve önerini bildir."
+                )
+        return ""
+
+    @staticmethod
+    def _command_family(fn_name: str, args: dict) -> str:
+        """'python -m pytest', 'dotnet test', 'npm run build'...: the tool, not its flags.
+
+        A vague "make the tests faster" run executed pytest ~20 times with
+        different flags; exact-match blocking never fired.
+        """
+        if fn_name not in ("run_command", "ssh_run"):
+            return ""
+        words = [w for w in str(args.get("command") or "").split() if not w.startswith("-")]
+        if not words:
+            return ""
+        head = words[0].lower()
+        if head in ("python", "python3", "py") and len(str(args.get("command")).split()) > 2:
+            parts = str(args.get("command")).split()
+            if parts[1] == "-m" and len(parts) > 2:
+                return f"python -m {parts[2]}"
+            return ""  # python script.py / python -c: too varied to group
+        if head in ("dotnet", "npm", "pnpm", "yarn", "go", "cargo", "pytest"):
+            return " ".join(words[:2]).lower()
         return ""
 
     def _after_tool(self, fn_name: str, args: dict, result: str) -> str:
@@ -1653,7 +1690,15 @@ class AgentSession:
             open_items = [t for t in get_store().snapshot() if t["status"] != "completed"]
         except Exception:
             open_items = []
-        if not open_items or self._idle_steps not in (4, 7, 10):
+        if not open_items:
+            # No plan: a vague request that only measures. Nudge to conclude.
+            if self._idle_steps in (8, 14):
+                return (
+                    f"[EVREN] İLERLEME YOK: {self._idle_steps} adımdır hiçbir dosya değişmedi. Analiz yeterli: "
+                    "bulgunu ve somut önerini şimdi bildir ya da tek bir düzenlemeyi yap; yeni ölçüm başlatma."
+                )
+            return ""
+        if self._idle_steps not in (4, 7, 10):
             return ""
         nxt = next((t["content"] for t in open_items if t["status"] == "in_progress"), open_items[0]["content"])
         return (
