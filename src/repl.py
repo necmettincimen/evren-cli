@@ -824,10 +824,11 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             print_info(f"Kota: {qs}")
         except Exception as e:
             print_warning(f"Kota okunamadı: {type(e).__name__}: {e}")
-        try:
-            ensure_terms_accepted(interactive=False, api_key=client.api_key, silent_ok=True)
-        except Exception as e:
-            print_warning(f"Kullanım şartları uyarısı ({type(e).__name__}): {e}")
+
+    try:
+        ensure_terms_accepted(interactive=True, api_key=client.api_key, silent_ok=True)
+    except Exception as e:
+        print_warning(f"Kullanım şartları uyarısı ({type(e).__name__}): {e}")
 
     import threading
 
@@ -1270,6 +1271,11 @@ def _cmd_playbook(ctx, arg):
 
 
 def _cmd_resume(ctx, arg):
+    if (arg or "").strip().lower() != "playbook":
+        from src.sessions import handle_resume
+
+        handle_resume(ctx.session)
+        return
     from src.playbooks import load_checkpoint, get_playbook, save_checkpoint
     workspace_root = ctx.workspace_root
     cp = load_checkpoint(workspace_root)
@@ -1484,8 +1490,7 @@ def _cmd_clear(ctx, arg):
 
 # Command name -> handler. Names stay string literals (aliases listed
 # explicitly) so tools can compare this table with src/commands.py.
-# Note: "/resume" is the playbook resume (the old chain's second "/resume"
-# branch was unreachable).
+# Note: "/resume" lists saved sessions; "/resume playbook" resumes a playbook.
 _COMMAND_TABLE = {
     "/exit": _cmd_exit, "/quit": _cmd_exit, "/q": _cmd_exit,
     "/help": _cmd_help, "/h": _cmd_help, "/?": _cmd_help,

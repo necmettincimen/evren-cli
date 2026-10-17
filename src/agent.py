@@ -466,6 +466,15 @@ class AgentSession:
             pass
         return base.rstrip() + "\n\n" + "\n\n".join(blocks)
 
+    def _active_agent_def(self):
+        """The main agent chosen with `/agent`, or None."""
+        try:
+            from src.agent_library import active_agent
+
+            return active_agent(self.workspace_root)
+        except Exception:
+            return None
+
     def _agent_tools(self, tools: list[dict]) -> list[dict]:
         """Restricts advertised tools to the main agent's list (if set)."""
         try:
@@ -988,6 +997,9 @@ class AgentSession:
         template prompt): above the paste limits it is saved to
         `.evren/tmp/paste-N.txt` and only a compact form joins the history.
         """
+        agent_def = self._active_agent_def()
+        if max_steps is None and self.max_steps is None and agent_def and agent_def.max_steps:
+            max_steps = agent_def.max_steps
         explicit_steps = max_steps is not None or self.max_steps is not None
         if max_steps is None:
             max_steps = self.max_steps or default_max_steps()
@@ -1053,6 +1065,10 @@ class AgentSession:
         text_continuations = 0
 
         session_model = self.model
+        if agent_def and agent_def.model:
+            # Restored in `finally` like routing's borrowed models.
+            self.model = agent_def.model
+            self._sync_window()
         self._trace_task_begin(cleaned_input, effective_mode)
         from src.file_ops import reset_task_changes
         reset_task_changes()
