@@ -969,7 +969,7 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print(f"  • Çıktı bütçesi        : {rep['output_budget']:,}")
                     print(f"  • Bağlam penceresi     : {rep['context_window']:,}")
                     print(f"  • Sıkıştırma eşiği     : {rep.get('compaction_limit', 0):,} "
-                          f"(pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
+                          f"(bütçe {rep.get('context_budget', 0):,}, pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
                     print(f"  • Kalan bağlam         : {rep['remaining_context']:,}")
                     print(f"  • Kalibrasyon oranı    : {rep['calibration']}")
                     if rep["last_usage"]:
