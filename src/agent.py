@@ -1102,6 +1102,8 @@ class AgentSession:
             )
             if not explicit_steps:
                 max_steps = self._planned_step_budget(max_steps)
+                if effective_mode == AgentMode.PLAN:
+                    max_steps = min(max_steps, 8)  # planning, not implementing
             outcome = self._finish_task(
                 self._run_steps(
                     max_steps, effective_mode, step_count, stalled_steps, text_continuations,
@@ -1816,6 +1818,16 @@ class AgentSession:
                 # stay byte-identical between steps so the server's prompt cache
                 # keeps hitting. Nothing is sent on an ordinary step.
                 step_notes = self._turn_notes(step_count, max_steps, stalled_steps)
+                if (
+                    effective_mode == AgentMode.PLAN and step_count >= 4
+                    and not any(k.startswith("create_plan:") for k in self._call_epochs)
+                ):
+                    # The planner kept saying "let me make the edits" and ran
+                    # probe commands for 12 steps; plan mode can only plan.
+                    step_notes = (step_notes + "\n" if step_notes else "") + (
+                        "[EVREN] Plan kipindesin: dosya düzenleyemezsin. Keşif yeter; şimdi create_plan ile "
+                        "planı yaz (hedef dosyalar, değişiklik, doğrulama)."
+                    )
                 outgoing = list(self.messages)
                 if step_notes:
                     outgoing.append({"role": "user", "content": step_notes})

@@ -357,7 +357,12 @@ def handle_context(session) -> None:
     tool_total = sum(tm.estimate_message(m) for m in tool_msgs)
     other = sum(tm.estimate_message(m) for m in messages if m.get("role") not in ("system", "tool"))
     total = system + tools + tool_total + other
-    window = tm.context_window or 1
+    # The compaction limit (budget), not the model window: "5,277 / 1,000,000
+    # (%1)" hid that compaction starts at 64K.
+    try:
+        window = int(session.compaction_limit()) or 1
+    except Exception:
+        window = tm.context_window or 1
     print_info("Bağlam kırılımı (tahmini token):")
     print(f"  • Sistem istemi        : {system:,}")
     print(f"  • Araç şemaları        : {tools:,}")
@@ -534,7 +539,7 @@ def make_status_line(session) -> Callable[[], str]:
     def render() -> str:
         try:
             rep = session.token_report()
-            window = rep["context_window"] or 1
+            window = rep.get("compaction_limit") or rep["context_window"] or 1
             pct = round(100 * rep["estimated_prompt_tokens"] / window)
             return (
                 f" {session.model} | kip: {session.mode.value} | bağlam %{pct} "
