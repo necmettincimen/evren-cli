@@ -33,6 +33,16 @@ from src.token_manager import floor_output_tokens
 # reasoning models can pause between tokens.
 REQUEST_TIMEOUT = httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)
 STREAM_TIMEOUT = httpx.Timeout(connect=20.0, read=300.0, write=30.0, pool=20.0)
+# Without hidden reasoning a token gap this long means a stalled stream; 300 s
+# kept a stuck request open for five minutes before the retry could start.
+STREAM_TIMEOUT_NO_THINKING = httpx.Timeout(connect=20.0, read=90.0, write=30.0, pool=20.0)
+
+def _stream_timeout(kwargs: dict) -> httpx.Timeout:
+    """Shorter read timeout when the request turned thinking off."""
+    if (kwargs.get("extra_body") or {}).get("thinking") is False:
+        return STREAM_TIMEOUT_NO_THINKING
+    return STREAM_TIMEOUT
+
 
 # Extra attempts after the first failure, only before any token is shown.
 _TRANSIENT_RETRIES = 2
@@ -604,7 +614,7 @@ class EvrenClient:
 
             try:
                 # Streaming uses a longer read timeout (reasoning models pause between tokens).
-                stream = client.chat.completions.create(timeout=STREAM_TIMEOUT, **kwargs)
+                stream = client.chat.completions.create(timeout=_stream_timeout(kwargs), **kwargs)
                 break
             except Exception as e:
                 if self._drop_rejected_param(kwargs, e):
@@ -738,7 +748,7 @@ class EvrenClient:
             streamed_any = False
 
             try:
-                stream = client.chat.completions.create(timeout=STREAM_TIMEOUT, **kwargs)
+                stream = client.chat.completions.create(timeout=_stream_timeout(kwargs), **kwargs)
                 for chunk in stream:
                     # Usage may arrive on a final chunk with empty choices.
                     chunk_usage = getattr(chunk, "usage", None)
