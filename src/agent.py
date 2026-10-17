@@ -26,6 +26,7 @@ from src.config import (
     planner_max_steps,
     executor_thinking,
 )
+from src.models import context_window_for
 from src.token_manager import TokenManager
 from src.history_compactor import HistoryCompactor
 from src.modes import AgentMode, parse_mode_prefix
@@ -346,8 +347,19 @@ class AgentSession:
         self.active_context_files: set[str] = set()
 
         # Token management: estimate + calibrate, and compact history when needed.
-        self.token_manager = TokenManager()
-        self.compactor = HistoryCompactor(self.token_manager)
+        from src.config import compact_target_ratio, smart_compact_enabled
+
+        self.token_manager = TokenManager(context_window=context_window_for(self.model))
+        self._window_model = self.model
+        self.compactor = HistoryCompactor(
+            self.token_manager,
+            smart=smart_compact_enabled(),
+            summarizer=self._summarize_for_compaction,
+            target_ratio=compact_target_ratio(),
+        )
+        # Read-repeat memory (see _read_repeat): (path, start, end) -> record.
+        self._reads: dict[tuple, dict[str, Any]] = {}
+        self._step_no = 0
         self.last_usage: dict[str, Any] | None = None
         # Session-wide server-reported totals (feeds /tokens and usage.jsonl).
         self.usage_totals: dict[str, int] = {
@@ -445,6 +457,13 @@ class AgentSession:
 
     def set_model(self, new_model: str):
         self.model = new_model
+        self._sync_window()
+
+    def _sync_window(self) -> None:
+        """Keeps the token manager's context window in step with the model."""
+        if getattr(self, "_window_model", None) != self.model:
+            self._window_model = self.model
+            self.token_manager.context_window = context_window_for(self.model)
 
     def set_mode(self, mode: AgentMode):
         self.mode = mode
@@ -657,7 +676,21 @@ class AgentSession:
             raise ValueError(f"Şablon bulunamadı: {name}")
         return tmpl.prompt_block(context)
 
-    def _record_usage(self, response: Any, *, step: int | None = None) -> None:
+    def _summarize_for_compaction(self, messages: list[dict[str, Any]]) -> str | None:
+        """Cheap summarizer call for the compactor; None on any failure."""
+        from src.config import summary_model
+        from src.summarizer import summarize_messages
+
+        model = summary_model()
+        saved = self.last_usage
+
+        def _record(response: Any) -> None:
+            self._record_usage(response, model=model)
+            self.last_usage = saved
+
+        return summarize_messages(self.client, messages, model, on_response=_record)
+
+    def _record_usage(self, response: Any, *, step: int | None = None, model: str | None = None) -> None:
         """Stores the last server-reported usage and appends it to the usage log.
 
         Only token counters reach `.evren/logs/usage.jsonl`; message content and
@@ -681,7 +714,7 @@ class AgentSession:
 
             log_usage(
                 usage,
-                model=self.model,
+                model=model or self.model,
                 step=step,
                 mode=getattr(self.mode, "value", str(self.mode)),
                 workspace_root=self.workspace_root,
@@ -698,7 +731,16 @@ class AgentSession:
 
     def compaction_limit(self) -> int:
         """Token ceiling that triggers compaction for this session's model."""
-        return max(1024, int(self.token_manager.context_window * self.compaction_ratio()))
+        from src.config import context_budget
+
+        window_limit = int(self.token_manager.context_window * self.compaction_ratio())
+        return max(1024, min(context_budget(), window_limit))
+
+    @staticmethod
+    def _context_budget() -> int:
+        from src.config import context_budget
+
+        return context_budget()
 
     def token_report(self) -> dict[str, Any]:
         """Builds a token/context report for the /tokens command."""
@@ -713,6 +755,7 @@ class AgentSession:
             "context_window": self.token_manager.context_window,
             "compaction_limit": self.compaction_limit(),
             "compaction_ratio": self.compaction_ratio(),
+            "context_budget": self._context_budget(),
             "remaining_context": self.token_manager.remaining_context(self.messages, output_budget),
             "calibration": round(self.token_manager.calibration, 3),
             "last_usage": self.last_usage,
@@ -936,6 +979,8 @@ class AgentSession:
         # the new one; keep only their head and tail (a REPL session reached 270
         # messages of old grep output and ~70k prompt tokens per step).
         self._trim_previous_tool_outputs()
+        self._collapse_previous_task()
+        self._reads = {}
         for notes in (
             domain_hints(cleaned_input),
             ssh_target_note(cleaned_input, self.workspace_root),
@@ -1184,6 +1229,95 @@ class AgentSession:
             )
         return result
 
+    _TASK_NOISE_PREFIXES = ("[EVREN]", "Önceki yanıt token", "[Önceki")
+
+    def _collapse_previous_task(self) -> None:
+        """At a task boundary, folds the previous task into one deterministic summary.
+
+        Only when the history is past half of the limit; no API call. Runs once
+        per task (an early, deep change) so it does not disturb the cached prefix
+        between steps.
+        """
+        try:
+            if not self.compactor.smart:
+                return
+            used = self.token_manager.estimate_messages(self.messages)
+            if used <= self.compaction_limit() // 2:
+                return
+            start = None
+            for i in range(len(self.messages) - 1, 0, -1):
+                m = self.messages[i]
+                content = m.get("content")
+                if (
+                    m.get("role") == "user"
+                    and isinstance(content, str)
+                    and not content.startswith(self._TASK_NOISE_PREFIXES)
+                ):
+                    start = i
+                    break
+            if start is None or start <= 1:
+                return
+            from src.history_compactor import collapse_task
+
+            summary = collapse_task(self.messages[start:])
+            self.messages = self.messages[:start] + [{"role": "user", "content": summary}]
+        except Exception:
+            pass
+
+    def _read_repeat(self, fn_name: str, args: dict) -> str:
+        """Answers an unchanged re-read of the same file range without resending it."""
+        if fn_name != "view_file":
+            return ""
+        key = self._read_key(args)
+        record = self._reads.get(key) if key else None
+        if not record:
+            return ""
+        digest = self._file_digest(str(args.get("path", "")))
+        if digest is None or digest != record["digest"]:
+            return ""
+        for m in self.messages:
+            if m.get("role") == "tool" and m.get("tool_call_id") == record["call_id"]:
+                content = m.get("content")
+                if isinstance(content, str) and not content.startswith(("[özet]", "BİLGİ:")) \
+                        and "[araç çıktısı bağlam için kırpıldı]" not in content:
+                    rng = self._range_text(args)
+                    return (
+                        f"BİLGİ: {args.get('path')} {rng} adım {record['step']}'te okundu ve o zamandan beri "
+                        "değişmedi; yukarıdaki çıktıyı kullan."
+                    )
+        return ""
+
+    @staticmethod
+    def _read_key(args: dict) -> tuple | None:
+        path = args.get("path")
+        if not isinstance(path, str) or not path:
+            return None
+        return (path, args.get("start_line"), args.get("end_line"))
+
+    @staticmethod
+    def _range_text(args: dict) -> str:
+        start, end = args.get("start_line"), args.get("end_line")
+        if start is None and end is None:
+            return "(ilk 250 satır)"
+        return f"{start or 1}-{end or 'son'}"
+
+    def _file_digest(self, path: str) -> str | None:
+        import hashlib
+
+        try:
+            target = (Path(self.workspace_root) / path).resolve()
+            return hashlib.sha1(target.read_bytes()).hexdigest()
+        except Exception:
+            return None
+
+    def _note_read(self, fn_name: str, args: dict, result: str, call_id: str) -> None:
+        if fn_name != "view_file" or result.startswith(("HATA", "BİLGİ:", "TEKRAR")):
+            return
+        key = self._read_key(args)
+        digest = self._file_digest(str(args.get("path", ""))) if key else None
+        if key and digest:
+            self._reads[key] = {"digest": digest, "step": self._step_no, "call_id": call_id}
+
     def _trim_previous_tool_outputs(self) -> None:
         from src.history_compactor import _truncate_tool_content
 
@@ -1241,6 +1375,8 @@ class AgentSession:
     ) -> str:
         while step_count < max_steps:
             step_count += 1
+            self._step_no = step_count
+            self._sync_window()
 
             # Compact history before each request so the context budget is
             # never exceeded (truncate tools -> drop middle -> system+last).
@@ -1266,9 +1402,9 @@ class AgentSession:
             if len(self.messages) < before and not self._compaction_notified:
                 self._compaction_notified = True
                 print_info(
-                    f"Bağlam {int(self.compaction_ratio() * 100)}% eşiğinde sıkıştırıldı "
+                    f"Bağlam {compact_limit:,} token bütçesini aştı, sıkıştırıldı "
                     f"({before} mesaj -> {len(self.messages)}). "
-                    "Ayar: set EVREN_COMPACT_RATIO=1.0 (eski davranış)."
+                    "Ayar: EVREN_CONTEXT_BUDGET, EVREN_SMART_COMPACT=false (eski davranış)."
                 )
 
             status_msg = (
@@ -1542,6 +1678,19 @@ class AgentSession:
                         })
                         continue
 
+                    repeated = self._read_repeat(fn_name, args)
+                    if repeated:
+                        print_tool_result(fn_name, "değişmemiş dosya yeniden okunmadı")
+                        self._note_tool_call(fn_name, args, repeated)
+                        self._trace_tool(fn_name, args, t_tool, repeated)
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": fn_name,
+                            "content": repeated,
+                        })
+                        continue
+
                     # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
                     result = execute_tool_call(
                         name=fn_name,
@@ -1560,6 +1709,7 @@ class AgentSession:
                     # A file or command output may still echo a known secret.
                     result = self.vault.mask(result)
                     result = self._after_tool(fn_name, args, result)
+                    self._note_read(fn_name, args, result, tc.id)
                     if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
                         self._listing_done = True
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")

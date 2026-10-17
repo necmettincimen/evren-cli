@@ -29,8 +29,8 @@ REASONING_MIN_OUTPUT_TOKENS = 4096
 # and a stalled turn is retried with `thinking: false`, which needs far less.
 QWEN_FLASH_MIN_OUTPUT_TOKENS = 8192
 
-# Default context window assumption when the model is unknown.
-DEFAULT_CONTEXT_WINDOW = 128_000
+# Default context window assumption when the model is unknown (see src/models.py).
+from src.models import DEFAULT_CONTEXT_WINDOW  # noqa: E402
 
 
 def floor_output_tokens(model: str, requested: int) -> int:
