@@ -286,7 +286,7 @@ _ASKS_APPROVAL_RE = re.compile(
     r"|onay\s+bekliyorum|onayl[ıi]yor\s+musun)"
 )
 _IMPERATIVE_RE = re.compile(
-    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz)(?!me\b|ma\b|meyin|mayın)\w*"
+    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz)(?!me\b|ma\b|meyin|mayın|madan|meden)\w*"
 )
 # Same command family (pytest, dotnet test...) runs allowed between writes.
 _FAMILY_RUN_LIMIT = 4
