@@ -122,12 +122,12 @@ def suggest_aliases(alias: str, hosts: dict[str, SshHost], limit: int = 3) -> li
 
     wanted = alias.casefold()
     names = list(hosts)
+    # Stem matches first ("koyu3-k8s" -> "koyu3"): appended after the fuzzy
+    # matches they were cut by the limit, so koyu1-k8s/koyu2-k8s were offered
+    # for koyu3-k8s and the real host never was.
+    picked = [n for n in names if n.casefold() in wanted or wanted in n.casefold()]
     close = difflib.get_close_matches(wanted, [n.casefold() for n in names], n=limit, cutoff=0.6)
-    picked = [n for n in names if n.casefold() in close]
-    for name in names:
-        low = name.casefold()
-        if name not in picked and (low in wanted or wanted in low):
-            picked.append(name)
+    picked += [n for n in names if n.casefold() in close and n not in picked]
     return picked[:limit]
 
 
