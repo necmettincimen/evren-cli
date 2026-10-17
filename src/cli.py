@@ -3,6 +3,7 @@ Main CLI entry point for EVREN CLI.
 Provides both the interactive EVREN TUI mode and scriptable subcommands.
 """
 
+import re
 import sys
 import os
 import argparse
@@ -56,6 +57,18 @@ def _pin_best_key(client) -> None:
         shown = f"{remaining:,}" if isinstance(remaining, int) else remaining
         print_info(f"Aktif API anahtarı: {mask_key(row['key'])} (kalan günlük kota: {shown})")
 
+_MSYS_SLASH_RE = re.compile(r"^[A-Za-z]:/(?:Program Files/)?Git/(?=[A-Za-z?-]+(\s|$))")
+
+
+def _undo_msys_path(text: str) -> str:
+    """Git Bash turns an argument like "/ask ..." into "C:/Program Files/Git/ask ...".
+
+    The /ask and /plan prefixes then never reached the agent and an ask-mode
+    task edited files. Only the Git install prefix before a bare word is undone.
+    """
+    return _MSYS_SLASH_RE.sub("/", text or "", count=1)
+
+
 def load_frame(args):
     """Resolves a five-line frame plus an optional free-text prompt.
 
@@ -66,7 +79,7 @@ def load_frame(args):
     from src.prompt_frame import FORM_INTRO, PromptFrame, collect_prompt_frame
 
     frame = PromptFrame.from_namespace(args)
-    prompt = (getattr(args, "prompt", None) or "").strip()
+    prompt = _undo_msys_path(getattr(args, "prompt", None) or "").strip()
     if frame.is_empty() and not prompt and sys.stdin.isatty():
         print_info(FORM_INTRO)
         collected = collect_prompt_frame(lambda label: input(label))
