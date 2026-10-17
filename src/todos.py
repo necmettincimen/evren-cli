@@ -84,10 +84,8 @@ class TodoStore:
         self._items = []
 
 
-# Process-wide singleton shared by the tool executor and the REPL.
-_store = TodoStore()
-
-
 def get_store() -> TodoStore:
-    """Returns the session-wide TodoStore singleton."""
-    return _store
+    """Returns the TodoStore of the current session context."""
+    from src.session_context import current
+
+    return current().todos

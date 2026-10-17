@@ -900,6 +900,644 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             pass
 
 
+class _ReplCtx:
+    """Shared state passed to slash-command handlers."""
+
+    def __init__(self, session, client, workspace_root, pt_session):
+        self.session = session
+        self.client = client
+        self.workspace_root = workspace_root
+        self.pt_session = pt_session
+
+
+# Handlers return True to leave the REPL loop; None/False keeps looping.
+
+def _cmd_exit(ctx, arg):
+    print_info("EVREN CLI sonlandırılıyor. İyi çalışmalar!")
+    return True
+
+
+def _cmd_help(ctx, arg):
+    show_help(arg)
+
+
+def _cmd_version(ctx, arg):
+    from src.version import get_version, get_changelog_notes
+    ver = get_version()
+    print_info(f"EVREN CLI Sürümü: v{ver}")
+    notes = get_changelog_notes(ver, max_items=20)
+    if notes:
+        print(f"\nv{ver} Sürüm Notları:")
+        for note in notes:
+            print(f"  • {note}")
+        print()
+
+
+def _cmd_model(ctx, arg):
+    session = ctx.session
+    if not arg:
+        print_info(f"Aktif Model: {session.model}")
+        print("\nÖnerilen Modeller:")
+        for m_id, desc in RECOMMENDED_MODELS.items():
+            marker = " ✔" if m_id == session.model else ""
+            print(f"  • {m_id:<22} : {desc}{marker}")
+        print("\nModel değiştirmek için: /model <model_adı>")
+    else:
+        session.set_model(arg)
+        print_success(f"Model değiştirildi: {arg}")
+
+
+def _cmd_mode(ctx, arg):
+    from src.modes import AgentMode, mode_label
+    session = ctx.session
+    if not arg:
+        print_info(f"Aktif Kip: {mode_label(session.mode)}")
+        print("  • normal : Tüm araçlar açık")
+        print("  • ask    : Salt-okuma (yazma kapalı)")
+        print("  • plan   : Yalnızca plan yazımı")
+        print("\nDeğiştirmek için: /mode <normal|ask|plan>")
+    elif arg.lower() in ("normal", "ask", "plan"):
+        session.set_mode(AgentMode(arg.lower()))
+        print_success(f"Çalışma kipi değiştirildi: {mode_label(session.mode)}")
+    else:
+        print_warning("Geçersiz kip. Kullanım: /mode <normal|ask|plan>")
+
+
+def _cmd_effort(ctx, arg):
+    client = ctx.client
+    valid = ("low", "medium", "high", "none")
+    if not arg:
+        current = client.reasoning_effort or "none (sunucu varsayılanı)"
+        print_info(f"Aktif Düşünme Yoğunluğu: {current}")
+        print("  • low    : En hızlı, koda en çok token (önerilen)")
+        print("  • medium : Dengeli")
+        print("  • high   : Derin analiz (yavaş)")
+        print("  • none   : Sunucu varsayılanı")
+        print("\nDeğiştirmek için: /effort <low|medium|high|none>")
+    elif arg.lower() in valid:
+        client.reasoning_effort = None if arg.lower() == "none" else arg.lower()
+        shown = client.reasoning_effort or "none (sunucu varsayılanı)"
+        print_success(f"Düşünme yoğunluğu ayarlandı: {shown}")
+    else:
+        print_warning("Geçersiz değer. Kullanım: /effort <low|medium|high|none>")
+
+
+def _cmd_models(ctx, arg):
+    with status_spinner("EVREN API modelleri çekiliyor..."):
+        models = ctx.client.list_models()
+    print("\nKullanılabilir Modeller:")
+    for m in models:
+        desc = RECOMMENDED_MODELS.get(m, "")
+        extra = f" ({desc})" if desc else ""
+        print(f"  • {m}{extra}")
+    print()
+
+
+def _cmd_quota(ctx, arg):
+    with status_spinner("Kota ve şartlar sorgulanıyor..."):
+        rows = ctx.client.get_all_quotas()
+        t_status = get_terms_status()
+    print_key_quotas(rows)
+    print_info(
+        f"Şartlar Durumu: v{t_status.get('current_version')} "
+        f"(Kabul: {t_status.get('accepted')})"
+    )
+
+
+def _cmd_terms(ctx, arg):
+    # Do NOT wrap the interactive accept flow in a spinner —
+    # Rich Live would hide prints and break the confirm prompt.
+    force = arg.strip().lower() in ("force", "--force", "-f")
+    keys = ctx.client.key_pool.key_values()
+    if not keys:
+        print_warning("Havuzda API anahtarı yok.")
+    else:
+        ensure_terms_for_keys(keys, interactive=True, force=force)
+
+
+def _cmd_keys(ctx, arg):
+    _handle_keys_command(arg, ctx.client)
+
+
+def _cmd_tokens(ctx, arg):
+    rep = ctx.session.token_report()
+    print_info("Bağlam / Token Bütçesi:")
+    print(f"  • Mesaj sayısı         : {rep['messages']}")
+    print(f"  • Tahmini prompt token : {rep['estimated_prompt_tokens']:,}")
+    print(f"  • Çıktı bütçesi        : {rep['output_budget']:,}")
+    print(f"  • Bağlam penceresi     : {rep['context_window']:,}")
+    print(f"  • Sıkıştırma eşiği     : {rep.get('compaction_limit', 0):,} "
+          f"(bütçe {rep.get('context_budget', 0):,}, pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
+    print(f"  • Kalan bağlam         : {rep['remaining_context']:,}")
+    print(f"  • Kalibrasyon oranı    : {rep['calibration']}")
+    if rep["last_usage"]:
+        u = rep["last_usage"]
+        print(f"  • Son sunucu kullanımı : prompt={u['prompt_tokens']}, "
+              f"completion={u['completion_tokens']}, total={u['total_tokens']}")
+    totals = rep.get("session_usage") or {}
+    if rep.get("session_requests"):
+        print(f"  • Oturum isteği       : {rep['session_requests']}")
+        print(f"  • Oturum toplamı      : prompt={totals.get('prompt_tokens', 0):,}, "
+              f"completion={totals.get('completion_tokens', 0):,}, "
+              f"total={totals.get('total_tokens', 0):,}")
+    try:
+        from src.usage_log import read_usage, usage_summary
+
+        summary = usage_summary(read_usage(ctx.workspace_root))
+        if summary["requests"]:
+            print(f"  • Kalıcı log (usage)  : {summary['requests']} istek, "
+                  f"toplam {summary['total_tokens']:,} token, "
+                  f"son {summary['recent_window']} istekte ort. prompt "
+                  f"{summary['avg_prompt_tokens_recent']:,}, "
+                  f"önbellek isabeti %{round(summary.get('cache_ratio', 0) * 100)}")
+    except Exception:
+        pass
+
+
+def _cmd_debug(ctx, arg):
+    _handle_debug_command(arg, ctx.workspace_root)
+
+
+def _cmd_steps(ctx, arg):
+    from src.config import default_max_steps
+
+    session = ctx.session
+    if not arg.strip():
+        current = session.max_steps or default_max_steps()
+        print_info(
+            f"Adım tavanı: {current} (env varsayılanı: {default_max_steps()}). "
+            "Değiştirmek için: /steps <1-100>"
+        )
+        return
+    try:
+        value = int(arg.strip())
+    except ValueError:
+        print_error("Geçersiz sayı. Örnek: /steps 20")
+        return
+    if not 1 <= value <= 100:
+        print_error("Adım tavanı 1-100 arasında olmalı.")
+        return
+    session.max_steps = value
+    print_info(
+        f"Adım tavanı bu oturum için {value}. "
+        "Kalıcı değişken: set EVREN_MAX_STEPS=<n>"
+    )
+
+
+def _cmd_docs(ctx, arg):
+    _handle_docs_command(arg, ctx.session, ctx.workspace_root)
+
+
+def _cmd_skills(ctx, arg):
+    from src.skills import (
+        list_skills,
+        categories,
+        reload_user_skills,
+        user_skills_dir,
+        USER_SKILL_WARNINGS,
+    )
+
+    if (arg or "").strip().lower() == "reload":
+        loaded = reload_user_skills()
+        print_info(
+            f"Kullanıcı becerileri yeniden yüklendi: {len(loaded)} adet "
+            f"({user_skills_dir()})"
+        )
+        for w in USER_SKILL_WARNINGS:
+            print_warning(f"Atlanan dosya: {w}")
+        return
+    items = list_skills(arg or None)
+    if not items:
+        print_warning(f"'{arg}' kategorisinde beceri yok. Kategoriler: {', '.join(categories())}")
+    else:
+        print_info(f"Beceriler ({len(items)}):")
+        for s in items:
+            tag = "[user] " if s.source == "user" else ""
+            print(f"  • {s.name:<22} [{s.category}] {tag}{s.title}")
+        print("\nUygulamak için: /skill <beceri> (veya /apply <beceri>)")
+        print(f"Kullanıcı becerileri dizini: {user_skills_dir()} (yeniden yükleme: /skills reload)")
+
+
+def _cmd_skill(ctx, arg):
+    if not arg:
+        print_warning("Kullanım: /skill <beceri_adı>")
+        return
+    try:
+        content = ctx.session.apply_skill(arg)
+    except ValueError as e:
+        from src.skills import user_skills_dir
+
+        print_error(
+            f"{e}. Kullanıcı becerisi eklemek için: "
+            f"{user_skills_dir()} altına <ad>.md yazın, sonra /skills reload"
+        )
+    else:
+        print_info(f"Beceri uygulanıyor: {arg}")
+        _run_agent(ctx.session, content)
+
+
+def _cmd_diagnose(ctx, arg):
+    from src.diagnostics import list_diagnostics, get_diagnostic, match_by_symptom
+    if not arg:
+        print_info("Arıza Triyajları:")
+        for d in list_diagnostics():
+            print(f"  • {d.name:<22} {d.title}")
+        print("\nÇalıştırmak için: /diagnose <ad>")
+        return
+    diag = get_diagnostic(arg)
+    if diag is None:
+        hits = match_by_symptom(arg)
+        if hits:
+            print_info("Belirtiye uyan triyajlar:")
+            for d in hits:
+                print(f"  • {d.name:<22} {d.title}")
+        else:
+            print_error(f"Triyaj bulunamadı: {arg}")
+    else:
+        print_info(f"Triyaj başlatılıyor: {diag.title}")
+        _run_agent(ctx.session, ctx.session.apply_diagnostic(diag.name))
+
+
+def _cmd_template(ctx, arg):
+    from src.templates import list_templates, get_template, audiences
+    if not arg:
+        print_info("Çıktı Şablonları:")
+        for t in list_templates():
+            print(f"  • {t.name:<22} [{t.audience}] {t.title}")
+        print(f"\nKitleler: {', '.join(audiences())}")
+        print("Doldurmak için: /template <ad>")
+        return
+    tmpl = get_template(arg)
+    if tmpl is None:
+        print_error(f"Şablon bulunamadı: {arg}")
+    else:
+        print_info(f"Şablon dolduruluyor: {tmpl.title}")
+        _run_agent(ctx.session, ctx.session.apply_template(tmpl.name))
+
+
+def _cmd_memory(ctx, arg):
+    from src.memory import load_memory, set_profile, add_note
+    session, workspace_root = ctx.session, ctx.workspace_root
+    parts = arg.split(maxsplit=2)
+    sub = parts[0].lower() if parts else ""
+    if sub == "set":
+        if len(parts) < 3:
+            print_warning("Kullanım: /memory set <anahtar> <değer>")
+        else:
+            set_profile(parts[1], parts[2], workspace_root)
+            print_success(f"Hafıza güncellendi: {parts[1]} = {parts[2]}")
+            session.refresh_context()
+    elif sub == "note":
+        if len(parts) < 2:
+            print_warning("Kullanım: /memory note <metin>")
+        else:
+            add_note(parts[1], workspace_root)
+            print_success("Not hafızaya eklendi.")
+            session.refresh_context()
+    else:
+        state = load_memory(workspace_root)
+        profile = state.get("profile", {})
+        notes = state.get("notes", [])
+        print_info("Proje Hafızası:")
+        if profile:
+            for k, v in profile.items():
+                print(f"  • {k}: {v}")
+        else:
+            print("  (profil boş)")
+        if notes:
+            print("  Notlar:")
+            for n in notes[-10:]:
+                print(f"    - {n.get('text', '')}")
+        print("\nKomutlar: /memory set <k> <v> | /memory note <metin>")
+
+
+def _cmd_track(ctx, arg):
+    from src.tracking import list_tasks, progress_summary
+    items = list_tasks(arg or "all", ctx.workspace_root)
+    summary = progress_summary(ctx.workspace_root)
+    print_info(f"Görevler ({len(items)}) — tamamlanma: %{summary['percent']}")
+    if not items:
+        print("  (görev yok)")
+    for t in items:
+        print(f"  • [{t.get('status')}] {t.get('id')}: {t.get('description')} (%{t.get('progress', 0)})")
+    print("\nKomutlar: /task add <id> <açıklama> | /progress <id> <yüzde>")
+
+
+def _cmd_task(ctx, arg):
+    from src.tracking import add_task
+    parts = arg.split(maxsplit=2)
+    if len(parts) < 3 or parts[0].lower() != "add":
+        print_warning("Kullanım: /task add <id> <açıklama>")
+    else:
+        try:
+            add_task(parts[1], parts[2], workspace_root=ctx.workspace_root)
+        except ValueError as e:
+            print_error(str(e))
+        else:
+            print_success(f"Görev eklendi: {parts[1]}")
+
+
+def _cmd_progress(ctx, arg):
+    from src.tracking import update_task
+    parts = arg.split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        print_warning("Kullanım: /progress <id> <yüzde> [not]")
+    else:
+        note = parts[2] if len(parts) > 2 else ""
+        try:
+            item = update_task(parts[0], progress=int(parts[1]), note=note, workspace_root=ctx.workspace_root)
+        except ValueError as e:
+            print_error(str(e))
+        else:
+            print_success(f"{item['id']} → %{item['progress']} ({item['status']})")
+
+
+def _cmd_playbook(ctx, arg):
+    from src.playbooks import list_playbooks, get_playbook, save_checkpoint
+    if not arg:
+        print_info("Playbook'lar:")
+        for pb in list_playbooks():
+            print(f"  • {pb.name:<12} {pb.title} ({len(pb.steps)} adım)")
+        print("\nBaşlatmak için: /playbook <ad>")
+        return
+    pb = get_playbook(arg)
+    if pb is None:
+        print_error(f"Playbook bulunamadı: {arg}")
+    else:
+        save_checkpoint(pb.name, 0, ctx.workspace_root)
+        print_info(f"Playbook başlatıldı: {pb.title} (adım 1/{len(pb.steps)})")
+        _run_agent(ctx.session, ctx.session.apply_playbook_step(pb.name, 0))
+
+
+def _cmd_resume(ctx, arg):
+    from src.playbooks import load_checkpoint, get_playbook, save_checkpoint
+    workspace_root = ctx.workspace_root
+    cp = load_checkpoint(workspace_root)
+    if not cp:
+        print_warning("Kaydedilmiş playbook adımı yok.")
+        return
+    pb = get_playbook(cp["playbook"])
+    step = cp.get("next_step", 0)
+    if pb is None or step >= len(pb.steps):
+        print_info("Playbook tamamlanmış görünüyor.")
+    else:
+        print_info(f"Devam ediliyor: {pb.title} (adım {step + 1}/{len(pb.steps)})")
+        _run_agent(ctx.session, ctx.session.apply_playbook_step(pb.name, step))
+        save_checkpoint(pb.name, step + 1, workspace_root)
+
+
+def _cmd_language(ctx, arg):
+    from src.language import get_language, set_language
+    if not arg:
+        current = get_language(ctx.workspace_root) or "(ayarlanmamış)"
+        print_info(f"Çıktı dili: {current}")
+        print("Değiştirmek için: /language <tr|en|de|...>")
+        return
+    try:
+        canonical = set_language(arg, ctx.workspace_root)
+    except ValueError as e:
+        print_error(str(e))
+    else:
+        print_success(f"Çıktı dili ayarlandı: {canonical}")
+        ctx.session.refresh_context()
+
+
+def _cmd_scan(ctx, arg):
+    target_dir = arg if arg else str(ctx.workspace_root)
+    with status_spinner(f"'{target_dir}' klasörü taranıyor..."):
+        tree_str = generate_tree(Path(target_dir))
+        stats = scan_workspace(Path(target_dir))
+    print(tree_str)
+    print_info(f"Toplam {stats['total_files']} dosya ({stats['total_size_kb']} KB).")
+
+
+def _cmd_files(ctx, arg):
+    session = ctx.session
+    if not session.active_context_files:
+        print_info("Bağlamda dosya yok. Eklemek için: /add <dosya_yolu>")
+    else:
+        print("\nAktif Bağlam Dosyaları:")
+        for f in sorted(session.active_context_files):
+            print(f"  • {f}")
+        print()
+
+
+def _cmd_add(ctx, arg):
+    if not arg:
+        print_warning("Kullanım: /add <dosya_yolu>")
+    else:
+        ctx.session.add_context_file(arg)
+        print_success(f"'{arg}' bağlama eklendi.")
+
+
+def _cmd_drop(ctx, arg):
+    if not arg:
+        print_warning("Kullanım: /drop <dosya_yolu>")
+    else:
+        ctx.session.remove_context_file(arg)
+        print_info(f"'{arg}' bağlamdan çıkarıldı.")
+
+
+def _cmd_undo(ctx, arg):
+    if not arg:
+        print_warning("Kullanım: /undo <dosya_yolu>")
+    else:
+        target = resolve_workspace_path(arg, ctx.workspace_root)
+        ok, msg = rollback_last_backup(target, ctx.workspace_root)
+        if ok:
+            print_success(msg)
+        else:
+            print_error(msg)
+
+
+def _cmd_auto(ctx, arg):
+    session = ctx.session
+    if not arg:
+        state_str = "AÇIK (Değişiklikler otomatik uygulanır)" if session.auto_approve else "KAPALI (Her değişiklikte [Y/n] onayı istenir)"
+        print_info(f"Otomatik Onay Modu: {state_str}")
+        print("[dim]Değiştirmek için: /auto on veya /auto off[/dim]")
+    elif arg.lower() in ("on", "true", "1", "ac", "aç"):
+        session.set_auto_approve(True)
+        print_success("Otomatik onay modu AÇILDI. Kod değişiklikleri otomatik uygulanacak (yedekleme varsayılan olarak kapalı; --backup ile açılır).")
+    elif arg.lower() in ("off", "false", "0", "kapat"):
+        session.set_auto_approve(False)
+        print_warning("Otomatik onay modu KAPATILDI. Her dosya değişikliğinde kullanıcı onayı istenecek.")
+    else:
+        print_warning("Kullanım: /auto [on|off]")
+
+
+def _cmd_run(ctx, arg):
+    if not arg:
+        print_warning("Kullanım: /run <komut>")
+    else:
+        from src.tools import tool_run_command
+        out = tool_run_command(arg, ctx.workspace_root, auto_approve=ctx.session.auto_approve)
+        print(out)
+
+
+def _cmd_bg(ctx, arg):
+    from src.background import get_manager
+
+    records = get_manager().list()
+    if not records:
+        print_info("Arka planda çalıştırılmış komut yok. Ajan run_command(run_in_background=true) ile başlatabilir.")
+    else:
+        print("\nArka Plan Komutları:")
+        for rec in records:
+            print(f"  {rec.id:<6} {rec.status_line():<28} {rec.elapsed_seconds():>5}s  {rec.command[:70]}")
+        print("  Durdurmak için: /bg stop <id>\n")
+    if arg.lower().startswith("stop"):
+        bg_target = arg.split(maxsplit=1)[1].strip() if len(arg.split(maxsplit=1)) > 1 else ""
+        if not bg_target:
+            print_warning("Kullanım: /bg stop <id>")
+        elif get_manager().stop(bg_target):
+            print_success(f"Arka plan komutu durduruldu: {bg_target}")
+        else:
+            print_warning(f"Bilinmeyen arka plan id: {bg_target}")
+
+
+def _cmd_todos(ctx, arg):
+    from src.todos import get_store
+
+    checklist = get_store().render()
+    print(checklist if checklist else "Görev listesi boş.")
+
+
+def _cmd_ssh(ctx, arg):
+    _handle_ssh_command(arg, ctx.workspace_root)
+
+
+def _cmd_update(ctx, arg):
+    from src.updater import (
+        perform_update, is_git_checkout, get_project_root, update_is_deferred,
+    )
+    src_kind = "git checkout" if is_git_checkout(get_project_root()) else "pip paketi"
+    print_info(f"Güncelleme kaynağı: {src_kind} (github.com/necmettincimen/evren-cli)")
+    deferred = update_is_deferred()
+    with status_spinner("En son sürüm çekiliyor ve kuruluyor..."):
+        ok, msg = perform_update(restart=False)
+    if ok and deferred:
+        print_success(msg)
+        print_info("EVREN CLI güncelleme için kapatılıyor.")
+        return True
+    if ok:
+        print_success("Güncelleme tamamlandı. CLI yeni sürümle yeniden başlatılıyor...")
+        from src.updater import restart_process
+        restart_process()
+    else:
+        print_error(f"Güncelleme başarısız: {msg}")
+
+
+def _cmd_commit(ctx, arg):
+    handle_commit(ctx.session)
+
+
+def _cmd_review(ctx, arg):
+    handle_review(ctx.session, _run_agent)
+
+
+def _cmd_init(ctx, arg):
+    handle_init(ctx.session, _run_agent)
+
+
+def _cmd_context(ctx, arg):
+    handle_context(ctx.session)
+
+
+def _cmd_compact(ctx, arg):
+    handle_compact(arg, ctx.session)
+
+
+def _cmd_rewind(ctx, arg):
+    handle_rewind(ctx.session)
+
+
+def _cmd_doctor(ctx, arg):
+    handle_doctor(ctx.session)
+
+
+def _cmd_rol(ctx, arg):
+    handle_role(arg, ctx.session)
+
+
+def _cmd_agent(ctx, arg):
+    from src.agent_library import handle_agent
+    handle_agent(arg, ctx.session)
+
+
+def _cmd_agents(ctx, arg):
+    from src.agent_library import handle_agents
+    handle_agents(arg, ctx.session)
+
+
+def _cmd_team(ctx, arg):
+    from src.agent_library import handle_team
+    handle_team(arg, ctx.session, _run_agent)
+
+
+def _cmd_clear(ctx, arg):
+    from src.workflow_state import clear_checkpoint
+    clear_checkpoint(ctx.workspace_root)
+    ctx.session.clear_history()
+    print_success("Sohbet geçmişi, kalıp ve aktif bağlam temizlendi.")
+
+
+# Command name -> handler. Names stay string literals (aliases listed
+# explicitly) so tools can compare this table with src/commands.py.
+# Note: "/resume" is the playbook resume (the old chain's second "/resume"
+# branch was unreachable).
+_COMMAND_TABLE = {
+    "/exit": _cmd_exit, "/quit": _cmd_exit, "/q": _cmd_exit,
+    "/help": _cmd_help, "/h": _cmd_help, "/?": _cmd_help,
+    "/version": _cmd_version, "/ver": _cmd_version, "/v": _cmd_version,
+    "/model": _cmd_model,
+    "/mode": _cmd_mode,
+    "/effort": _cmd_effort,
+    "/models": _cmd_models,
+    "/quota": _cmd_quota, "/status": _cmd_quota,
+    "/terms": _cmd_terms,
+    "/keys": _cmd_keys,
+    "/tokens": _cmd_tokens,
+    "/debug": _cmd_debug,
+    "/steps": _cmd_steps,
+    "/docs": _cmd_docs,
+    "/skills": _cmd_skills,
+    "/apply": _cmd_skill, "/skill": _cmd_skill,
+    "/diagnose": _cmd_diagnose,
+    "/template": _cmd_template,
+    "/memory": _cmd_memory,
+    "/track": _cmd_track,
+    "/task": _cmd_task,
+    "/progress": _cmd_progress,
+    "/playbook": _cmd_playbook,
+    "/resume": _cmd_resume,
+    "/language": _cmd_language,
+    "/scan": _cmd_scan,
+    "/files": _cmd_files,
+    "/add": _cmd_add,
+    "/drop": _cmd_drop,
+    "/undo": _cmd_undo, "/rollback": _cmd_undo,
+    "/auto": _cmd_auto,
+    "/run": _cmd_run,
+    "/bg": _cmd_bg,
+    "/todos": _cmd_todos,
+    "/ssh": _cmd_ssh,
+    "/update": _cmd_update,
+    "/commit": _cmd_commit,
+    "/review": _cmd_review,
+    "/init": _cmd_init,
+    "/context": _cmd_context,
+    "/compact": _cmd_compact,
+    "/rewind": _cmd_rewind,
+    "/doctor": _cmd_doctor,
+    "/rol": _cmd_rol,
+    "/agent": _cmd_agent,
+    "/agents": _cmd_agents,
+    "/team": _cmd_team,
+    "/clear": _cmd_clear,
+}
+
+
 def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_session) -> None:
     """Interactive command loop; returns on /exit or EOF. Cleanup lives in start_repl."""
     workspace_root = Path(workspace_root)
@@ -979,528 +1617,12 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                 if _handle_workflow_command(cmd, arg, session, lambda label: _read_line(pt_session, label)):
                     continue
 
-                if cmd in ("/exit", "/quit", "/q"):
-                    print_info("EVREN CLI sonlandırılıyor. İyi çalışmalar!")
-                    break
-
-                elif cmd in ("/help", "/h", "/?"):
-                    show_help(arg)
-
-                elif cmd in ("/version", "/ver", "/v"):
-                    from src.version import get_version, get_changelog_notes
-                    ver = get_version()
-                    print_info(f"EVREN CLI Sürümü: v{ver}")
-                    notes = get_changelog_notes(ver, max_items=20)
-                    if notes:
-                        print(f"\nv{ver} Sürüm Notları:")
-                        for note in notes:
-                            print(f"  • {note}")
-                        print()
-
-                elif cmd == "/model":
-                    if not arg:
-                        print_info(f"Aktif Model: {session.model}")
-                        print("\nÖnerilen Modeller:")
-                        for m_id, desc in RECOMMENDED_MODELS.items():
-                            marker = " ✔" if m_id == session.model else ""
-                            print(f"  • {m_id:<22} : {desc}{marker}")
-                        print("\nModel değiştirmek için: /model <model_adı>")
-                    else:
-                        session.set_model(arg)
-                        print_success(f"Model değiştirildi: {arg}")
-
-                elif cmd == "/mode":
-                    from src.modes import AgentMode, mode_label
-                    if not arg:
-                        print_info(f"Aktif Kip: {mode_label(session.mode)}")
-                        print("  • normal : Tüm araçlar açık")
-                        print("  • ask    : Salt-okuma (yazma kapalı)")
-                        print("  • plan   : Yalnızca plan yazımı")
-                        print("\nDeğiştirmek için: /mode <normal|ask|plan>")
-                    elif arg.lower() in ("normal", "ask", "plan"):
-                        session.set_mode(AgentMode(arg.lower()))
-                        print_success(f"Çalışma kipi değiştirildi: {mode_label(session.mode)}")
-                    else:
-                        print_warning("Geçersiz kip. Kullanım: /mode <normal|ask|plan>")
-
-                elif cmd == "/effort":
-                    valid = ("low", "medium", "high", "none")
-                    if not arg:
-                        current = client.reasoning_effort or "none (sunucu varsayılanı)"
-                        print_info(f"Aktif Düşünme Yoğunluğu: {current}")
-                        print("  • low    : En hızlı, koda en çok token (önerilen)")
-                        print("  • medium : Dengeli")
-                        print("  • high   : Derin analiz (yavaş)")
-                        print("  • none   : Sunucu varsayılanı")
-                        print("\nDeğiştirmek için: /effort <low|medium|high|none>")
-                    elif arg.lower() in valid:
-                        client.reasoning_effort = None if arg.lower() == "none" else arg.lower()
-                        shown = client.reasoning_effort or "none (sunucu varsayılanı)"
-                        print_success(f"Düşünme yoğunluğu ayarlandı: {shown}")
-                    else:
-                        print_warning("Geçersiz değer. Kullanım: /effort <low|medium|high|none>")
-
-                elif cmd == "/models":
-                    with status_spinner("EVREN API modelleri çekiliyor..."):
-                        models = client.list_models()
-                    print("\nKullanılabilir Modeller:")
-                    for m in models:
-                        desc = RECOMMENDED_MODELS.get(m, "")
-                        extra = f" ({desc})" if desc else ""
-                        print(f"  • {m}{extra}")
-                    print()
-
-                elif cmd in ("/quota", "/status"):
-                    with status_spinner("Kota ve şartlar sorgulanıyor..."):
-                        rows = client.get_all_quotas()
-                        t_status = get_terms_status()
-                    print_key_quotas(rows)
-                    print_info(
-                        f"Şartlar Durumu: v{t_status.get('current_version')} "
-                        f"(Kabul: {t_status.get('accepted')})"
-                    )
-
-                elif cmd == "/terms":
-                    # Do NOT wrap the interactive accept flow in a spinner —
-                    # Rich Live would hide prints and break the confirm prompt.
-                    force = arg.strip().lower() in ("force", "--force", "-f")
-                    keys = client.key_pool.key_values()
-                    if not keys:
-                        print_warning("Havuzda API anahtarı yok.")
-                    else:
-                        ensure_terms_for_keys(keys, interactive=True, force=force)
-
-                elif cmd == "/keys":
-                    _handle_keys_command(arg, client)
-
-                elif cmd == "/tokens":
-                    rep = session.token_report()
-                    print_info("Bağlam / Token Bütçesi:")
-                    print(f"  • Mesaj sayısı         : {rep['messages']}")
-                    print(f"  • Tahmini prompt token : {rep['estimated_prompt_tokens']:,}")
-                    print(f"  • Çıktı bütçesi        : {rep['output_budget']:,}")
-                    print(f"  • Bağlam penceresi     : {rep['context_window']:,}")
-                    print(f"  • Sıkıştırma eşiği     : {rep.get('compaction_limit', 0):,} "
-                          f"(bütçe {rep.get('context_budget', 0):,}, pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
-                    print(f"  • Kalan bağlam         : {rep['remaining_context']:,}")
-                    print(f"  • Kalibrasyon oranı    : {rep['calibration']}")
-                    if rep["last_usage"]:
-                        u = rep["last_usage"]
-                        print(f"  • Son sunucu kullanımı : prompt={u['prompt_tokens']}, "
-                              f"completion={u['completion_tokens']}, total={u['total_tokens']}")
-                    totals = rep.get("session_usage") or {}
-                    if rep.get("session_requests"):
-                        print(f"  • Oturum isteği       : {rep['session_requests']}")
-                        print(f"  • Oturum toplamı      : prompt={totals.get('prompt_tokens', 0):,}, "
-                              f"completion={totals.get('completion_tokens', 0):,}, "
-                              f"total={totals.get('total_tokens', 0):,}")
-                    try:
-                        from src.usage_log import read_usage, usage_summary
-
-                        summary = usage_summary(read_usage(workspace_root))
-                        if summary["requests"]:
-                            print(f"  • Kalıcı log (usage)  : {summary['requests']} istek, "
-                                  f"toplam {summary['total_tokens']:,} token, "
-                                  f"son {summary['recent_window']} istekte ort. prompt "
-                                  f"{summary['avg_prompt_tokens_recent']:,}, "
-                                  f"önbellek isabeti %{round(summary.get('cache_ratio', 0) * 100)}")
-                    except Exception:
-                        pass
-
-                elif cmd == "/debug":
-                    _handle_debug_command(arg, workspace_root)
-
-                elif cmd == "/steps":
-                    from src.config import default_max_steps
-
-                    if not arg.strip():
-                        current = session.max_steps or default_max_steps()
-                        print_info(
-                            f"Adım tavanı: {current} (env varsayılanı: {default_max_steps()}). "
-                            "Değiştirmek için: /steps <1-100>"
-                        )
-                    else:
-                        try:
-                            value = int(arg.strip())
-                        except ValueError:
-                            print_error("Geçersiz sayı. Örnek: /steps 20")
-                            continue
-                        if not 1 <= value <= 100:
-                            print_error("Adım tavanı 1-100 arasında olmalı.")
-                            continue
-                        session.max_steps = value
-                        print_info(
-                            f"Adım tavanı bu oturum için {value}. "
-                            "Kalıcı değişken: set EVREN_MAX_STEPS=<n>"
-                        )
-
-                elif cmd == "/docs":
-                    _handle_docs_command(arg, session, workspace_root)
-
-                elif cmd == "/skills":
-                    from src.skills import (
-                        list_skills,
-                        categories,
-                        reload_user_skills,
-                        user_skills_dir,
-                        USER_SKILL_WARNINGS,
-                    )
-
-                    if (arg or "").strip().lower() == "reload":
-                        loaded = reload_user_skills()
-                        print_info(
-                            f"Kullanıcı becerileri yeniden yüklendi: {len(loaded)} adet "
-                            f"({user_skills_dir()})"
-                        )
-                        for w in USER_SKILL_WARNINGS:
-                            print_warning(f"Atlanan dosya: {w}")
-                        continue
-                    items = list_skills(arg or None)
-                    if not items:
-                        print_warning(f"'{arg}' kategorisinde beceri yok. Kategoriler: {', '.join(categories())}")
-                    else:
-                        print_info(f"Beceriler ({len(items)}):")
-                        for s in items:
-                            tag = "[user] " if s.source == "user" else ""
-                            print(f"  • {s.name:<22} [{s.category}] {tag}{s.title}")
-                        print("\nUygulamak için: /skill <beceri> (veya /apply <beceri>)")
-                        print(f"Kullanıcı becerileri dizini: {user_skills_dir()} (yeniden yükleme: /skills reload)")
-
-                elif cmd in ("/apply", "/skill"):
-                    if not arg:
-                        print_warning("Kullanım: /skill <beceri_adı>")
-                    else:
-                        try:
-                            content = session.apply_skill(arg)
-                        except ValueError as e:
-                            from src.skills import user_skills_dir
-
-                            print_error(
-                                f"{e}. Kullanıcı becerisi eklemek için: "
-                                f"{user_skills_dir()} altına <ad>.md yazın, sonra /skills reload"
-                            )
-                        else:
-                            print_info(f"Beceri uygulanıyor: {arg}")
-                            _run_agent(session, content)
-
-                elif cmd == "/diagnose":
-                    from src.diagnostics import list_diagnostics, get_diagnostic, match_by_symptom
-                    if not arg:
-                        print_info("Arıza Triyajları:")
-                        for d in list_diagnostics():
-                            print(f"  • {d.name:<22} {d.title}")
-                        print("\nÇalıştırmak için: /diagnose <ad>")
-                    else:
-                        diag = get_diagnostic(arg)
-                        if diag is None:
-                            hits = match_by_symptom(arg)
-                            if hits:
-                                print_info("Belirtiye uyan triyajlar:")
-                                for d in hits:
-                                    print(f"  • {d.name:<22} {d.title}")
-                            else:
-                                print_error(f"Triyaj bulunamadı: {arg}")
-                        else:
-                            print_info(f"Triyaj başlatılıyor: {diag.title}")
-                            _run_agent(session, session.apply_diagnostic(diag.name))
-
-                elif cmd == "/template":
-                    from src.templates import list_templates, get_template, audiences
-                    if not arg:
-                        print_info("Çıktı Şablonları:")
-                        for t in list_templates():
-                            print(f"  • {t.name:<22} [{t.audience}] {t.title}")
-                        print(f"\nKitleler: {', '.join(audiences())}")
-                        print("Doldurmak için: /template <ad>")
-                    else:
-                        tmpl = get_template(arg)
-                        if tmpl is None:
-                            print_error(f"Şablon bulunamadı: {arg}")
-                        else:
-                            print_info(f"Şablon dolduruluyor: {tmpl.title}")
-                            _run_agent(session, session.apply_template(tmpl.name))
-
-                elif cmd == "/memory":
-                    from src.memory import load_memory, set_profile, add_note
-                    parts = arg.split(maxsplit=2)
-                    sub = parts[0].lower() if parts else ""
-                    if sub == "set":
-                        if len(parts) < 3:
-                            print_warning("Kullanım: /memory set <anahtar> <değer>")
-                        else:
-                            set_profile(parts[1], parts[2], workspace_root)
-                            print_success(f"Hafıza güncellendi: {parts[1]} = {parts[2]}")
-                            session.refresh_context()
-                    elif sub == "note":
-                        if len(parts) < 2:
-                            print_warning("Kullanım: /memory note <metin>")
-                        else:
-                            add_note(parts[1], workspace_root)
-                            print_success("Not hafızaya eklendi.")
-                            session.refresh_context()
-                    else:
-                        state = load_memory(workspace_root)
-                        profile = state.get("profile", {})
-                        notes = state.get("notes", [])
-                        print_info("Proje Hafızası:")
-                        if profile:
-                            for k, v in profile.items():
-                                print(f"  • {k}: {v}")
-                        else:
-                            print("  (profil boş)")
-                        if notes:
-                            print("  Notlar:")
-                            for n in notes[-10:]:
-                                print(f"    - {n.get('text', '')}")
-                        print("\nKomutlar: /memory set <k> <v> | /memory note <metin>")
-
-                elif cmd == "/track":
-                    from src.tracking import list_tasks, progress_summary
-                    items = list_tasks(arg or "all", workspace_root)
-                    summary = progress_summary(workspace_root)
-                    print_info(f"Görevler ({len(items)}) — tamamlanma: %{summary['percent']}")
-                    if not items:
-                        print("  (görev yok)")
-                    for t in items:
-                        print(f"  • [{t.get('status')}] {t.get('id')}: {t.get('description')} (%{t.get('progress', 0)})")
-                    print("\nKomutlar: /task add <id> <açıklama> | /progress <id> <yüzde>")
-
-                elif cmd == "/task":
-                    from src.tracking import add_task
-                    parts = arg.split(maxsplit=2)
-                    if len(parts) < 3 or parts[0].lower() != "add":
-                        print_warning("Kullanım: /task add <id> <açıklama>")
-                    else:
-                        try:
-                            add_task(parts[1], parts[2], workspace_root=workspace_root)
-                        except ValueError as e:
-                            print_error(str(e))
-                        else:
-                            print_success(f"Görev eklendi: {parts[1]}")
-
-                elif cmd == "/progress":
-                    from src.tracking import update_task
-                    parts = arg.split(maxsplit=2)
-                    if len(parts) < 2 or not parts[1].isdigit():
-                        print_warning("Kullanım: /progress <id> <yüzde> [not]")
-                    else:
-                        note = parts[2] if len(parts) > 2 else ""
-                        try:
-                            item = update_task(parts[0], progress=int(parts[1]), note=note, workspace_root=workspace_root)
-                        except ValueError as e:
-                            print_error(str(e))
-                        else:
-                            print_success(f"{item['id']} → %{item['progress']} ({item['status']})")
-
-                elif cmd == "/playbook":
-                    from src.playbooks import list_playbooks, get_playbook, save_checkpoint
-                    if not arg:
-                        print_info("Playbook'lar:")
-                        for pb in list_playbooks():
-                            print(f"  • {pb.name:<12} {pb.title} ({len(pb.steps)} adım)")
-                        print("\nBaşlatmak için: /playbook <ad>")
-                    else:
-                        pb = get_playbook(arg)
-                        if pb is None:
-                            print_error(f"Playbook bulunamadı: {arg}")
-                        else:
-                            save_checkpoint(pb.name, 0, workspace_root)
-                            print_info(f"Playbook başlatıldı: {pb.title} (adım 1/{len(pb.steps)})")
-                            _run_agent(session, session.apply_playbook_step(pb.name, 0))
-
-                elif cmd == "/resume":
-                    from src.playbooks import load_checkpoint, get_playbook, save_checkpoint
-                    cp = load_checkpoint(workspace_root)
-                    if not cp:
-                        print_warning("Kaydedilmiş playbook adımı yok.")
-                    else:
-                        pb = get_playbook(cp["playbook"])
-                        step = cp.get("next_step", 0)
-                        if pb is None or step >= len(pb.steps):
-                            print_info("Playbook tamamlanmış görünüyor.")
-                        else:
-                            print_info(f"Devam ediliyor: {pb.title} (adım {step + 1}/{len(pb.steps)})")
-                            _run_agent(session, session.apply_playbook_step(pb.name, step))
-                            save_checkpoint(pb.name, step + 1, workspace_root)
-
-                elif cmd == "/language":
-                    from src.language import get_language, set_language
-                    if not arg:
-                        current = get_language(workspace_root) or "(ayarlanmamış)"
-                        print_info(f"Çıktı dili: {current}")
-                        print("Değiştirmek için: /language <tr|en|de|...>")
-                    else:
-                        try:
-                            canonical = set_language(arg, workspace_root)
-                        except ValueError as e:
-                            print_error(str(e))
-                        else:
-                            print_success(f"Çıktı dili ayarlandı: {canonical}")
-                            session.refresh_context()
-
-                elif cmd == "/scan":
-                    target_dir = arg if arg else str(workspace_root)
-                    with status_spinner(f"'{target_dir}' klasörü taranıyor..."):
-                        tree_str = generate_tree(Path(target_dir))
-                        stats = scan_workspace(Path(target_dir))
-                    print(tree_str)
-                    print_info(f"Toplam {stats['total_files']} dosya ({stats['total_size_kb']} KB).")
-
-                elif cmd == "/files":
-                    if not session.active_context_files:
-                        print_info("Bağlamda dosya yok. Eklemek için: /add <dosya_yolu>")
-                    else:
-                        print("\nAktif Bağlam Dosyaları:")
-                        for f in sorted(session.active_context_files):
-                            print(f"  • {f}")
-                        print()
-
-                elif cmd == "/add":
-                    if not arg:
-                        print_warning("Kullanım: /add <dosya_yolu>")
-                    else:
-                        session.add_context_file(arg)
-                        print_success(f"'{arg}' bağlama eklendi.")
-
-                elif cmd == "/drop":
-                    if not arg:
-                        print_warning("Kullanım: /drop <dosya_yolu>")
-                    else:
-                        session.remove_context_file(arg)
-                        print_info(f"'{arg}' bağlamdan çıkarıldı.")
-
-                elif cmd in ("/undo", "/rollback"):
-                    if not arg:
-                        print_warning("Kullanım: /undo <dosya_yolu>")
-                    else:
-                        target = resolve_workspace_path(arg, workspace_root)
-                        ok, msg = rollback_last_backup(target, workspace_root)
-                        if ok:
-                            print_success(msg)
-                        else:
-                            print_error(msg)
-
-                elif cmd == "/auto":
-                    if not arg:
-                        state_str = "AÇIK (Değişiklikler otomatik uygulanır)" if session.auto_approve else "KAPALI (Her değişiklikte [Y/n] onayı istenir)"
-                        print_info(f"Otomatik Onay Modu: {state_str}")
-                        print("[dim]Değiştirmek için: /auto on veya /auto off[/dim]")
-                    elif arg.lower() in ("on", "true", "1", "ac", "aç"):
-                        session.set_auto_approve(True)
-                        print_success("Otomatik onay modu AÇILDI. Kod değişiklikleri otomatik uygulanacak (yedekleme varsayılan olarak kapalı; --backup ile açılır).")
-                    elif arg.lower() in ("off", "false", "0", "kapat"):
-                        session.set_auto_approve(False)
-                        print_warning("Otomatik onay modu KAPATILDI. Her dosya değişikliğinde kullanıcı onayı istenecek.")
-                    else:
-                        print_warning("Kullanım: /auto [on|off]")
-
-                elif cmd == "/run":
-                    if not arg:
-                        print_warning("Kullanım: /run <komut>")
-                    else:
-                        from src.tools import tool_run_command
-                        out = tool_run_command(arg, workspace_root, auto_approve=session.auto_approve)
-                        print(out)
-
-                elif cmd == "/bg":
-                    from src.background import get_manager
-
-                    records = get_manager().list()
-                    if not records:
-                        print_info("Arka planda çalıştırılmış komut yok. Ajan run_command(run_in_background=true) ile başlatabilir.")
-                    else:
-                        print("\nArka Plan Komutları:")
-                        for rec in records:
-                            print(f"  {rec.id:<6} {rec.status_line():<28} {rec.elapsed_seconds():>5}s  {rec.command[:70]}")
-                        print("  Durdurmak için: /bg stop <id>\n")
-                    if arg.lower().startswith("stop"):
-                        bg_target = arg.split(maxsplit=1)[1].strip() if len(arg.split(maxsplit=1)) > 1 else ""
-                        if not bg_target:
-                            print_warning("Kullanım: /bg stop <id>")
-                        elif get_manager().stop(bg_target):
-                            print_success(f"Arka plan komutu durduruldu: {bg_target}")
-                        else:
-                            print_warning(f"Bilinmeyen arka plan id: {bg_target}")
-
-                elif cmd == "/todos":
-                    from src.todos import get_store
-
-                    checklist = get_store().render()
-                    print(checklist if checklist else "Görev listesi boş.")
-
-                elif cmd == "/ssh":
-                    _handle_ssh_command(arg, workspace_root)
-
-                elif cmd == "/update":
-                    from src.updater import (
-                        perform_update, is_git_checkout, get_project_root, update_is_deferred,
-                    )
-                    src_kind = "git checkout" if is_git_checkout(get_project_root()) else "pip paketi"
-                    print_info(f"Güncelleme kaynağı: {src_kind} (github.com/necmettincimen/evren-cli)")
-                    deferred = update_is_deferred()
-                    with status_spinner("En son sürüm çekiliyor ve kuruluyor..."):
-                        ok, msg = perform_update(restart=False)
-                    if ok and deferred:
-                        print_success(msg)
-                        print_info("EVREN CLI güncelleme için kapatılıyor.")
-                        break
-                    if ok:
-                        print_success("Güncelleme tamamlandı. CLI yeni sürümle yeniden başlatılıyor...")
-                        from src.updater import restart_process
-                        restart_process()
-                    else:
-                        print_error(f"Güncelleme başarısız: {msg}")
-
-                elif cmd == "/commit":
-                    handle_commit(session)
-
-                elif cmd == "/review":
-                    handle_review(session, _run_agent)
-
-                elif cmd == "/init":
-                    handle_init(session, _run_agent)
-
-                elif cmd == "/context":
-                    handle_context(session)
-
-                elif cmd == "/compact":
-                    handle_compact(arg, session)
-
-                elif cmd == "/rewind":
-                    handle_rewind(session)
-
-                elif cmd == "/doctor":
-                    handle_doctor(session)
-
-                elif cmd == "/rol":
-                    handle_role(arg, session)
-
-                elif cmd == "/agent":
-                    from src.agent_library import handle_agent
-                    handle_agent(arg, session)
-
-                elif cmd == "/agents":
-                    from src.agent_library import handle_agents
-                    handle_agents(arg, session)
-
-                elif cmd == "/team":
-                    from src.agent_library import handle_team
-                    handle_team(arg, session, _run_agent)
-
-                elif cmd in custom_commands:
+                ctx = _ReplCtx(session, client, workspace_root, pt_session)
+                if cmd in custom_commands and (cmd not in _COMMAND_TABLE or cmd == "/clear"):
                     _run_agent(session, render_custom_command(custom_commands[cmd], arg), compact=True)
-
-                elif cmd == "/resume":
-                    from src.sessions import handle_resume
-
-                    handle_resume(session)
-
-                elif cmd == "/clear":
-                    from src.workflow_state import clear_checkpoint
-                    clear_checkpoint(workspace_root)
-                    session.clear_history()
-                    print_success("Sohbet geçmişi, kalıp ve aktif bağlam temizlendi.")
-
+                elif cmd in _COMMAND_TABLE:
+                    if _COMMAND_TABLE[cmd](ctx, arg):
+                        break
                 else:
                     print_warning(unknown_command_message(cmd))
                 continue
