@@ -177,7 +177,13 @@ def _load_domain_note(stem: str) -> str:
         return ""
 
 
-PLANNER_INSTRUCTION = """[EVREN PLANLAYICI] Bu turda yalnızca uygulama planı çıkar; hiçbir dosyayı değiştirme.
+# Kept as module constants for callers that imported them before 3.5.
+HTTP_ARGO_NOTES = _load_domain_note("http_argo")
+DRONE_NOTES = _load_domain_note("drone")
+K8S_NOTES = _load_domain_note("k8s")
+
+
+PLANNER_INSTRUCTION ="""[EVREN PLANLAYICI] Bu turda yalnızca uygulama planı çıkar; hiçbir dosyayı değiştirme.
 Keşfi az turda yap: ilk turda ilgili anahtar kelimeleri TEK find_files(query="a|b|c") ile ara ve bağımsız
 okumaları aynı turda birlikte çağır; ikinci turda yalnızca gereken aralıkları view_file(start_line,end_line) ile oku.
 findstr/grep kullanma, dosyaları baştan sona okuma.
@@ -1117,10 +1123,9 @@ class AgentSession:
         # executor, which spent 15 of 20 steps exploring.
         from src.intent import clef_label
 
-        label = clef_label(text, ["plan", "no_plan"])
-        if label == "plan":
+        if _PLAN_INTENT_RE.search(text or ""):
             return True
-        if label is None and _PLAN_INTENT_RE.search(text or ""):
+        if clef_label(text, ["plan", "no_plan"]) == "plan":
             return True
         return self.token_manager.estimate_text(text) >= route_min_tokens()
 

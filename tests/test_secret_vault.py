@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from src.agent import AgentSession, DRONE_NOTES
+from src.agent import AgentSession, _load_domain_note
 from src.secret_vault import SecretVault, set_active_vault
 from src.workflow_state import redact_text
 
@@ -117,7 +117,7 @@ class AgentSecretTest(unittest.TestCase):
         self.assertIn("EVREN GİZLİ DEĞERLER", sent[0])
         self.assertIn("latest=true", sent[0])  # Drone notes ride along
         self.assertNotIn(TOKEN, self.session.task_goal)
-        self.assertIn("latest=true", DRONE_NOTES)
+        self.assertIn("latest=true", _load_domain_note("drone"))
 
 
 if __name__ == "__main__":  # pragma: no cover

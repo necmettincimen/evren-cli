@@ -127,6 +127,7 @@ class CommandInputTest(unittest.TestCase):
         for line in source.splitlines():
             if re.search(r"\bcmd (?:==|in|not in)\s", line):
                 handled.update(re.findall(r'"(/[A-Za-z?][A-Za-z?-]*)"', line))
+        handled.update(repl._COMMAND_TABLE)  # 2.4: the dispatch is a command table
         handled.add("/continue")  # handled before the dispatch chain
         self.assertEqual(KNOWN_COMMANDS, handled)
 

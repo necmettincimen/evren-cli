@@ -48,12 +48,19 @@ def field_prompt(label: str, hint: str, default: str = "") -> str:
 def is_execution_followup(text: str) -> bool:
     """Recognize short execution/approval replies, not arbitrary new task briefs."""
     normalized = " ".join(re.sub(r"[.!?,;]+", " ", text.casefold()).split())
-    if len(normalized) <= 60:
-        from src.intent import clef_label
+    if _is_followup_phrase(normalized):
+        return True
+    # Clef only widens the fixed phrase list for short plain replies; slash
+    # commands and real briefs never go to the classifier ("/exit" was
+    # labelled "execute" and the REPL could not be left).
+    if not normalized or normalized.startswith("/") or len(normalized) > 30:
+        return False
+    from src.intent import clef_label
 
-        label = clef_label(text, ["execute", "other"])
-        if label:
-            return label == "execute"
+    return clef_label(text, ["onay veya devam yanıtı", "yeni görev veya soru"]) == "onay veya devam yanıtı"
+
+
+def _is_followup_phrase(normalized: str) -> bool:
     return normalized in {
         "yap", "yap artık", "artık yap", "doğrudan yap", "soru sorma doğrudan yap",
         "uygula", "başla", "tüm görevleri yap", "hepsini yap",
