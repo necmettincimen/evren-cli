@@ -41,6 +41,7 @@ def _truncate_output(text: str) -> str:
 
 def spill_long_output(
     text: str, workspace_root: Path | None, label: str, *, shown_live: bool = False,
+    command: str = "",
 ) -> str:
     """Returns what the model gets for a possibly long output.
 
@@ -49,6 +50,10 @@ def spill_long_output(
     streamed live, saved under `.evren/tmp/`, and the model receives the
     truncated view plus a note: re-typing a table the user already sees costs a
     lot of tokens and is the slowest part of a "list ..." request.
+
+    Test runs, grep-like listings and builds get a type-aware summary
+    (`output_summary`) instead of the generic head/tail window; the full text
+    is still saved for view_file.
     """
     if len(text) <= SSH_OUTPUT_HEAD_CHARS + SSH_OUTPUT_TAIL_CHARS:
         return text
@@ -75,8 +80,14 @@ def spill_long_output(
         except Exception:
             pass
     where = f" ve {saved} dosyasına kaydedildi" if saved else ""
+    from src.output_summary import summarize_output
+
+    view = _truncate_output(text)
+    summary = summarize_output(text, command)
+    if summary is not None and len(summary) < len(view):
+        view = f"[EVREN] Çıktı özetlendi ({lines} satır).\n" + summary
     return (
-        _truncate_output(text)
+        view
         + f"\n[EVREN] Tam çıktı ({lines} satır) kullanıcının terminalinde gösterildi{where}. "
         "Listeyi/tabloyu yanıtında yeniden yazma. Görev listeleme/gösterme ise iş bitti: ek analiz "
         "komutu çalıştırmadan, gördüğün kısma dayanarak 1-3 cümlelik kısa özetle hemen bitir. "
@@ -165,7 +176,7 @@ def ssh_run(
 
     result_lines = [f"[{alias}] Çıkış Kodu: {code}"]
     if out:
-        result_lines.append(f"STDOUT:\n{spill_long_output(out, workspace_root, f'ssh-{alias}')}")
+        result_lines.append(f"STDOUT:\n{spill_long_output(out, workspace_root, f'ssh-{alias}', command=command)}")
     if err:
         result_lines.append(f"STDERR:\n{_truncate_output(err)}")
     if code == 255 and _is_connection_error(err):
