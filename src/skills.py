@@ -178,8 +178,17 @@ _register(Skill(
 
 USER_SKILLS_DIRNAME = "skills"
 
-# Module-level cache of loaded user skills; rebuilt by reload_user_skills().
-USER_SKILLS: dict[str, Skill] = {}
+# Cache of loaded user skills (lives in the session context; rebuilt by
+# reload_user_skills()). USER_SKILLS aliases the default context's dict.
+from src.session_context import default_context as _default_context
+
+USER_SKILLS: dict[str, Skill] = _default_context().user_skills
+
+
+def _user_skills() -> dict[str, Skill]:
+    from src.session_context import current
+
+    return current().user_skills
 
 # Warnings collected during the last user-skill load (skipped/broken files).
 USER_SKILL_WARNINGS: list[str] = []
@@ -300,11 +309,12 @@ def reload_user_skills(directory: Path | None = None) -> list[Skill]:
     global _USER_SKILLS_LOADED
     _USER_SKILLS_LOADED = True
     skills, warnings = load_user_skills(directory)
-    USER_SKILLS.clear()
-    USER_SKILLS.update({s.name: s for s in skills})
+    cache = _user_skills()
+    cache.clear()
+    cache.update({s.name: s for s in skills})
     USER_SKILL_WARNINGS.clear()
     USER_SKILL_WARNINGS.extend(warnings)
-    return list(USER_SKILLS.values())
+    return list(cache.values())
 
 
 def _merged_skills() -> dict[str, Skill]:
@@ -319,7 +329,7 @@ def _merged_skills() -> dict[str, Skill]:
         except Exception:  # pragma: no cover - loading never raises by design
             pass
     merged = dict(SKILLS)
-    merged.update(USER_SKILLS)
+    merged.update(_user_skills())
     return merged
 
 

@@ -465,7 +465,7 @@ class _Runner:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8", newline="")
 
-        from src import background, secret_vault, tools as tools_module, ui
+        from src import background, session_context, secret_vault, tools as tools_module, ui
         from src.todos import get_store
 
         self.real_execute = tools_module.execute_tool_call
@@ -488,7 +488,7 @@ class _Runner:
                 result.problems.append("no execute_tool_call to wrap; update the harness")
 
             # Process-wide state a previous test may have left behind.
-            background._manager = None
+            session_context.current().background = None
             secret_vault.set_active_vault(secret_vault.SecretVault())
             get_store().clear()
             ui._STREAM.update(buffer=[], live=None, pending="")
@@ -501,11 +501,11 @@ class _Runner:
                 result.exception = exc
             finally:
                 try:
-                    if background._manager is not None:
-                        background._manager.cleanup_all()
+                    if session_context.current().background is not None:
+                        session_context.current().background.cleanup_all()
                 except Exception:
                     pass
-                background._manager = None
+                session_context.current().background = None
                 secret_vault.set_active_vault(secret_vault.SecretVault())
                 get_store().clear()
                 ui._STREAM.update(buffer=[], live=None, pending="")

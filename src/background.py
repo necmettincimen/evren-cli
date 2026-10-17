@@ -211,15 +211,12 @@ class BackgroundManager:
                 record.exit_code = record.proc.returncode
 
 
-# Process-wide singleton shared by tools.py and repl.py.
-_manager: BackgroundManager | None = None
-_manager_lock = threading.Lock()
-
-
 def get_manager() -> BackgroundManager:
-    """Returns the process-wide BackgroundManager singleton."""
-    global _manager
-    with _manager_lock:
-        if _manager is None:
-            _manager = BackgroundManager()
-        return _manager
+    """Returns the BackgroundManager of the current session context."""
+    from src.session_context import current
+
+    ctx = current()
+    with ctx.background_lock:
+        if ctx.background is None:
+            ctx.background = BackgroundManager()
+        return ctx.background

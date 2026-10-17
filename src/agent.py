@@ -44,6 +44,7 @@ from src.modes import AgentMode, parse_mode_prefix
 from src.prompt_frame import PromptFrame, build_user_content, compose_system
 from src.tool_gateway import check_tool_allowed
 from src.secret_vault import SecretVault, set_active_vault
+from src import session_context
 from src.paste import compact_paste, paste_info
 from src.trace import TaskTrace
 from src.ui import (
@@ -378,6 +379,9 @@ class AgentSession:
         # follow-ups so they keep running on the executor.
         self._exec_profile: tuple[str, bool | None] | None = None
         # User-supplied secrets live here, never in the prompt (see secret_vault).
+        # The session context holds the other formerly module-level state
+        # (todos, background manager, user skills, stream buffer).
+        self.context = session_context.current()
         self.vault = SecretVault()
         # Set once a plain "list X" task has shown its full output to the user:
         # the next turn may only summarise (tool_choice="none").
@@ -615,6 +619,7 @@ class AgentSession:
             print_warning(error)
             return error
         # A follow-up can be a big paste too (fresh build errors after "devam").
+        session_context.set_current(self.context)
         set_active_vault(self.vault)
         text = self._compact_pasted_text(self.vault.capture(text))
         goal = self.task_goal
@@ -675,10 +680,10 @@ class AgentSession:
 
     def apply_skill(self, name: str, context: str = "") -> str:
         """Returns the user content for applying a catalog or user skill."""
-        from src.skills import get_skill, reload_user_skills, USER_SKILLS
+        from src.skills import get_skill, reload_user_skills, _user_skills
 
         skill = get_skill(name)
-        if skill is None and not USER_SKILLS:
+        if skill is None and not _user_skills():
             # User skills may not be loaded yet (e.g. first turn) — try once.
             reload_user_skills()
             skill = get_skill(name)
@@ -993,6 +998,7 @@ class AgentSession:
         turn_mode, cleaned_input = parse_mode_prefix(user_input)
         # Secrets are swapped for placeholders before anything (model, docs,
         # changelog, checkpoints) sees the task text.
+        session_context.set_current(self.context)
         set_active_vault(self.vault)
         cleaned_input = self.vault.capture(cleaned_input)
         if compact:
@@ -1523,6 +1529,334 @@ class AgentSession:
         with ThreadPoolExecutor(max_workers=4) as pool:
             return {i: r for i, r in pool.map(_one, jobs) if r is not None}
 
+    def _prepare_request(self, step_count: int, stalled_steps: int, text_continuations: int) -> int:
+        """Compact history before a request; return the output token budget."""
+        self._step_no = step_count
+        self._sync_window()
+        output_budget = self.token_manager.resolve_output_budget(
+            self.model, EVREN_DEFAULT_MAX_TOKENS
+        )
+        repeats = max(stalled_steps, text_continuations)
+        if repeats:
+            output_budget = min(output_budget * (2 ** repeats), _stall_token_cap())
+        # Compact early: waiting until the window is completely full makes every
+        # step re-send the whole history, so cost grows quadratically. Compacting
+        # at a fraction of the window keeps the repeated prefix small.
+        compact_limit = self.compaction_limit()
+        if repeats >= 2:
+            # A second stall usually means the context itself is the problem.
+            # Shrinking it first is cheaper than paying for a bigger answer
+            # budget on an oversized prompt.
+            compact_limit = max(1024, compact_limit // 2)
+        before = len(self.messages)
+        self.messages = self.compactor.compact(
+            self.messages, output_budget, max_tokens=compact_limit
+        )
+        if len(self.messages) < before and not self._compaction_notified:
+            self._compaction_notified = True
+            print_info(
+                f"Bağlam {compact_limit:,} token bütçesini aştı, sıkıştırıldı "
+                f"({before} mesaj -> {len(self.messages)}). "
+                "Ayar: EVREN_CONTEXT_BUDGET, EVREN_SMART_COMPACT=false (eski davranış)."
+            )
+        return output_budget
+
+    def _turn_notes(self, step_count: int, max_steps: int, stalled_steps: int) -> str:
+        """Transient notes for the trailing user message of this request."""
+        step_notes = self._step_notes(step_count, max_steps, stalled_steps)
+        if self._loop_blocks >= _LOOP_BLOCK_LIMIT:
+            step_notes = (step_notes + "\n" if step_notes else "") + (
+                "[EVREN] DÖNGÜ: aynı araç çağrılarını tekrarlıyorsun. Bu tur araç kullanma; "
+                "şimdiye kadarki bulgularla yapılanı, kalan işi ve tek somut sonraki adımı yaz."
+            )
+        if self._listing_done:
+            step_notes = (step_notes + "\n" if step_notes else "") + (
+                "[EVREN] Liste kullanıcının terminalinde tam gösterildi. Araç çağırma; "
+                "tabloyu yeniden yazmadan 1-3 cümlelik kısa özetle bitir."
+            )
+        if self._verify_note:
+            step_notes = (step_notes + "\n" if step_notes else "") + self._verify_note
+            self._verify_note = ""
+        return step_notes
+
+    def _stream_model(
+        self,
+        step_count: int,
+        max_steps: int,
+        effective_mode: AgentMode,
+        stalled_steps: int,
+        output_budget: int,
+    ) -> tuple[Any, dict]:
+        """Stream one model response; return (response, stream_state)."""
+        from src.ui import StatusTracker, HAVE_RICH, console
+
+        status_msg = (
+            f"Model düşünüyor... [{self.model}]"
+            if step_count == 1
+            else f"[Adım {step_count}/{max_steps}] Model analiz ediyor... [{self.model}]"
+        )
+        request_started = time.perf_counter()
+        try:
+            estimated = self.token_manager.estimate_messages(self.messages)
+
+            # Stream the response so the terminal never looks frozen: tokens
+            # (reasoning + content) appear live, then we get an assembled
+            # response object with the full content/tool_calls for the loop.
+            tracker = StatusTracker(status_msg)
+            tracker.__enter__()
+            stream_state = {"first": True, "in_reasoning": False, "in_content": False}
+
+            def _on_reasoning(text: str):
+                _check_esc()
+                if stream_state["first"]:
+                    tracker.stop()
+                    stream_state["first"] = False
+                if not stream_state["in_reasoning"]:
+                    stream_state["in_reasoning"] = True
+                    if stream_state["in_content"]:
+                        print()
+                    if HAVE_RICH and console:
+                        console.print("[bold magenta]💭 Düşünme / Akıl Yürütme:[/bold magenta]")
+                    else:
+                        print("[Düşünme]:")
+                print_reasoning(text, is_chunk=True)
+
+            def _on_content(text: str):
+                _check_esc()
+                if stream_state["first"]:
+                    tracker.stop()
+                    stream_state["first"] = False
+                if stream_state["in_reasoning"]:
+                    print("\n")
+                    stream_state["in_reasoning"] = False
+                stream_state["in_content"] = True
+                # Buffer the deltas; the response is rendered once at the end
+                # as clean markdown, so raw ** marks never hit the screen.
+                print_markdown_stream(text)
+
+            try:
+                # Turn notes go into a transient trailing message, never into the
+                # system message: the system prefix and the whole history must
+                # stay byte-identical between steps so the server's prompt cache
+                # keeps hitting. Nothing is sent on an ordinary step.
+                step_notes = self._turn_notes(step_count, max_steps, stalled_steps)
+                outgoing = list(self.messages)
+                if step_notes:
+                    outgoing.append({"role": "user", "content": step_notes})
+                response = self.client.chat_stream_assembled(
+                    messages=normalize_chat_messages(outgoing),
+                    model=self.model,
+                    max_tokens=output_budget,
+                    tools=self._filter_delegate_tools(self._agent_tools(
+                        tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools())
+                        + (_ext_schemas(self.workspace_root) if effective_mode == AgentMode.NORMAL else [])
+                    )),
+                    # Same tool list keeps the cached prefix; "none" only forbids calls.
+                    tool_choice="none" if (
+                        self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT
+                    ) else None,
+                    on_reasoning=_on_reasoning,
+                    on_content=_on_content,
+                    # A stall almost always means the hidden reasoning ate the
+                    # budget; retrying with thinking off breaks the loop.
+                    thinking=False if stalled_steps else self._thinking,
+                )
+            finally:
+                if stream_state["first"]:
+                    tracker.stop()
+                if stream_state["in_content"] and markdown_stream_active():
+                    flush_markdown()
+
+            # Calibrate the estimator against server-reported usage.
+            self.token_manager.calibrate_from_response(estimated, response)
+            self._record_usage(response, step=step_count)
+            self._trace_request(response, request_started)
+        except Exception:
+            self._trace_request(None, request_started, error=True)
+            raise
+        return response, stream_state
+
+    def _tool_call_message(self, message: Any, tool_calls) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": (
+                            tc.function.arguments
+                            if isinstance(tc.function.arguments, str)
+                            else json.dumps(tc.function.arguments or {}, ensure_ascii=False)
+                        ),
+                    },
+                }
+                for tc in tool_calls
+            ],
+        }
+
+    def _tool_reply(self, tc, fn_name: str, content: str) -> None:
+        self.messages.append({
+            "role": "tool", "tool_call_id": tc.id, "name": fn_name, "content": content,
+        })
+
+    @staticmethod
+    def _parse_tool_args(raw_args, fn_name: str) -> dict:
+        if isinstance(raw_args, dict):
+            args = raw_args
+        elif raw_args is None or (isinstance(raw_args, str) and not raw_args.strip()):
+            args = {}
+        else:
+            args = json.loads(raw_args)
+        if not isinstance(args, dict):
+            raise ValueError(
+                f"Araç argümanları bir JSON nesnesi olmalı, gelen tip: "
+                f"{type(args).__name__}."
+            )
+        return args
+
+    def _guard_tool_call(
+        self, tc, fn_name: str, args: dict, effective_mode: AgentMode, t_tool: float,
+    ) -> tuple[bool, bool]:
+        """Run mode/permission/delegate/repeat guards.
+
+        Returns (handled, perm_allow); handled means a tool reply was already added.
+        """
+        # Mode permission gate: deny disallowed tools with a reason
+        # the model can react to (instead of executing them).
+        allowed, deny_reason = check_tool_allowed(fn_name, args, effective_mode)
+        if not allowed:
+            result = f"REDDEDİLDİ: {deny_reason}"
+            print_tool_result(fn_name, deny_reason, is_error=True)
+            self._trace_tool(fn_name, args, t_tool, result)
+            self._tool_reply(tc, fn_name, result)
+            return True, False
+
+        # Settings permission rules + pre_tool hooks (src/settings.py).
+        perm_allow, perm_msg = self._permission_gate(fn_name, args)
+        if perm_msg:
+            result = f"REDDEDİLDİ: {perm_msg}"
+            print_tool_result(fn_name, perm_msg, is_error=True)
+            self._trace_tool(fn_name, args, t_tool, result)
+            self._tool_reply(tc, fn_name, result)
+            return True, perm_allow
+
+        # Delegation is handled by the session itself: it swaps the
+        # message history and reuses _run_steps, so it must never
+        # reach the stateless execute_tool_call dispatcher. It sits
+        # AFTER the mode gate: the sub-agent runs in ASK mode, where
+        # the gate denies `delegate`, which is what stops recursion.
+        if fn_name == "delegate":
+            result = self._run_delegate(
+                str(args.get("task") or ""), args.get("max_steps"),
+                args.get("agent"),
+            )
+            is_err = result.startswith("HATA:")
+            summary = (result.splitlines()[0] if result else "Tamamlandı")
+            print_tool_result(fn_name, summary, is_error=is_err)
+            self._note_tool_call(fn_name, args, result)
+            self._trace_tool(fn_name, args, t_tool, result)
+            self._tool_reply(tc, fn_name, result)
+            return True, perm_allow
+
+        blocked = self._repeat_guard(fn_name, args)
+        if blocked:
+            print_tool_result(fn_name, "tekrar eden çağrı engellendi", is_error=True)
+            self._trace_tool(fn_name, args, t_tool, blocked, blocked=True)
+            self._tool_reply(tc, fn_name, blocked)
+            return True, perm_allow
+
+        repeated = self._read_repeat(fn_name, args)
+        if repeated:
+            print_tool_result(fn_name, "değişmemiş dosya yeniden okunmadı")
+            self._note_tool_call(fn_name, args, repeated)
+            self._trace_tool(fn_name, args, t_tool, repeated)
+            self._tool_reply(tc, fn_name, repeated)
+            return True, perm_allow
+        return False, perm_allow
+
+    def _run_one_tool(
+        self, tc, prefetched: dict, effective_mode: AgentMode,
+    ) -> AgentMode:
+        """Execute a single tool call; return the (possibly switched) mode."""
+        fn_name = tc.function.name
+        t_tool = time.perf_counter()
+        raw_args = tc.function.arguments
+        try:
+            args = self._parse_tool_args(raw_args, fn_name)
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
+            print_tool_result(fn_name, result, is_error=True)
+            self._trace_tool(fn_name, {"raw": raw_args}, t_tool, result)
+            self._tool_reply(tc, fn_name, result)
+            return effective_mode
+
+        print_tool_call(fn_name, args, auto_approved=self.auto_approve)
+
+        handled, perm_allow = self._guard_tool_call(tc, fn_name, args, effective_mode, t_tool)
+        if handled:
+            return effective_mode
+
+        # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
+        result = prefetched.get(tc.id)
+        if result is None:
+            result = execute_tool_call(
+                name=fn_name,
+                arguments=args,
+                workspace_root=self.workspace_root,
+                auto_approve=self.auto_approve or perm_allow,
+            )
+        _settings.set_current(None)
+        _settings.run_post_tool(fn_name, args, self.workspace_root)
+
+        # ask_user with a positive confirm in plan mode -> switch to normal.
+        if fn_name == "ask_user" and effective_mode == AgentMode.PLAN:
+            if result.startswith("Kullanıcı ONAYLADI"):
+                self.mode = AgentMode.NORMAL
+                effective_mode = AgentMode.NORMAL
+                print_info("Kullanıcı onayladı: plan modundan normal moda geçildi.")
+
+        # A file or command output may still echo a known secret.
+        result = self.vault.mask(result)
+        result = self._after_tool(fn_name, args, result)
+        self._note_read(fn_name, args, result, tc.id)
+        if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
+            self._listing_done = True
+        is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
+        summary = result.splitlines()[0] if result else "Tamamlandı"
+        if fn_name == "todo_write" and not is_err:
+            # The checklist is the point of the tool: show every item,
+            # not just the "Görev listesi (1/3 tamamlandı):" header.
+            summary = result
+        print_tool_result(fn_name, summary, is_error=is_err)
+        self._note_tool_call(fn_name, args, result)
+        self._trace_tool(fn_name, args, t_tool, result)
+        self._tool_reply(tc, fn_name, result)
+        return effective_mode
+
+    def _classify_response(self, response: Any) -> tuple[str, Any, Any]:
+        """Return (kind, message, error) with kind in
+        content_filter | truncated | stalled | ok."""
+        choice = response.choices[0]
+        message = choice.message
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "content_filter":
+            return "content_filter", message, None
+        # A length-limited stream can include incomplete tool arguments.
+        # Never persist or execute that partial call. A finished tool call or
+        # a cut-but-usable answer is progress and must not abort the task.
+        content_text = (message.content or "").strip()
+        tool_calls_now = getattr(message, "tool_calls", None) or []
+        arguments_complete = _tool_arguments_complete(tool_calls_now)
+        if finish_reason == "length" and content_text and not tool_calls_now:
+            return "truncated", message, None
+        stalled = (not arguments_complete) and (
+            finish_reason == "length" or (not content_text and not tool_calls_now)
+        )
+        return ("stalled" if stalled else "ok"), message, None
+
     def _run_steps(
         self,
         max_steps: int,
@@ -1533,136 +1867,12 @@ class AgentSession:
     ) -> str:
         while step_count < max_steps:
             step_count += 1
-            self._step_no = step_count
-            self._sync_window()
-
-            # Compact history before each request so the context budget is
-            # never exceeded (truncate tools -> drop middle -> system+last).
-            output_budget = self.token_manager.resolve_output_budget(
-                self.model, EVREN_DEFAULT_MAX_TOKENS
-            )
-            repeats = max(stalled_steps, text_continuations)
-            if repeats:
-                output_budget = min(output_budget * (2 ** repeats), _stall_token_cap())
-            # Compact early: waiting until the window is completely full makes every
-            # step re-send the whole history, so cost grows quadratically. Compacting
-            # at a fraction of the window keeps the repeated prefix small.
-            compact_limit = self.compaction_limit()
-            if repeats >= 2:
-                # A second stall usually means the context itself is the problem.
-                # Shrinking it first is cheaper than paying for a bigger answer
-                # budget on an oversized prompt.
-                compact_limit = max(1024, compact_limit // 2)
-            before = len(self.messages)
-            self.messages = self.compactor.compact(
-                self.messages, output_budget, max_tokens=compact_limit
-            )
-            if len(self.messages) < before and not self._compaction_notified:
-                self._compaction_notified = True
-                print_info(
-                    f"Bağlam {compact_limit:,} token bütçesini aştı, sıkıştırıldı "
-                    f"({before} mesaj -> {len(self.messages)}). "
-                    "Ayar: EVREN_CONTEXT_BUDGET, EVREN_SMART_COMPACT=false (eski davranış)."
-                )
-
-            status_msg = (
-                f"Model düşünüyor... [{self.model}]"
-                if step_count == 1
-                else f"[Adım {step_count}/{max_steps}] Model analiz ediyor... [{self.model}]"
-            )
-
-            request_started = time.perf_counter()
+            output_budget = self._prepare_request(step_count, stalled_steps, text_continuations)
             try:
-                from src.ui import StatusTracker, HAVE_RICH, console
-                estimated = self.token_manager.estimate_messages(self.messages)
-
-                # Stream the response so the terminal never looks frozen: tokens
-                # (reasoning + content) appear live, then we get an assembled
-                # response object with the full content/tool_calls for the loop.
-                tracker = StatusTracker(status_msg)
-                tracker.__enter__()
-                stream_state = {"first": True, "in_reasoning": False, "in_content": False}
-
-                def _on_reasoning(text: str):
-                    _check_esc()
-                    if stream_state["first"]:
-                        tracker.stop()
-                        stream_state["first"] = False
-                    if not stream_state["in_reasoning"]:
-                        stream_state["in_reasoning"] = True
-                        if stream_state["in_content"]:
-                            print()
-                        if HAVE_RICH and console:
-                            console.print("[bold magenta]💭 Düşünme / Akıl Yürütme:[/bold magenta]")
-                        else:
-                            print("[Düşünme]:")
-                    print_reasoning(text, is_chunk=True)
-
-                def _on_content(text: str):
-                    _check_esc()
-                    if stream_state["first"]:
-                        tracker.stop()
-                        stream_state["first"] = False
-                    if stream_state["in_reasoning"]:
-                        print("\n")
-                        stream_state["in_reasoning"] = False
-                    stream_state["in_content"] = True
-                    # Buffer the deltas; the response is rendered once at the end
-                    # as clean markdown, so raw ** marks never hit the screen.
-                    print_markdown_stream(text)
-
-                try:
-                    # Turn notes go into a transient trailing message, never into the
-                    # system message: the system prefix and the whole history must
-                    # stay byte-identical between steps so the server's prompt cache
-                    # keeps hitting. Nothing is sent on an ordinary step.
-                    step_notes = self._step_notes(step_count, max_steps, stalled_steps)
-                    if self._loop_blocks >= _LOOP_BLOCK_LIMIT:
-                        step_notes = (step_notes + "\n" if step_notes else "") + (
-                            "[EVREN] DÖNGÜ: aynı araç çağrılarını tekrarlıyorsun. Bu tur araç kullanma; "
-                            "şimdiye kadarki bulgularla yapılanı, kalan işi ve tek somut sonraki adımı yaz."
-                        )
-                    if self._listing_done:
-                        step_notes = (step_notes + "\n" if step_notes else "") + (
-                            "[EVREN] Liste kullanıcının terminalinde tam gösterildi. Araç çağırma; "
-                            "tabloyu yeniden yazmadan 1-3 cümlelik kısa özetle bitir."
-                        )
-                    if self._verify_note:
-                        step_notes = (step_notes + "\n" if step_notes else "") + self._verify_note
-                        self._verify_note = ""
-                    outgoing = list(self.messages)
-                    if step_notes:
-                        outgoing.append({"role": "user", "content": step_notes})
-                    response = self.client.chat_stream_assembled(
-                        messages=normalize_chat_messages(outgoing),
-                        model=self.model,
-                        max_tokens=output_budget,
-                        tools=self._filter_delegate_tools(self._agent_tools(
-                            tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools())
-                            + (_ext_schemas(self.workspace_root) if effective_mode == AgentMode.NORMAL else [])
-                        )),
-                        # Same tool list keeps the cached prefix; "none" only forbids calls.
-                        tool_choice="none" if (
-                            self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT
-                        ) else None,
-                        on_reasoning=_on_reasoning,
-                        on_content=_on_content,
-                        # A stall almost always means the hidden reasoning ate the
-                        # budget; retrying with thinking off breaks the loop.
-                        thinking=False if stalled_steps else self._thinking,
-                    )
-                finally:
-                    if stream_state["first"]:
-                        tracker.stop()
-                    if stream_state["in_content"] and markdown_stream_active():
-                        flush_markdown()
-
-                # Calibrate the estimator against server-reported usage.
-                self.token_manager.calibrate_from_response(estimated, response)
-                self._record_usage(response, step=step_count)
-                self._trace_request(response, request_started)
+                response, stream_state = self._stream_model(
+                    step_count, max_steps, effective_mode, stalled_steps, output_budget,
+                )
             except Exception as e:
-                self._trace_request(None, request_started, error=True)
                 if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
                     stalled_steps += 1
                     print_warning(
@@ -1674,28 +1884,13 @@ class AgentSession:
                 print_error(f"Model çağrısı sırasında hata oluştu: {detail}")
                 return f"Hata: {detail}"
 
-            choice = response.choices[0]
-            message = choice.message
-            finish_reason = getattr(choice, "finish_reason", None)
-            if finish_reason == "content_filter":
+            kind, message, _ = self._classify_response(response)
+            if kind == "content_filter":
                 error = "HATA: Model yanıtı içerik filtresi nedeniyle durdu; görev tamamlanmadı."
                 print_error(error)
                 self.messages.append({"role": "assistant", "content": error})
                 return error
-
-            # A length-limited stream can include incomplete tool arguments.
-            # Never persist or execute that partial call. A finished tool call or
-            # a cut-but-usable answer is progress and must not abort the task.
-            content_text = (message.content or "").strip()
-            tool_calls_now = getattr(message, "tool_calls", None) or []
-            arguments_complete = _tool_arguments_complete(tool_calls_now)
-            truncated_answer = (
-                finish_reason == "length" and content_text and not tool_calls_now
-            )
-            stalled = (not arguments_complete) and (
-                finish_reason == "length" or (not content_text and not tool_calls_now)
-            )
-            if truncated_answer:
+            if kind == "truncated":
                 self.messages.append({"role": "assistant", "content": message.content or ""})
                 self.messages.append({
                     "role": "user",
@@ -1709,7 +1904,7 @@ class AgentSession:
                 text_continuations += 1
                 print_warning("Yanıt token sınırında kesildi; kaldığı yerden devam ediliyor.")
                 continue
-            if stalled:
+            if kind == "stalled":
                 stalled_steps += 1
                 if stalled_steps >= _MAX_STALLS:
                     error = (
@@ -1735,186 +1930,16 @@ class AgentSession:
             if reasoning and not stream_state["in_content"] and not stream_state["in_reasoning"]:
                 print_reasoning(reasoning)
 
-            # Check if there are tool calls
             tool_calls = getattr(message, "tool_calls", None)
-
             if tool_calls:
-                # Append assistant message with tool calls
-                assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": (
-                                    tc.function.arguments
-                                    if isinstance(tc.function.arguments, str)
-                                    else json.dumps(tc.function.arguments or {}, ensure_ascii=False)
-                                ),
-                            },
-                        }
-                        for tc in tool_calls
-                    ],
-                }
-                self.messages.append(assistant_msg)
-
+                self.messages.append(self._tool_call_message(message, tool_calls))
                 # Text alongside a tool call was already streamed live; only
                 # render it here if it never came through as stream deltas.
                 if message.content and not stream_state["in_content"]:
                     print_markdown(message.content)
-
                 prefetched = self._prefetch_readonly(tool_calls)
-
-                # Execute each tool call
                 for tc in tool_calls:
-                    fn_name = tc.function.name
-                    t_tool = time.perf_counter()
-                    raw_args = tc.function.arguments
-                    try:
-                        if isinstance(raw_args, dict):
-                            args = raw_args
-                        elif raw_args is None or (isinstance(raw_args, str) and not raw_args.strip()):
-                            args = {}
-                        else:
-                            args = json.loads(raw_args)
-                        if not isinstance(args, dict):
-                            raise ValueError(
-                                f"Araç argümanları bir JSON nesnesi olmalı, gelen tip: "
-                                f"{type(args).__name__}."
-                            )
-                    except (json.JSONDecodeError, TypeError, ValueError) as e:
-                        result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
-                        print_tool_result(fn_name, result, is_error=True)
-                        self._trace_tool(fn_name, {"raw": raw_args}, t_tool, result)
-                        self.messages.append({
-                            "role": "tool", "tool_call_id": tc.id,
-                            "name": fn_name, "content": result,
-                        })
-                        continue
-
-                    print_tool_call(fn_name, args, auto_approved=self.auto_approve)
-
-                    # Mode permission gate: deny disallowed tools with a reason
-                    # the model can react to (instead of executing them).
-                    allowed, deny_reason = check_tool_allowed(fn_name, args, effective_mode)
-                    if not allowed:
-                        result = f"REDDEDİLDİ: {deny_reason}"
-                        print_tool_result(fn_name, deny_reason, is_error=True)
-                        self._trace_tool(fn_name, args, t_tool, result)
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": fn_name,
-                            "content": result,
-                        })
-                        continue
-
-                    # Settings permission rules + pre_tool hooks (src/settings.py).
-                    perm_allow, perm_msg = self._permission_gate(fn_name, args)
-                    if perm_msg:
-                        result = f"REDDEDİLDİ: {perm_msg}"
-                        print_tool_result(fn_name, perm_msg, is_error=True)
-                        self._trace_tool(fn_name, args, t_tool, result)
-                        self.messages.append({
-                            "role": "tool", "tool_call_id": tc.id,
-                            "name": fn_name, "content": result,
-                        })
-                        continue
-
-                    # Delegation is handled by the session itself: it swaps the
-                    # message history and reuses _run_steps, so it must never
-                    # reach the stateless execute_tool_call dispatcher. It sits
-                    # AFTER the mode gate: the sub-agent runs in ASK mode, where
-                    # the gate denies `delegate`, which is what stops recursion.
-                    if fn_name == "delegate":
-                        result = self._run_delegate(
-                            str(args.get("task") or ""), args.get("max_steps"),
-                            args.get("agent"),
-                        )
-                        is_err = result.startswith("HATA:")
-                        summary = (result.splitlines()[0] if result else "Tamamlandı")
-                        print_tool_result(fn_name, summary, is_error=is_err)
-                        self._note_tool_call(fn_name, args, result)
-                        self._trace_tool(fn_name, args, t_tool, result)
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": fn_name,
-                            "content": result,
-                        })
-                        continue
-
-                    blocked = self._repeat_guard(fn_name, args)
-                    if blocked:
-                        print_tool_result(fn_name, "tekrar eden çağrı engellendi", is_error=True)
-                        self._trace_tool(fn_name, args, t_tool, blocked, blocked=True)
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": fn_name,
-                            "content": blocked,
-                        })
-                        continue
-
-                    repeated = self._read_repeat(fn_name, args)
-                    if repeated:
-                        print_tool_result(fn_name, "değişmemiş dosya yeniden okunmadı")
-                        self._note_tool_call(fn_name, args, repeated)
-                        self._trace_tool(fn_name, args, t_tool, repeated)
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": fn_name,
-                            "content": repeated,
-                        })
-                        continue
-
-                    # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
-                    result = prefetched.get(tc.id)
-                    if result is None:
-                        result = execute_tool_call(
-                            name=fn_name,
-                            arguments=args,
-                            workspace_root=self.workspace_root,
-                            auto_approve=self.auto_approve or perm_allow,
-                        )
-                    _settings.set_current(None)
-                    _settings.run_post_tool(fn_name, args, self.workspace_root)
-
-                    # ask_user with a positive confirm in plan mode -> switch to normal.
-                    if fn_name == "ask_user" and effective_mode == AgentMode.PLAN:
-                        if result.startswith("Kullanıcı ONAYLADI"):
-                            self.mode = AgentMode.NORMAL
-                            effective_mode = AgentMode.NORMAL
-                            print_info("Kullanıcı onayladı: plan modundan normal moda geçildi.")
-
-                    # A file or command output may still echo a known secret.
-                    result = self.vault.mask(result)
-                    result = self._after_tool(fn_name, args, result)
-                    self._note_read(fn_name, args, result, tc.id)
-                    if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
-                        self._listing_done = True
-                    is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
-                    summary = result.splitlines()[0] if result else "Tamamlandı"
-                    if fn_name == "todo_write" and not is_err:
-                        # The checklist is the point of the tool: show every item,
-                        # not just the "Görev listesi (1/3 tamamlandı):" header.
-                        summary = result
-                    print_tool_result(fn_name, summary, is_error=is_err)
-                    self._note_tool_call(fn_name, args, result)
-                    self._trace_tool(fn_name, args, t_tool, result)
-
-                    # Add tool response to messages
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": fn_name,
-                        "content": result,
-                    })
-
+                    effective_mode = self._run_one_tool(tc, prefetched, effective_mode)
                 # Loop continues to let the model react to the tool outputs!
                 continue
 

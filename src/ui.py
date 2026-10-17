@@ -307,7 +307,17 @@ def strip_markdown(text: str) -> str:
 # looks frozen until the end. Without rich it is printed line by line with the
 # marks stripped. When stdout is not a terminal (logs, pipes) the whole answer
 # is rendered once at the end.
-_STREAM: dict = {"buffer": [], "live": None, "pending": ""}
+# _STREAM aliases the default session context's dict (back-compat); the
+# functions below go through _stream() so a swapped context is honoured.
+from src.session_context import default_context as _default_context
+
+_STREAM: dict = _default_context().stream
+
+
+def _stream() -> dict:
+    from src.session_context import current
+
+    return current().stream
 
 
 def _stream_to_terminal() -> bool:
@@ -315,36 +325,36 @@ def _stream_to_terminal() -> bool:
 
 
 def print_markdown_stream(chunk: str):
-    """Shows one streamed content delta (see _STREAM for the three modes)."""
-    _STREAM["buffer"].append(chunk)
+    """Shows one streamed content delta (see _stream for the three modes)."""
+    _stream()["buffer"].append(chunk)
     if _stream_to_terminal():
-        if _STREAM["live"] is None:
+        if _stream()["live"] is None:
             from rich.live import Live
 
             live = Live(console=console, refresh_per_second=8, vertical_overflow="visible")
             live.start()
-            _STREAM["live"] = live
-            _STREAM["last"] = 0.0
+            _stream()["live"] = live
+            _stream()["last"] = 0.0
         # Throttle: re-render markdown at most every 120 ms (flush renders the rest).
         import time as _t
         now = _t.monotonic()
-        if now - _STREAM.get("last", 0.0) >= 0.12:
-            _STREAM["last"] = now
-            _STREAM["live"].update(Markdown("".join(_STREAM["buffer"])))
+        if now - _stream().get("last", 0.0) >= 0.12:
+            _stream()["last"] = now
+            _stream()["live"].update(Markdown("".join(_stream()["buffer"])))
     elif not HAVE_RICH:
-        _STREAM["pending"] += chunk
-        while "\n" in _STREAM["pending"]:
-            line, _STREAM["pending"] = _STREAM["pending"].split("\n", 1)
+        _stream()["pending"] += chunk
+        while "\n" in _stream()["pending"]:
+            line, _stream()["pending"] = _stream()["pending"].split("\n", 1)
             print(strip_markdown(line), flush=True)
 
 
 def flush_markdown():
     """Finishes a streamed answer in whichever mode it was shown."""
-    if not _STREAM["buffer"]:
+    if not _stream()["buffer"]:
         return
-    content = "".join(_STREAM["buffer"])
-    live, pending = _STREAM["live"], _STREAM["pending"]
-    _STREAM.update(buffer=[], live=None, pending="")
+    content = "".join(_stream()["buffer"])
+    live, pending = _stream()["live"], _stream()["pending"]
+    _stream().update(buffer=[], live=None, pending="")
     if live is not None:
         live.update(Markdown(content))
         live.stop()
@@ -356,7 +366,7 @@ def flush_markdown():
 
 def markdown_stream_active() -> bool:
     """True while a streamed answer has not been finished yet."""
-    return bool(_STREAM["buffer"])
+    return bool(_stream()["buffer"])
 
 
 def print_reasoning(text: str, is_chunk: bool = False):

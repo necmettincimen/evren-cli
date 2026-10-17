@@ -104,14 +104,14 @@ class SecretVault:
         )
 
 
-_ACTIVE = SecretVault()
-
-
 def active_vault() -> SecretVault:
     """The vault of the running agent session (tools read it at execution)."""
-    return _ACTIVE
+    from src.session_context import current
+
+    return current().vault
 
 
 def set_active_vault(vault: SecretVault) -> None:
-    global _ACTIVE
-    _ACTIVE = vault
+    from src.session_context import current
+
+    current().vault = vault
