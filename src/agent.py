@@ -416,6 +416,13 @@ class AgentSession:
         except Exception:
             pass
         try:
+            from src.agent_library import agent_context_block
+            ag = agent_context_block(self.workspace_root)
+            if ag:
+                blocks.append(ag)
+        except Exception:
+            pass
+        try:
             from src.language import language_context_block
             lang = language_context_block(self.workspace_root)
             if lang:
@@ -423,6 +430,18 @@ class AgentSession:
         except Exception:
             pass
         return base.rstrip() + "\n\n" + "\n\n".join(blocks)
+
+    def _agent_tools(self, tools: list[dict]) -> list[dict]:
+        """Restricts advertised tools to the main agent's list (if set)."""
+        try:
+            from src.agent_library import active_agent
+            ag = active_agent(self.workspace_root)
+        except Exception:
+            return tools
+        if not ag or not ag.tools:
+            return tools
+        allowed = set(ag.tools)
+        return [t for t in tools if (t.get("function") or {}).get("name") in allowed] or tools
 
     def refresh_context(self):
         """Rebuilds the system prompt from base + memory + language blocks."""
@@ -1501,9 +1520,9 @@ class AgentSession:
                         messages=normalize_chat_messages(outgoing),
                         model=self.model,
                         max_tokens=output_budget,
-                        tools=self._filter_delegate_tools(
+                        tools=self._filter_delegate_tools(self._agent_tools(
                             tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools())
-                        ),
+                        )),
                         # Same tool list keeps the cached prefix; "none" only forbids calls.
                         tool_choice="none" if (
                             self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT

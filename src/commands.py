@@ -71,6 +71,9 @@ COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "/rewind": (),
     "/doctor": (),
     "/rol": (),
+    "/agent": (),
+    "/agents": (),
+    "/team": (),
 }
 
 # Legacy (Foreman-era) commands: still working, listed only under "/help legacy".
