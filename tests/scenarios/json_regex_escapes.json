@@ -1,0 +1,87 @@
+{
+  "name": "json_regex_escapes",
+  "description": "Backslashes and regex escapes survive the whole write path byte for byte: tool-call arguments (JSON on the wire) -> normalisation -> write_file / edit_file -> disk, for a .py file, a .json file and an edited .py file, and the automatic syntax/JSON check stays quiet. Old bug: escapes were corrupted on the way (a regex word boundary written as backslash-b turned into a backspace control character, JSON escapes broke), leaving unimportable files that only failed later.",
+  "workspace_files": {
+    "regex_util.py": "import re\n\nPATTERN = re.compile(r\"\\d+\")\n\n\ndef find(text):\n    return PATTERN.findall(text)\n"
+  },
+  "user_inputs": [
+    "Regex içeren dosyaları yaz ve düzenle."
+  ],
+  "approvals": [
+    "y",
+    "y",
+    "y"
+  ],
+  "model_replies": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "patterns.py",
+            "content": "import re\n\n# Regex escapes must reach the disk byte for byte.\nWORD = re.compile(r\"\\bfoo\\b\")\nWINDOWS_PATH = re.compile(r\"C:\\\\Users\\\\[^\\]+\\\\\\.evren\")\nDIGITS = re.compile(r\"\\d{3}-\\d{4}\")\nTAB_AND_NEWLINE = \"a\\tb\\n\"\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "config.json",
+            "content": "{\n  \"pattern\": \"\\\\bfoo\\\\d+\\\\.txt\",\n  \"path\": \"C:\\\\\\\\Users\\\\\\\\demo\",\n  \"tab\": \"a\\tb\"\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "edit_file",
+          "arguments": {
+            "path": "regex_util.py",
+            "target_snippet": "PATTERN = re.compile(r\"\\d+\")",
+            "replacement_snippet": "PATTERN = re.compile(r\"\\b\\d{3}-\\d{4}\\b\")"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Üç dosya yazıldı; sözdizimi denetimi temiz."
+    }
+  ],
+  "expect": {
+    "executed_tools": [
+      "write_file",
+      "write_file",
+      "edit_file"
+    ],
+    "confirm_prompts": 3,
+    "request_count": 4,
+    "files": {
+      "patterns.py": {
+        "equals": "import re\n\n# Regex escapes must reach the disk byte for byte.\nWORD = re.compile(r\"\\bfoo\\b\")\nWINDOWS_PATH = re.compile(r\"C:\\\\Users\\\\[^\\]+\\\\\\.evren\")\nDIGITS = re.compile(r\"\\d{3}-\\d{4}\")\nTAB_AND_NEWLINE = \"a\\tb\\n\"\n",
+        "no_control_chars": true
+      },
+      "config.json": {
+        "equals": "{\n  \"pattern\": \"\\\\bfoo\\\\d+\\\\.txt\",\n  \"path\": \"C:\\\\\\\\Users\\\\\\\\demo\",\n  \"tab\": \"a\\tb\"\n}\n",
+        "no_control_chars": true
+      },
+      "regex_util.py": {
+        "equals": "import re\n\nPATTERN = re.compile(r\"\\b\\d{3}-\\d{4}\\b\")\n\n\ndef find(text):\n    return PATTERN.findall(text)\n",
+        "no_control_chars": true
+      }
+    },
+    "messages_contain": [
+      "BAŞARILI: 'patterns.py'",
+      "BAŞARILI: 'config.json'",
+      "BAŞARILI: 'regex_util.py'"
+    ],
+    "messages_not_contain": [
+      "SÖZDİZİMİ HATASI",
+      "JSON HATASI"
+    ],
+    "final_contains": "temiz"
+  }
+}

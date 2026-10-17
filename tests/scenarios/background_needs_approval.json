@@ -1,0 +1,26 @@
+{
+  "name": "background_needs_approval",
+  "description": "run_command with run_in_background=true asks for approval exactly like a foreground command when auto-approve is off (the harness forces EVREN_AUTO_APPROVE=false whatever the developer's .env says). A refused job never starts (the next accepted one is bg-1). Old bug: the background path skipped the approval prompt, so a command still ran without asking.",
+  "user_inputs": ["Arka planda iki betik başlat."],
+  "approvals": ["n", "y"],
+  "model_replies": [
+    {"tool_calls": [{"name": "run_command", "arguments": {
+      "command": "print('SHOULD_NOT_' + 'RUN')", "use_python": true, "run_in_background": true}}]},
+    {"tool_calls": [{"name": "run_command", "arguments": {
+      "command": "print('BG_' + 'OK')", "use_python": true, "run_in_background": true}}]},
+    {"tool_calls": [{"name": "check_background", "arguments": {"id": "bg-1", "wait_seconds": 30}}]},
+    {"content": "Reddedilen betik çalışmadı, onaylanan betik tamamlandı."}
+  ],
+  "expect": {
+    "executed_tools": ["run_command", "run_command", "check_background"],
+    "confirm_prompts": 2,
+    "request_count": 4,
+    "messages_contain": [
+      "arka plan komutunun çalıştırılmasını reddetti",
+      "Arka plan komutu başlatıldı (id: bg-1)",
+      "BG_OK"
+    ],
+    "messages_not_contain": ["SHOULD_NOT_RUN"],
+    "final_contains": "tamamlandı"
+  }
+}

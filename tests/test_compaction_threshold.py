@@ -53,7 +53,7 @@ class CompactionLimitTest(unittest.TestCase):
             self.session = AgentSession(MagicMock(default_model="m"), workspace_root=Path(self._tmp.name))
 
     def test_limit_is_a_fraction_of_the_window(self):
-        with patch.dict(os.environ, {"EVREN_COMPACT_RATIO": "0.5"}):
+        with patch.dict(os.environ, {"EVREN_COMPACT_RATIO": "0.5", "EVREN_CONTEXT_BUDGET": "2000000"}):
             self.assertEqual(self.session.compaction_limit(), int(DEFAULT_CONTEXT_WINDOW * 0.5))
 
     def test_limit_never_drops_below_one_k(self):

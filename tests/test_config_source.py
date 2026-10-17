@@ -67,7 +67,7 @@ class ConfigSourceReportTest(unittest.TestCase):
         self.assertEqual(report["key_count"], 2)
 
     def test_report_never_contains_key_values(self):
-        secret = "evren_llm_SAKLIDEGER123"
+        secret = "evren_llm_SAKLIDEGER123"  # check_text: ignore
         self.config_path.write_text(json.dumps({"ApiKeys": [secret]}), encoding="utf-8")
         report = self.report(LEGACY_KEYS_USED=1, EVREN_API_KEY=secret)
         dumped = json.dumps(report, ensure_ascii=False)
@@ -86,7 +86,7 @@ class ConfigSourceReportTest(unittest.TestCase):
 
 class BannerSourceTest(unittest.TestCase):
     def test_banner_prints_paths_without_key_values(self):
-        secret = "evren_llm_GIZLIDEGERSAKLA"
+        secret = "evren_llm_GIZLIDEGERSAKLA"  # check_text: ignore
         info = {
             "env_file": r"C:\proje\.env",
             "config_json": r"C:\Users\test\.evren-cli\config.json",

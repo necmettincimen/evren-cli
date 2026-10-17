@@ -12,7 +12,7 @@ from src.api_key_pool import (
 
 class TestMaskKey(unittest.TestCase):
     def test_mask_long_key(self):
-        masked = mask_key("evren_llm_abcdefghijklmnop")
+        masked = mask_key("evren_llm_abcdefghijklmnop")  # check_text: ignore
         self.assertTrue(masked.startswith("evren_llm_"))
         self.assertIn("...", masked)
         self.assertNotIn("abcdefghijklmnop", masked)

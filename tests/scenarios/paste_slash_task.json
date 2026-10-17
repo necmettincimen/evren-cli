@@ -1,0 +1,23 @@
+{
+  "name": "paste_slash_task",
+  "description": "Known-open bug (plan item 6.1): a pasted build-error line that starts with '/' (e.g. '/src/App.csproj : error CS0246 ...') is taken for a slash command and rejected with 'Bilinmeyen komut', so the model never sees the task. Expected behaviour: input is a command only when its first word is a registered command; anything else is a task. Fixed in 6.1 (src/commands.py).",
+  "kind": "repl",
+  "user_inputs": [
+    "/src/App.csproj : error CS0246: The type or namespace name 'Foo' could not be found",
+    "/exit"
+  ],
+  "model_replies": [
+    {
+      "content": "CS0246: eksik using veya paket referansı."
+    }
+  ],
+  "expect": {
+    "request_count": 1,
+    "stdout_not_contains": [
+      "Bilinmeyen komut"
+    ],
+    "stdout_contains": [
+      "eksik using veya paket referansı"
+    ]
+  }
+}

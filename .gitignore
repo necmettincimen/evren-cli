@@ -61,3 +61,7 @@ htmlcov/
 
 # Local reference clones
 .foreman_ref/
+
+# Bench sonuçları (scripts/bench.py); taban çizgisini saklamak için: git add -f
+bench/results/*
+!bench/results/.gitkeep

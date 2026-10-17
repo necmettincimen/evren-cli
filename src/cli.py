@@ -215,10 +215,12 @@ def cmd_agent(args):
     print_info(f"Otonom ajan başlatılıyor • {session.model} • {Path(workspace).name or workspace}")
     try:
         if frame.is_empty():
-            session.run_step(prompt, max_steps=args.max_steps)
+            session.run_step(prompt, max_steps=args.max_steps, compact=True)
         else:
             print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(frame)}")
-            session.run_step(session.apply_frame(frame, extra=prompt), max_steps=args.max_steps)
+            session.run_step(
+                session.apply_frame(frame, extra=prompt), max_steps=args.max_steps, compact=True,
+            )
     finally:
         # One-shot mode must not leave background command trees orphaned.
         try:
@@ -285,6 +287,14 @@ def cmd_docs(args):
     )
     print(f"  • CLI belgeleri : {cli_docs_dir()}")
     print(f"  • Token bütçesi : {status['token_budget']}")
+
+
+def cmd_debug(args):
+    """Debug helpers; `debug last` prints the step table of the last agent task."""
+    from src.trace import print_last_task
+
+    workspace = get_workspace_dir(getattr(args, "workspace", None))
+    print_last_task(workspace, getattr(args, "task", 1))
 
 
 def cmd_scan(args):
@@ -469,6 +479,16 @@ def main():
         help=f"Kullanılacak EVREN modeli (varsayılan: {EVREN_DEFAULT_MODEL})",
     )
 
+    parser.add_argument(
+        "-p", "--print", dest="print_prompt", metavar="İSTEK",
+        help="Başsız (headless) kip: tek görevi çalıştırıp çık",
+    )
+    parser.add_argument(
+        "--output", choices=("text", "json"), default="text",
+        help="Başsız kip çıktı biçimi (json: sonuç, değişen dosyalar, token, çıkış kodu)",
+    )
+    parser.add_argument("--max-steps", type=int, default=None, help="Başsız kip adım tavanı")
+
     _add_backup_arg(parser)
 
     subparsers = parser.add_subparsers(dest="subcommand")
@@ -557,6 +577,18 @@ def main():
     )
     p_docs.set_defaults(func=cmd_docs)
 
+    # debug command (task trace: .evren/logs/trace.jsonl)
+    p_debug = subparsers.add_parser("debug", help="Hata ayıklama araçları (görev izi)")
+    debug_sub = p_debug.add_subparsers(dest="debug_action")
+    p_debug_last = debug_sub.add_parser(
+        "last", help="Son ajan görevinin adım tablosunu göster (istek, araç, süre, token)"
+    )
+    p_debug_last.add_argument(
+        "--task", "-n", type=int, default=1, metavar="N",
+        help="Sondan N. görevi göster (varsayılan: 1 = son görev)",
+    )
+    p_debug.set_defaults(func=cmd_debug, debug_action="last", task=1)
+
     # ssh command
     p_ssh = subparsers.add_parser("ssh", help="Kayıtlı SSH host'larını yönet ve kullan")
     ssh_sub = p_ssh.add_subparsers(dest="ssh_action")
@@ -581,6 +613,11 @@ def main():
     p_ssh.set_defaults(func=cmd_ssh, ssh_action="list")
 
     args = parser.parse_args()
+
+    if args.print_prompt and not args.subcommand:
+        from src.extras import run_headless
+
+        sys.exit(run_headless(args))
 
     # If no subcommand provided, start interactive REPL (TUI mode)
     if not args.subcommand:
