@@ -195,7 +195,7 @@ _load_legacy_evren_cli_config()
 # Core EVREN API Configuration
 EVREN_API_KEY = os.getenv("EVREN_API_KEY", "")
 EVREN_BASE_URL = os.getenv("EVREN_BASE_URL", "https://evren-llmapi.ssyz.org.tr/v1").rstrip("/")
-EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "qwen3.8-flash-next")
+EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "deepseek-v4.1-flash")
 EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
