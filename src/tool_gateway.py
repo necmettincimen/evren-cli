@@ -29,13 +29,11 @@ from src.modes import AgentMode
 # "REDDEDİLDİ" while the prompt told it to ask.
 # `todo_write` only mutates the in-memory session checklist (never workspace
 # files), so it is treated like `ask_user`: allowed in every mode.
-READ_ONLY_TOOLS = {
-    "view_file", "list_directory", "find_files", "ssh_list_hosts", "ssh_read_file", "ask_user",
-    "todo_write", "web_fetch", "check_background",
-}
+from src.tool_registry import READ_ONLY as _REG_RO, WRITE as _REG_WRITE
+READ_ONLY_TOOLS = set(_REG_RO)
 
 # Tools that write to source files (local or remote).
-WRITE_TOOLS = {"write_file", "edit_file", "ssh_write_file"}
+WRITE_TOOLS = set(_REG_WRITE)
 
 # The plan-writing tool (writes only under plans/<name>/plan.md).
 PLAN_TOOLS = {"create_plan"}

@@ -274,9 +274,8 @@ def command_may_modify_files(command: str) -> bool:
 
 
 # Tools whose repeated identical calls are legitimate (polling, user turns).
-_REPEAT_EXEMPT_TOOLS = frozenset({
-    "check_background", "stop_background", "ask_user", "todo_write", "delegate",
-})
+from src.tool_registry import REPEAT_EXEMPT as _REG_REPEAT
+_REPEAT_EXEMPT_TOOLS = frozenset(_REG_REPEAT | {"stop_background"})
 # Blocked/flagged repeats after which the next turn must answer without tools.
 _LOOP_BLOCK_LIMIT = 3
 
@@ -1085,7 +1084,19 @@ class AgentSession:
     _DELEGATE_DEFAULT_STEPS = 6
     _DELEGATE_MAX_STEPS = 12
 
-    def _run_delegate(self, task: str, max_steps: int | None = None) -> str:
+    _delegate_tools: "set[str] | None" = None
+
+    def _filter_delegate_tools(self, schemas: list) -> list:
+        """Restricts advertised tools while a sub-agent with a tool list runs."""
+        allowed = self._delegate_tools
+        if allowed is None:
+            return schemas
+        return [t for t in schemas
+                if t.get("function", {}).get("name") in allowed
+                and t.get("function", {}).get("name") != "delegate"]
+
+    def _run_delegate(self, task: str, max_steps: int | None = None,
+                      agent: str | None = None) -> str:
         """Runs an independent research sub-task in a clean, read-only session.
 
         Reuses the existing `_run_steps` loop (same pattern as `_plan_phase`):
@@ -1103,18 +1114,45 @@ class AgentSession:
             steps = int(max_steps) if max_steps not in (None, "") else self._DELEGATE_DEFAULT_STEPS
         except (TypeError, ValueError):
             steps = self._DELEGATE_DEFAULT_STEPS
+        # Optional agent definition (9.2/9.3); "researcher" = legacy read-only.
+        agent_name = (agent or "").strip() or "researcher"
+        adef = None
+        if agent_name != "researcher":
+            try:
+                from src.agent_library import get_agent
+
+                adef = get_agent(agent_name, self.workspace_root)
+            except Exception:
+                adef = None
+            if adef is None:
+                return f"HATA: delegate için '{agent_name}' adlı alt ajan bulunamadı."
+            if max_steps in (None, "") and getattr(adef, "max_steps", None):
+                steps = int(adef.max_steps)
         steps = max(1, min(self._DELEGATE_MAX_STEPS, steps))
+        allowed_tools = None
+        if adef is not None and adef.tools is not None:
+            # def.tools ∩ tools the parent's ASK-level sub-run permits; never delegate.
+            allowed_tools = {t for t in adef.tools if t != "delegate"}
+        instruction = _DELEGATE_INSTRUCTION.format(task=task)
+        if adef is not None and getattr(adef, "prompt", ""):
+            instruction = f"{adef.prompt}\n\n{instruction}"
 
         saved = (self.messages, self.model, self._thinking, self.pending_mode,
                  self.task_goal, self._compaction_notified, self._listing_done)
         self.messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": _DELEGATE_INSTRUCTION.format(task=task)},
+            {"role": "user", "content": instruction},
         ]
-        print_info(f"Alt ajan ({steps} adım, salt-okuma): {task[:100]}")
+        if adef is not None and getattr(adef, "model", None):
+            self.model = adef.model
+        if adef is not None and getattr(adef, "thinking", None) is not None:
+            self._thinking = adef.thinking
+        self._delegate_tools = allowed_tools
+        print_info(f"Alt ajan {agent_name} ({steps} adım, salt-okuma): {task[:100]}")
         try:
             result = self._run_steps(steps, AgentMode.ASK, 0, 0, 0)
         finally:
+            self._delegate_tools = None
             (self.messages, self.model, self._thinking, self.pending_mode,
              self.task_goal, self._compaction_notified, self._listing_done) = saved
         text = (result or "").strip()
@@ -1463,7 +1501,9 @@ class AgentSession:
                         messages=normalize_chat_messages(outgoing),
                         model=self.model,
                         max_tokens=output_budget,
-                        tools=tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools()),
+                        tools=self._filter_delegate_tools(
+                            tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools())
+                        ),
                         # Same tool list keeps the cached prefix; "none" only forbids calls.
                         tool_choice="none" if (
                             self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT
@@ -1641,6 +1681,7 @@ class AgentSession:
                     if fn_name == "delegate":
                         result = self._run_delegate(
                             str(args.get("task") or ""), args.get("max_steps"),
+                            args.get("agent"),
                         )
                         is_err = result.startswith("HATA:")
                         summary = (result.splitlines()[0] if result else "Tamamlandı")
