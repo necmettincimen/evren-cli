@@ -286,7 +286,7 @@ _ASKS_APPROVAL_RE = re.compile(
     r"|onay\s+bekliyorum|onayl[ıi]yor\s+musun)"
 )
 _IMPERATIVE_RE = re.compile(
-    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır)(?!me\b|ma\b|meyin|mayın)\w*"
+    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz)(?!me\b|ma\b|meyin|mayın)\w*"
 )
 # Same command family (pytest, dotnet test...) runs allowed between writes.
 _FAMILY_RUN_LIMIT = 4
@@ -1714,7 +1714,13 @@ class AgentSession:
         except Exception:
             open_items = []
         if not open_items:
-            # No plan: a vague request that only measures. Nudge to conclude.
+            # No plan. A create/change task that keeps exploring (a Dockerfile
+            # task read 15 files first) gets "write now"; others "conclude".
+            if _IMPERATIVE_RE.search(self.task_goal or "") and self._idle_steps in (6, 10):
+                return (
+                    f"[EVREN] İLERLEME YOK: {self._idle_steps} adımdır dosya değişmedi. Keşif yeterli; "
+                    "istenen dosyayı/değişikliği şimdi yaz (write_file/edit_file), eksik ayrıntıyı varsayımla doldur."
+                )
             if self._idle_steps in (8, 14):
                 return (
                     f"[EVREN] İLERLEME YOK: {self._idle_steps} adımdır hiçbir dosya değişmedi. Analiz yeterli: "
