@@ -447,6 +447,10 @@ TOOLS_SCHEMA = [
                         "type": "integer",
                         "description": "Azami adım (varsayılan 6, en çok 12)",
                     },
+                    "agent": {
+                        "type": "string",
+                        "description": "Alt ajan tanımı adı (varsayılan: researcher, salt-okuma)",
+                    },
                 },
                 "required": ["task"],
             },
@@ -464,8 +468,9 @@ TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
 # `delegate` is also hidden in ask/plan: the sub-agent runs in ASK mode, so an
 # advertised schema there would only invite recursive delegation attempts that
 # the gateway denies anyway.
-ASK_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
-PLAN_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
+from src.tool_registry import ASK_HIDDEN as _REG_ASK_HIDDEN, PLAN_HIDDEN as _REG_PLAN_HIDDEN
+ASK_HIDDEN_TOOLS = set(_REG_ASK_HIDDEN)
+PLAN_HIDDEN_TOOLS = set(_REG_PLAN_HIDDEN)
 
 SSH_TOOL_NAMES = {"ssh_list_hosts", "ssh_run", "ssh_read_file", "ssh_write_file"}
 
@@ -543,6 +548,44 @@ def _is_probe_target(target: object) -> bool:
     return isinstance(target, str) and bool(_PROBE_TARGET_RE.match(target))
 
 
+def request_approval(kind: str, auto_approve: bool = False, **info) -> str | None:
+    """Central approval gate for every tool that needs user consent.
+
+    Returns None when approved (or auto-approved), otherwise the refusal text
+    the tool must return to the model.
+    """
+    if auto_approve or EVREN_AUTO_APPROVE:
+        return None
+    if kind == "edit":
+        ok = prompt_confirm(f"'{info['path']}' dosyasındaki değişiklik uygulansın mı?", default=True)
+        deny = "İPTAL EDİLDİ: Kullanıcı bu değişikliği onaylamadı. Lütfen aynı değişikliği tekrar denemeyin ve kullanıcıya ne yapmak istediğini sorun."
+    elif kind == "write":
+        ok = prompt_confirm(f"'{info['path']}' dosyası {info['action']} mı?", default=True)
+        deny = "İPTAL EDİLDİ: Kullanıcı dosya yazma işlemini onaylamadı. Lütfen aynı işlemi tekrar denemeyin."
+    elif kind == "command":
+        print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {info['shown']}")
+        ok = prompt_confirm("Bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
+        deny = "İPTAL EDİLDİ: Kullanıcı terminal komutunun çalıştırılmasını reddetti."
+    elif kind == "background":
+        print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {info['shown']}")
+        ok = prompt_confirm("Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?", default=False)
+        deny = "İPTAL EDİLDİ: Kullanıcı arka plan komutunun çalıştırılmasını reddetti."
+    elif kind == "plan":
+        ok = prompt_confirm(f"'{info['path']}' planı kaydedilsin mi?", default=True)
+        deny = "İPTAL EDİLDİ: Kullanıcı plan kaydını onaylamadı."
+    elif kind == "ssh_run":
+        print_warning(f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{info['alias']}] > {info['shown']}")
+        ok = prompt_confirm(f"'{info['alias']}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
+        deny = "İPTAL EDİLDİ: Kullanıcı uzak komutun çalıştırılmasını reddetti."
+    elif kind == "ssh_write":
+        print_warning(f"Ajan uzak sunucuda dosya yazmak istiyor:\n  [{info['alias']}] > {info['remote_path']} ({info['size']} karakter)")
+        ok = prompt_confirm(f"'{info['alias']}:{info['remote_path']}' uzak dosyası yazılsın mı?", default=False)
+        deny = "İPTAL EDİLDİ: Kullanıcı uzak dosya yazma işlemini onaylamadı."
+    else:
+        return None
+    return None if ok else deny
+
+
 def tool_edit_file(
     path: str,
     target_snippet: str = "",
@@ -602,10 +645,9 @@ def tool_edit_file(
     print_diff(diff, filename=path)
 
     # Prompt user for confirmation unless auto_approve
-    if not (auto_approve or EVREN_AUTO_APPROVE):
-        approved = prompt_confirm(f"'{path}' dosyasındaki değişiklik uygulansın mı?", default=True)
-        if not approved:
-            return "İPTAL EDİLDİ: Kullanıcı bu değişikliği onaylamadı. Lütfen aynı değişikliği tekrar denemeyin ve kullanıcıya ne yapmak istediğini sorun."
+    denied = request_approval("edit", auto_approve, path=path)
+    if denied:
+        return denied
 
     write_ok, backup_path, write_err = safe_write_file(
         path, new_content, root, preserve_meta=meta
@@ -635,11 +677,10 @@ def tool_write_file(
     else:
         print_info(f"Yeni dosya oluşturuluyor: {path} ({len(content)} karakter)")
 
-    if not (auto_approve or EVREN_AUTO_APPROVE):
-        action_name = "üzerine yazılsın" if resolved.exists() else "oluşturulsun"
-        approved = prompt_confirm(f"'{path}' dosyası {action_name} mı?", default=True)
-        if not approved:
-            return "İPTAL EDİLDİ: Kullanıcı dosya yazma işlemini onaylamadı. Lütfen aynı işlemi tekrar denemeyin."
+    action_name = "üzerine yazılsın" if resolved.exists() else "oluşturulsun"
+    denied = request_approval("write", auto_approve, path=path, action=action_name)
+    if denied:
+        return denied
 
     write_ok, backup_path, write_err = safe_write_file(path, content, root)
     if not write_ok:
@@ -891,11 +932,9 @@ def tool_run_command(
     # The model only ever sees placeholders; the real secret is inserted here
     # and never printed. With auto-approve on, the single ⚡ tool-call line is
     # the whole announcement; the warning is only for real confirmation prompts.
-    if not (auto_approve or EVREN_AUTO_APPROVE):
-        print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
-        approved = prompt_confirm("Bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
-        if not approved:
-            return "İPTAL EDİLDİ: Kullanıcı terminal komutunun çalıştırılmasını reddetti."
+    denied = request_approval("command", auto_approve, shown=vault.mask(command))
+    if denied:
+        return denied
 
     try:
         # stream_with_tree_kill yields output lines live (so the user can watch
@@ -959,11 +998,9 @@ def _start_background_command(
     from src.secret_vault import active_vault
 
     vault = active_vault()
-    if not (auto_approve or EVREN_AUTO_APPROVE):
-        print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {vault.mask(command)}")
-        approved = prompt_confirm("Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?", default=False)
-        if not approved:
-            return "İPTAL EDİLDİ: Kullanıcı arka plan komutunun çalıştırılmasını reddetti."
+    denied = request_approval("background", auto_approve, shown=vault.mask(command))
+    if denied:
+        return denied
     try:
         argv, use_shell = _command_argv(vault.expand(command), use_powershell, use_python)
     except MultilineShellCommand as e:
@@ -1063,10 +1100,9 @@ def tool_create_plan(
     else:
         print_info(f"Yeni plan oluşturuluyor: {rel_path}")
 
-    if not (auto_approve or EVREN_AUTO_APPROVE):
-        approved = prompt_confirm(f"'{rel_path}' planı kaydedilsin mi?", default=True)
-        if not approved:
-            return "İPTAL EDİLDİ: Kullanıcı plan kaydını onaylamadı."
+    denied = request_approval("plan", auto_approve, path=rel_path)
+    if denied:
+        return denied
 
     write_ok, backup_path, write_err = safe_write_file(rel_path, content, root)
     if not write_ok:
@@ -1268,16 +1304,9 @@ def execute_tool_call(
             if not command.strip():
                 return "HATA: ssh_run için 'command' veya 'preset' gerekli."
             shown = vault.mask(command)
-        if not (auto_approve or EVREN_AUTO_APPROVE):
-            print_warning(
-                f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{alias}] > {shown}"
-            )
-            approved = prompt_confirm(
-                f"'{alias}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?",
-                default=False,
-            )
-            if not approved:
-                return "İPTAL EDİLDİ: Kullanıcı uzak komutun çalıştırılmasını reddetti."
+        denied = request_approval("ssh_run", auto_approve, alias=alias, shown=shown)
+        if denied:
+            return denied
         return vault.mask(ssh_run(
             alias=alias,
             command=vault.expand(command),
@@ -1296,14 +1325,10 @@ def execute_tool_call(
         alias = arguments.get("alias", "")
         remote_path = arguments.get("remote_path", "")
         content = arguments.get("content", "")
-        if not (auto_approve or EVREN_AUTO_APPROVE):
-            print_warning(f"Ajan uzak sunucuda dosya yazmak istiyor:\n  [{alias}] > {remote_path} ({len(content)} karakter)")
-            approved = prompt_confirm(
-                f"'{alias}:{remote_path}' uzak dosyası yazılsın mı?",
-                default=False,
-            )
-            if not approved:
-                return "İPTAL EDİLDİ: Kullanıcı uzak dosya yazma işlemini onaylamadı."
+        denied = request_approval("ssh_write", auto_approve, alias=alias,
+                                  remote_path=remote_path, size=len(content))
+        if denied:
+            return denied
         return ssh_write_file(
             alias=alias,
             remote_path=remote_path,
