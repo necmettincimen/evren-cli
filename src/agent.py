@@ -1253,6 +1253,10 @@ class AgentSession:
             self.model = adef.model
         if adef is not None and getattr(adef, "thinking", None) is not None:
             self._thinking = adef.thinking
+        elif not executor_thinking():
+            # Default researcher: read-only digging needs no hidden reasoning
+            # (its sub-requests took 13-24 s each for ~150 output tokens).
+            self._thinking = False
         self._delegate_tools = allowed_tools
         print_info(f"Alt ajan {agent_name} ({steps} adım, salt-okuma): {task[:100]}")
         try:
