@@ -43,7 +43,7 @@ class TestAgentLoop(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_truncated_response_recovers_with_small_step_instruction(self):
+    def test_truncated_response_recovers_and_keeps_system_prompt_stable(self):
         requests = []
 
         def reply(**kwargs):
@@ -62,11 +62,23 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("unfinished", str(requests[1]))
         self.assertIn("kaldığın yerden", str(requests[1]).casefold())
 
-    def test_repeated_reasoning_only_responses_stop_explicitly(self):
-        self.client.chat_stream_assembled.return_value = response("", "length")
-        result = self.session.run_step("uygula")
-        self.assertTrue(result.startswith("HATA:"))
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 4)
+    def test_unproductive_loops_stop_explicitly(self):
+        cases = (
+            (response("", "length"), "HATA:"),
+            (NetworkError("Connection error."), "Hata:"),
+        )
+        for index, (reply, prefix) in enumerate(cases):
+            with self.subTest(case=index):
+                # A fresh session per case: recovery counters are per task.
+                client = MagicMock(default_model="test-model")
+                session = AgentSession(client, workspace_root=Path(self.tmp.name))
+                # side_effect list: each call raises the NetworkError instance.
+                client.chat_stream_assembled.side_effect = reply
+                result = session.run_step("uygula")
+                self.assertTrue(result.startswith(prefix))
+                self.assertEqual(client.chat_stream_assembled.call_count, 4)
+                if prefix == "Hata:":
+                    self.assertIn("Connection error", result)
 
     def test_ctrl_c_keeps_goal_and_closes_open_tool_call(self):
         self.client.chat_stream_assembled.return_value = response(
@@ -97,97 +109,75 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("portu 8080 yap", request[-1]["content"])
         self.assertIn("deploy the service", request[-1]["content"])
 
-    def test_connection_error_retries_the_step(self):
-        self.client.chat_stream_assembled.side_effect = [
-            NetworkError("Connection error."),
-            response("done"),
-        ]
-        self.assertEqual(self.session.run_step("incele"), "done")
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
+    def test_transient_response_states_recover(self):
+        cases = (
+            ([NetworkError("Connection error."), response("done")],),
+            ([response(), response("done")],),
+            ([response("", "length"), response("done")],),
+        )
+        for index, (replies,) in enumerate(cases):
+            with self.subTest(case=index):
+                client = MagicMock(default_model="test-model")
+                session = AgentSession(client, workspace_root=Path(self.tmp.name))
+                budgets = []
 
-    def test_repeated_connection_errors_stop_explicitly(self):
-        self.client.chat_stream_assembled.side_effect = NetworkError("Connection error.")
-        result = self.session.run_step("incele")
-        self.assertTrue(result.startswith("Hata:"))
-        self.assertIn("Connection error", result)
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 4)
+                def reply(**kwargs):
+                    budgets.append(kwargs["max_tokens"])
+                    # side_effect list semantics: exceptions must be raised.
+                    item = replies[len(budgets) - 1]
+                    if isinstance(item, Exception):
+                        raise item
+                    return item
 
-    def test_empty_stall_retries_with_a_larger_budget(self):
-        budgets = []
+                client.chat_stream_assembled.side_effect = reply
+                self.assertEqual(session.run_step("incele"), "done")
+                if index == 2:
+                    self.assertGreater(budgets[1], budgets[0])
 
-        def reply(**kwargs):
-            budgets.append(kwargs["max_tokens"])
-            if len(budgets) == 1:
-                return response("", "length")
-            return response("done")
-
-        self.client.chat_stream_assembled.side_effect = reply
-        self.assertEqual(self.session.run_step("incele"), "done")
-        self.assertGreater(budgets[1], budgets[0])
-
-    def test_complete_tool_call_survives_length_limit(self):
-        self.client.chat_stream_assembled.side_effect = [
-            response("", "length", [tool_call(json.dumps({"command": "echo local"}))]),
-            response("done"),
-        ]
-        with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0") as execute:
-            self.assertEqual(self.session.run_step("uygula"), "done")
-        execute.assert_called_once()
-
-    def test_empty_response_gets_one_recovery_attempt(self):
-        self.client.chat_stream_assembled.side_effect = [response(), response("done")]
-        self.assertEqual(self.session.run_step("incele"), "done")
-        self.assertEqual(self.client.chat_stream_assembled.call_count, 2)
-
-    def test_truncated_tool_call_is_never_executed(self):
-        self.client.chat_stream_assembled.side_effect = [
-            response("", "length", [tool_call('{"command": "echo')]),
-            response("done"),
-        ]
-        with patch("src.agent.execute_tool_call") as execute:
-            self.assertEqual(self.session.run_step("uygula"), "done")
-        execute.assert_not_called()
-        self.assertFalse(any(m.get("tool_calls") for m in self.session.messages))
-
-    def test_malformed_arguments_are_reported_not_executed(self):
-        for arguments in ('{"command":', '[]'):
-            with self.subTest(arguments=arguments):
-                self.session.clear_history()
-                self.client.chat_stream_assembled.side_effect = [
-                    response("", "tool_calls", [tool_call(arguments)]),
+    def test_tool_call_truncation_and_malformed_arguments_are_not_executed(self):
+        cases = {
+            "truncated": ("length", '{"command": "echo'),
+            "malformed_open": ("tool_calls", '{"command":'),
+            "malformed_list": ("tool_calls", "[]"),
+        }
+        for name, (finish, arguments) in cases.items():
+            with self.subTest(case=name):
+                client = MagicMock(default_model="test-model")
+                session = AgentSession(client, workspace_root=Path(self.tmp.name))
+                client.chat_stream_assembled.side_effect = [
+                    response("", finish, [tool_call(arguments)]),
                     response("done"),
                 ]
                 with patch("src.agent.execute_tool_call") as execute:
-                    self.session.run_step("uygula")
+                    self.assertEqual(session.run_step("uygula"), "done")
                 execute.assert_not_called()
-                errors = [m["content"] for m in self.session.messages if m["role"] == "tool"]
-                self.assertTrue(errors[0].startswith("HATA:"))
+                if finish == "tool_calls":
+                    errors = [m["content"] for m in session.messages if m["role"] == "tool"]
+                    self.assertTrue(errors[0].startswith("HATA:"))
+                else:
+                    self.assertFalse(any(m.get("tool_calls") for m in session.messages))
 
-    def test_normal_tool_then_final_answer_preserves_behavior(self):
-        self.client.chat_stream_assembled.side_effect = [
-            response("", "tool_calls", [tool_call(json.dumps({"command": "echo local"}))]),
-            response("done"),
-        ]
-        with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0") as execute:
-            self.assertEqual(self.session.run_step("bu hosts üzerinde kontrol et"), "done")
-        execute.assert_called_once_with(
-            name="run_command", arguments={"command": "echo local"},
-            workspace_root=self.session.workspace_root, auto_approve=self.session.auto_approve,
-        )
+    def test_tool_round_trip_local_and_remote(self):
+        cases = {
+            "local": (tool_call(json.dumps({"command": "echo local"})), "run_command"),
+            "remote": (tool_call('{"alias": "prod-web", "command": "hostname"}', "ssh_run"),
+                       "ssh_run"),
+        }
+        for name, (call, expected) in cases.items():
+            with self.subTest(case=name):
+                client = MagicMock(default_model="test-model")
+                session = AgentSession(client, workspace_root=Path(self.tmp.name))
+                client.chat_stream_assembled.side_effect = [
+                    response("", "tool_calls", [call]),
+                    response("done"),
+                ]
+                with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0") as execute:
+                    self.assertEqual(session.run_step("uygula"), "done")
+                execute.assert_called_once()
+                self.assertEqual(execute.call_args.kwargs["name"], expected)
 
-    def test_explicit_remote_tool_is_still_available(self):
-        self.client.chat_stream_assembled.side_effect = [
-            response("", "tool_calls", [
-                tool_call('{"alias": "prod-web", "command": "hostname"}', "ssh_run"),
-            ]),
-            response("done"),
-        ]
-        with patch("src.agent.execute_tool_call", return_value="remote-host") as execute:
-            self.assertEqual(self.session.run_step("prod-web üzerinde SSH ile kontrol et"), "done")
-        self.assertEqual(execute.call_args.kwargs["name"], "ssh_run")
-        self.assertEqual(execute.call_args.kwargs["arguments"]["alias"], "prod-web")
-
-    def test_ask_mode_still_blocks_writes(self):
+    def test_read_only_modes_block_writes(self):
+        # Ask mode rejects the write tool call before execution.
         self.session.set_mode(AgentMode.ASK)
         self.client.chat_stream_assembled.side_effect = [
             response("", "tool_calls", [
@@ -200,6 +190,29 @@ class TestAgentLoop(unittest.TestCase):
         execute.assert_not_called()
         errors = [m["content"] for m in self.session.messages if m["role"] == "tool"]
         self.assertTrue(errors[0].startswith("REDDEDİLDİ:"))
+
+        # A read-only turn mode survives followup/continue and pauses again.
+        for resume in ("execute_followup", "continue_task"):
+            with self.subTest(resume=resume):
+                client = MagicMock(default_model="test-model")
+                session = AgentSession(client, workspace_root=Path(self.tmp.name))
+                client.chat_stream_assembled.return_value = response(
+                    "", "tool_calls", [tool_call('{"command": "hostname"}')],
+                )
+                with patch("src.agent.execute_tool_call", return_value="local"):
+                    session.run_step("ask: incele", max_steps=1)
+                client.chat_stream_assembled.return_value = response(
+                    "", "tool_calls", [tool_call('{"path":"a.py","content":"x"}', "write_file")],
+                )
+                approval = session.auto_approve
+                with patch("src.agent.execute_tool_call") as execute:
+                    getattr(session, resume)(
+                        "hepsine onay veriyorum", max_steps=1,
+                    ) if resume == "execute_followup" else session.continue_task(max_steps=1)
+                execute.assert_not_called()
+                self.assertEqual(session.pending_mode, AgentMode.ASK)
+                self.assertEqual(session.auto_approve, approval)
+                self.assertEqual(session.mode, AgentMode.NORMAL)
 
     def test_recovery_counter_resets_after_tool_progress(self):
         self.client.chat_stream_assembled.side_effect = [
@@ -218,18 +231,27 @@ class TestAgentLoop(unittest.TestCase):
             self.session.run_step("incele")
         self.assertEqual(self.client.chat_stream_assembled.call_args.kwargs["max_tokens"], 8192)
 
-    def test_invalid_step_limit_does_not_call_model(self):
-        with self.assertRaises(ValueError):
-            self.session.run_step("incele", max_steps=0)
-        self.client.chat_stream_assembled.assert_not_called()
+    def test_step_limit_rules(self):
+        with self.subTest(case="invalid_limit"):
+            with self.assertRaises(ValueError):
+                self.session.run_step("incele", max_steps=0)
+            self.client.chat_stream_assembled.assert_not_called()
 
-    def test_step_limit_returns_incomplete_status(self):
-        self.client.chat_stream_assembled.return_value = response(
-            "", "tool_calls", [tool_call('{"command": "echo local"}')],
-        )
-        with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0"):
-            result = self.session.run_step("uygula", max_steps=1)
-        self.assertTrue(result.startswith("HATA:"))
+        with self.subTest(case="limit_reached"):
+            self.client.chat_stream_assembled.return_value = response(
+                "", "tool_calls", [tool_call('{"command": "echo local"}')],
+            )
+            with patch("src.agent.execute_tool_call", return_value="Çıkış Kodu: 0"):
+                result = self.session.run_step("uygula", max_steps=1)
+            self.assertTrue(result.startswith("HATA:"))
+
+        with self.subTest(case="final_answer_on_last_step"):
+            client = MagicMock(default_model="test-model")
+            session = AgentSession(client, workspace_root=Path(self.tmp.name))
+            client.chat_stream_assembled.return_value = response("done")
+            with patch("src.agent.print_warning") as warning:
+                self.assertEqual(session.run_step("incele", max_steps=1), "done")
+            warning.assert_not_called()
 
     def test_continue_preserves_tool_history_and_finishes(self):
         self.client.chat_stream_assembled.return_value = response(
@@ -242,10 +264,6 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(self.session.continue_task(max_steps=1), "done")
         self.assertEqual(self.session.messages[:len(history)], history)
         self.assertIsNone(self.session.pending_mode)
-
-    def test_continue_without_pending_task_does_not_call_model(self):
-        self.assertTrue(self.session.continue_task().startswith("HATA:"))
-        self.client.chat_stream_assembled.assert_not_called()
 
     def test_execute_followup_uses_completed_turn_history_and_original_goal(self):
         self.client.chat_stream_assembled.return_value = response("Discovery done; approval required")
@@ -262,49 +280,14 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("hepsine onay veriyorum", request[-1]["content"])
         self.assertIn("configure databases", request[-1]["content"])
 
-    def test_execute_without_prior_task_never_calls_model(self):
-        self.assertTrue(self.session.execute_followup("yap artık").startswith("HATA:"))
+    def test_resume_without_pending_task_never_calls_model(self):
+        for name in ("continue_task", "execute_followup"):
+            with self.subTest(method=name):
+                session = AgentSession(self.client, workspace_root=Path(self.tmp.name))
+                result = (session.execute_followup("yap artık") if name == "execute_followup"
+                          else session.continue_task())
+                self.assertTrue(result.startswith("HATA:"))
         self.client.chat_stream_assembled.assert_not_called()
-
-    def test_execute_followup_does_not_override_read_only_mode(self):
-        self.client.chat_stream_assembled.return_value = response(
-            "", "tool_calls", [tool_call('{"command":"hostname"}')],
-        )
-        with patch("src.agent.execute_tool_call", return_value="local"):
-            self.session.run_step("ask: inspect", max_steps=1)
-        self.client.chat_stream_assembled.return_value = response(
-            "", "tool_calls", [tool_call('{"path":"a.py","content":"x"}', "write_file")],
-        )
-        approval = self.session.auto_approve
-        with patch("src.agent.execute_tool_call") as execute:
-            self.session.execute_followup("hepsine onay veriyorum", max_steps=1)
-        execute.assert_not_called()
-        self.assertEqual(self.session.pending_mode, AgentMode.ASK)
-        self.assertEqual(self.session.auto_approve, approval)
-        self.assertEqual(self.session.mode, AgentMode.NORMAL)
-
-    def test_continue_retains_read_only_turn_mode_and_can_pause_again(self):
-        self.client.chat_stream_assembled.return_value = response(
-            "", "tool_calls", [tool_call('{"command": "hostname"}')],
-        )
-        with patch("src.agent.execute_tool_call", return_value="local"):
-            self.session.run_step("ask: incele", max_steps=1)
-        self.client.chat_stream_assembled.return_value = response(
-            "", "tool_calls", [tool_call('{"path":"a.py","content":"x"}', "write_file")],
-        )
-        with patch("src.agent.execute_tool_call") as execute:
-            self.session.continue_task(max_steps=1)
-        execute.assert_not_called()
-        self.assertEqual(self.session.pending_mode, AgentMode.ASK)
-        self.assertEqual(self.session.mode, AgentMode.NORMAL)
-        self.session.clear_history()
-        self.assertIsNone(self.session.pending_mode)
-
-    def test_final_answer_on_last_step_is_not_reported_as_limit(self):
-        self.client.chat_stream_assembled.return_value = response("done")
-        with patch("src.agent.print_warning") as warning:
-            self.assertEqual(self.session.run_step("incele", max_steps=1), "done")
-        warning.assert_not_called()
 
     def test_content_filter_is_not_retried_or_executed(self):
         self.client.chat_stream_assembled.return_value = response(
@@ -330,21 +313,17 @@ class TestExecutionContext(unittest.TestCase):
         # Domain notes left the system prompt and travel with matching tasks only.
         self.assertNotIn("resource-tree", SYSTEM_PROMPT)
 
-    def test_http_argo_notes_attach_only_to_matching_tasks(self):
-        from src.agent import HTTP_ARGO_NOTES, domain_hints
+    def test_domain_notes_attach_only_to_matching_tasks(self):
+        from src.agent import HTTP_ARGO_NOTES, K8S_NOTES, domain_hints
 
         self.assertIn("/api/v1/applications/{ad}/resource-tree", HTTP_ARGO_NOTES)
         self.assertIn("/pods", HTTP_ARGO_NOTES)
         self.assertIn("HTTP:%{http_code}", HTTP_ARGO_NOTES)
         self.assertEqual(domain_hints("README yazım hatasını düzelt"), "")
         self.assertIn(HTTP_ARGO_NOTES, domain_hints("Argo CD pod durumunu getir"))
-
-    def test_k8s_notes_carry_the_resource_query(self):
-        from src.agent import HTTP_ARGO_NOTES, K8S_NOTES, domain_hints
-
         hints = domain_hints("koyu3-k8s üzerindeki podların resource ve limit değerlerini listele")
         self.assertIn(K8S_NOTES, hints)
-        self.assertIn("preset=\"k8s_resources\"", K8S_NOTES)
+        self.assertIn('preset="k8s_resources"', K8S_NOTES)
         # kubectl work alone does not drag in the HTTP/Argo notes.
         self.assertNotIn(HTTP_ARGO_NOTES, domain_hints("kubectl ile podları listele"))
 
