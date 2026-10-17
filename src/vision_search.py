@@ -98,6 +98,52 @@ def _cos(a: list[float], b: list[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+# Synchronous embedding above this many chunks blocks the step for a minute
+# (a first search over this repo took ~70 s); larger jobs go to a thread.
+_SYNC_CHUNK_LIMIT = 40
+_BUILDING: dict[str, Any] = {}
+
+
+def _pending_chunks(root: Path) -> int:
+    try:
+        files = json.loads((root / ".evren" / "index" / "index.json").read_text(encoding="utf-8")).get("files", {})
+    except (OSError, ValueError):
+        files = {}
+    n = 0
+    for p in _iter_files(root):
+        rel = p.relative_to(root).as_posix()
+        try:
+            if rel in files and files[rel].get("mtime") == p.stat().st_mtime:
+                continue
+            n += max(1, sum(1 for _ in p.open(encoding="utf-8", errors="replace")) // CHUNK_LINES + 1)
+        except OSError:
+            continue
+        if n > _SYNC_CHUNK_LIMIT:
+            break
+    return n
+
+
+def _start_background_index(root: Path) -> bool:
+    """Builds the index in a daemon thread; True while a build is running."""
+    import threading
+
+    key = str(root.resolve())
+    th = _BUILDING.get(key)
+    if th is not None and th.is_alive():
+        return True
+
+    def work():
+        try:
+            _update_index(root)
+        except Exception:
+            pass
+
+    th = threading.Thread(target=work, daemon=True, name="evren-index")
+    _BUILDING[key] = th
+    th.start()
+    return True
+
+
 def _update_index(root: Path) -> dict[str, Any]:
     idx_dir = root / ".evren" / "index"
     idx_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +192,14 @@ def search_code(query: str, root: Path) -> str:
     if not query.strip():
         return "HATA: 'query' boş."
     try:
+        key = str(root.resolve())
+        building = _BUILDING.get(key)
+        if (building is not None and building.is_alive()) or _pending_chunks(root) > _SYNC_CHUNK_LIMIT:
+            _start_background_index(root)
+            return (
+                "BİLGİ: Anlamsal indeks arka planda hazırlanıyor (ilk kullanım). Bu adımda "
+                "find_files(query=\"a|b\") kullan; birkaç dakika sonra search_code tekrar dene."
+            )
         index = _update_index(root)
         qv = _embed([query])[0]
         scored = []

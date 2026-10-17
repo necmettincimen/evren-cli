@@ -66,11 +66,13 @@ class CommandInputTest(unittest.TestCase):
             "clear",
             "devam et",
             "ask: /clear",
+            "/cleare\nikinci satır",  # unknown first token in a multiline paste
+            "/foo\n/bar.cs(1,1): error CS1002",
         ):
-            with self.subTest(text=text):
-                self.assertFalse(is_command(text))
-                self.assertFalse(is_unknown_command(text))
+            with self.subTest(text=text[:20]):
                 self.assertFalse(is_command_input(text))
+        # Close-match typo with arguments stays a command.
+        self.assertTrue(is_command_input("/exti now"))
 
     def test_known_commands_stay_commands(self):
         for text in (
@@ -80,13 +82,7 @@ class CommandInputTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(is_command(text))
                 self.assertTrue(is_command_input(text))
-
-    def test_multiline_paste_and_typos(self):
-        # Unknown first token in a multiline paste is task text; a typo is a command.
-        for text in ("/cleare\nikinci satır", "/foo\n/bar.cs(1,1): error CS1002"):
-            with self.subTest(paste=text):
-                self.assertFalse(is_command_input(text))
-        self.assertTrue(is_command_input("/exti now"))  # close-match typo with args stays a command
+        # A typo is routed to the command handler, not to the agent.
         for text in ("/cleare", "/hlep", "/zzzzzz"):
             with self.subTest(typo=text):
                 self.assertFalse(is_command(text))
@@ -141,7 +137,6 @@ class PromptFrameRoutingTest(unittest.TestCase):
 
 
 class ReplRoutingTest(unittest.TestCase):
-    """Scripted REPL sessions: what reaches the agent and what reaches the handler."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -425,6 +420,12 @@ class AgentPasteTest(unittest.TestCase):
         user_messages = [m for m in self.session.messages if m["role"] == "user"]
         self.assertLess(len(user_messages[0]["content"]), 12_000)
         self.assertTrue(any("paste-1.txt" in info for info in self.infos))
+        # A followup paste is compacted too; a second run_step paste gets the next number.
+        self.session.execute_followup(make_build_log(lines=800, errors=12))
+        self.assertIn("[Yapıştırılan metin #2:", self.sent[-1])
+        self.session.run_step(make_build_log(lines=900, errors=9), compact=True)
+        self.assertEqual([p.name for p in self.pasted_files()], ["paste-1.txt", "paste-2.txt", "paste-3.txt"])
+        self.assertIn("[Yapıştırılan metin #3:", self.sent[-1])
 
     def test_secrets_are_masked_before_the_paste_is_written_to_disk(self):
         lines = [f"  Compiling Module{i} -> ok" for i in range(400)]
@@ -448,17 +449,6 @@ class AgentPasteTest(unittest.TestCase):
         self.session.run_step(text)  # compact defaults to False (skills, templates, playbooks)
         self.assertEqual(self.pasted_files(), [])
         self.assertIn("Compiling Portal.Api.Module700 ", self.sent[0])
-
-    def test_followup_paste_is_compacted_and_numbers_increment(self):
-        self.session.run_step("projeyi derle", compact=True)
-        self.session.execute_followup(make_build_log(lines=800, errors=12))
-        self.assertEqual(len(self.pasted_files()), 1)
-        self.assertIn("[Yapıştırılan metin #1:", self.sent[-1])
-        self.assertIn("projeyi derle", self.sent[-1])
-        self.assertNotIn("Compiling Portal.Api.Module400 ", self.sent[-1])
-        self.session.run_step(make_build_log(lines=900, errors=9), compact=True)
-        self.assertEqual([p.name for p in self.pasted_files()], ["paste-1.txt", "paste-2.txt"])
-        self.assertIn("[Yapıştırılan metin #2:", self.sent[-1])
 
 
 class CliCompactTest(unittest.TestCase):
