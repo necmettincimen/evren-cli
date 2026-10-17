@@ -410,6 +410,13 @@ class AgentSession:
         except Exception:
             pass
         try:
+            from src.extras import role_context_block
+            role = role_context_block(self.workspace_root)
+            if role:
+                blocks.append(role)
+        except Exception:
+            pass
+        try:
             from src.language import language_context_block
             lang = language_context_block(self.workspace_root)
             if lang:

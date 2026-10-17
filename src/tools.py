@@ -6,6 +6,7 @@ file reading, writing, surgical editing, directory inspection, and command runni
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -696,6 +697,30 @@ FIND_MAX_PER_FILE = 12
 FIND_LINE_CHARS = 180
 
 
+def _git_ignored(root: Path, paths: list[Path]) -> set[str]:
+    """Relative posix paths ignored by .gitignore (empty set outside a git repo)."""
+    if not paths or not (root / ".git").exists():
+        return set()
+    rels = [p.relative_to(root).as_posix() for p in paths]
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"], cwd=str(root), input="\0".join(rels) + "\0",
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {x for x in proc.stdout.split("\0") if x}
+
+
+def _looks_binary(path: Path) -> bool:
+    """True when the first KB holds a NUL byte."""
+    try:
+        with open(path, "rb") as fh:
+            return b"\0" in fh.read(1024)
+    except OSError:
+        return False
+
+
 def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None = None) -> str:
     """Finds files by glob; with `query`, returns matching lines like `grep -n`.
 
@@ -715,10 +740,15 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
     lines_out: list[str] = []
     truncated = False
 
-    for path in sorted(root.rglob(pattern or "*")):
-        if any(p in skip for p in path.parts) or not path.is_file():
-            continue
+    candidates = [
+        path for path in sorted(root.rglob(pattern or "*"))
+        if not any(p in skip for p in path.parts) and path.is_file()
+    ]
+    ignored = _git_ignored(root, candidates)
+    for path in candidates:
         rel = path.relative_to(root).as_posix()
+        if rel in ignored or _looks_binary(path):
+            continue
         if not needles:
             files.append(rel)
             if len(files) >= 100:

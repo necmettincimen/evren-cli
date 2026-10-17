@@ -479,6 +479,16 @@ def main():
         help=f"Kullanılacak EVREN modeli (varsayılan: {EVREN_DEFAULT_MODEL})",
     )
 
+    parser.add_argument(
+        "-p", "--print", dest="print_prompt", metavar="İSTEK",
+        help="Başsız (headless) kip: tek görevi çalıştırıp çık",
+    )
+    parser.add_argument(
+        "--output", choices=("text", "json"), default="text",
+        help="Başsız kip çıktı biçimi (json: sonuç, değişen dosyalar, token, çıkış kodu)",
+    )
+    parser.add_argument("--max-steps", type=int, default=None, help="Başsız kip adım tavanı")
+
     _add_backup_arg(parser)
 
     subparsers = parser.add_subparsers(dest="subcommand")
@@ -603,6 +613,11 @@ def main():
     p_ssh.set_defaults(func=cmd_ssh, ssh_action="list")
 
     args = parser.parse_args()
+
+    if args.print_prompt and not args.subcommand:
+        from src.extras import run_headless
+
+        sys.exit(run_headless(args))
 
     # If no subcommand provided, start interactive REPL (TUI mode)
     if not args.subcommand:

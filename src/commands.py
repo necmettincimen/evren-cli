@@ -63,7 +63,29 @@ COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "/blockers": (),
     "/check-in": (),
     "/decisions": (),
+    "/commit": (),
+    "/review": (),
+    "/init": (),
+    "/context": (),
+    "/compact": (),
+    "/rewind": (),
+    "/doctor": (),
+    "/rol": (),
 }
+
+# Legacy (Foreman-era) commands: still working, listed only under "/help legacy".
+LEGACY_COMMANDS: tuple[str, ...] = (
+    "/blockers", "/decisions", "/diagnose", "/playbook", "/progress", "/template",
+    "/track", "/task", "/checkpoint", "/check-in",
+)
+
+# Custom commands loaded from .evren/commands/*.md (registered at runtime).
+DYNAMIC_COMMANDS: set[str] = set()
+
+
+def set_dynamic_commands(names) -> None:
+    DYNAMIC_COMMANDS.clear()
+    DYNAMIC_COMMANDS.update(n.lower() for n in names)
 
 KNOWN_COMMANDS: frozenset[str] = frozenset(
     name
@@ -87,7 +109,8 @@ def first_token(text: str) -> str:
 
 def is_command(text: str) -> bool:
     """True when the first token is a registered command name or alias."""
-    return first_token(text).lower() in KNOWN_COMMANDS
+    token = first_token(text).lower()
+    return token in KNOWN_COMMANDS or token in DYNAMIC_COMMANDS
 
 
 def suggest_command(token: str, cutoff: float = 0.6) -> str | None:
@@ -108,7 +131,7 @@ def is_unknown_command(text: str) -> bool:
     if not stripped or "\n" in stripped or "\r" in stripped:
         return False
     token = first_token(stripped)
-    if token.lower() in KNOWN_COMMANDS or not _COMMAND_LIKE_RE.fullmatch(token):
+    if token.lower() in KNOWN_COMMANDS or token.lower() in DYNAMIC_COMMANDS or not _COMMAND_LIKE_RE.fullmatch(token):
         return False
     return stripped == token or suggest_command(token, _NEAR_MISS_CUTOFF) is not None
 

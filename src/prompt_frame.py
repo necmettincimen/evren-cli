@@ -52,6 +52,7 @@ def is_execution_followup(text: str) -> bool:
         "yap", "yap artık", "artık yap", "doğrudan yap", "soru sorma doğrudan yap",
         "uygula", "başla", "tüm görevleri yap", "hepsini yap",
         "soru sorma", "onay veriyorum", "kabul ediyorum",
+        "devam et", "onaylıyorum", "kalan işleri tamamla", "kalanları tamamla",
     } or bool(re.fullmatch(
         r"(?:hepsi|hepsine|hepsi için|tüm görevler için|tüm görevleri yap hepsine|"
         r"tümüne|tamamını) (?:için )?onay veriyorum(?: kabul ediyorum)?",
