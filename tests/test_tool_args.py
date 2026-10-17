@@ -20,32 +20,23 @@ TYPE_MAP = schema_type_map(TOOLS_SCHEMA)
 REQUIRED_MAP = schema_required_map(TOOLS_SCHEMA)
 
 
-
-
 class TestCoerceValue(unittest.TestCase):
-    def test_array_from_stringified_json(self):
-        out = coerce_value('[{"a": 1}]', "array", "edits")
-        self.assertEqual(out, [{"a": 1}])
-
-
-
+    def test_scalar_and_container_coercion(self):
+        cases = [
+            ('[{"a": 1}]', "array", "edits", [{"a": 1}]),
+            ("12", "integer", "start_line", 12),
+            ("true", "boolean", "all", True),
+            ("False", "boolean", "all", False),
+            ("1", "boolean", "all", True),
+        ]
+        for value, expected_type, field, expected in cases:
+            with self.subTest(value=value, expected_type=expected_type):
+                self.assertEqual(coerce_value(value, expected_type, field), expected)
 
     def test_plain_text_array_rejected(self):
         with self.assertRaises(ToolArgumentError) as ctx:
             coerce_value("def foo(): pass", "array", "edits")
         self.assertIn("JSON", str(ctx.exception))
-
-
-    def test_integer_from_string(self):
-        self.assertEqual(coerce_value("12", "integer", "start_line"), 12)
-
-
-    def test_boolean_from_strings(self):
-        self.assertIs(coerce_value("true", "boolean", "all"), True)
-        self.assertIs(coerce_value("False", "boolean", "all"), False)
-        self.assertIs(coerce_value("1", "boolean", "all"), True)
-
-
 
 
 class TestNormalizeToolArguments(unittest.TestCase):
@@ -75,10 +66,6 @@ class TestNormalizeToolArguments(unittest.TestCase):
         self.assertNotIn("old_text", args["edits"][0])
         self.assertNotIn("new_text", args["edits"][0])
 
-
-
-
-
     def test_empty_target_snippet_is_preserved(self):
         args = normalize_tool_arguments(
             "edit_file", {"path": "a.py", "target_snippet": ""}, TYPE_MAP, REQUIRED_MAP
@@ -91,18 +78,12 @@ class TestNormalizeToolArguments(unittest.TestCase):
         self.assertIn("path", str(ctx.exception))
 
 
-
-
-
-
 class TestApplyEditsGuards(unittest.TestCase):
     def test_string_edit_item_gives_clear_error(self):
         text, ok, err = apply_edits("hello", ["target"])
         self.assertFalse(ok)
         self.assertIn("bir nesne olmalı", err)
         self.assertEqual(text, "hello")
-
-
 
 
 class TestExecuteToolCallNormalization(unittest.TestCase):
@@ -127,9 +108,6 @@ class TestExecuteToolCallNormalization(unittest.TestCase):
         self.assertIn("BAŞARILI", result)
         self.assertIn("<html>", (self.workspace / "page.xsl").read_text(encoding="utf-8"))
 
-
-
-
     def test_view_file_string_line_numbers_work(self):
         (self.workspace / "n.txt").write_text("1\n2\n3\n", encoding="utf-8")
         result = execute_tool_call(
@@ -139,7 +117,6 @@ class TestExecuteToolCallNormalization(unittest.TestCase):
         )
         self.assertIn("2 | 2", result)
         self.assertIn("3 | 3", result)
-
 
 
 if __name__ == "__main__":
