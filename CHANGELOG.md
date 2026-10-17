@@ -5,6 +5,25 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.0.0] - 2026-10-17
+
+2.2.0 sonrası kararlılık, yetenek ve ajan kütüphanesi çalışmaları; major sürüm.
+
+### Eklendi
+- **Araç kaydı, merkezi onay ve `delegate(agent=...)`:** araçlar tek kayıt üzerinden geçer, onay akışı merkezileştirildi.
+- **Ajan kütüphanesi:** `/agent`, `/agents`, `@ajan` anması ve `/team` ile çoklu ajan çalışması.
+- **Satır aralığı düzenleme, doğrulama kapısı, plan→todo geçişi, model kaydı, Clef entegrasyonu, oturum içi kota.**
+- **Paralel okuma, hızlı açılış, atomik dosya yazma, görev bazli geri alma, görsel girdi, anlamsal kod arama.**
+- **Ayar ve izin kuralları, hook'lar, oturum geçmişi, `apply_patch`, plan akışı, Esc/kuyruk, MCP, `web_search`.**
+- **CI kaldırıldı** (GitHub Actions).
+
+### Değişti
+- `_run_steps` parçalandı, REPL komut tablosu ve `SessionContext` yeniden düzenlendi.
+- İyi özellikler varsayılan açık; otomatik yedek varsayılan kapalı (`EVREN_BACKUP=true` ile açılır).
+
+### Düzeltildi
+- `/resume` oturum listesi, ajan modeli ve adım tavanı, şart onayı, Clef istek biçimi.
+
 ## [Unreleased]
 
 ## [2.2.0] - 2026-10-17

@@ -93,6 +93,8 @@ DEFAULT_ENV = {
     "EVREN_AUTO_APPROVE": "false",
     "EVREN_AUTO_DOCS": "false",
     "EVREN_AUTO_ROUTE": "false",
+    "EVREN_CLEF_INTENT": "false",
+    "EVREN_SEMANTIC_SEARCH": "false",
 }
 
 TOP_LEVEL_KEYS = {
@@ -112,7 +114,7 @@ REQUEST_EXPECT_KEYS = {"index", "tool_choice", "tools_include", "tools_exclude"}
 
 BLOCKED_PREFIX = "TEKRAR ENGELLENDİ"
 DENIED_PREFIX = "REDDEDİLDİ"
-_APPROVAL_SUFFIX_RE = re.compile(r"\[(?:Y/n|y/N)\]:\s*$")
+_APPROVAL_SUFFIX_RE = re.compile(r"\[(?:Y/n|y/N)(?:/a=[^\]]*)?\]:\s*$")
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
