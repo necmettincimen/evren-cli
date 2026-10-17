@@ -170,6 +170,7 @@ class EvrenClient:
 
         Raises RateLimitError if every key is currently cooling/disabled.
         """
+        self._maybe_switch_low_quota_key()
         pooled = self.key_pool.acquire()
         if pooled is None:
             wait = self.key_pool.next_available_utc()
@@ -188,6 +189,22 @@ class EvrenClient:
         self.api_key = pooled.key
         self.openai_client = self.key_pool.get_client(pooled.key)
         return pooled.key, self.openai_client
+
+    def _maybe_switch_low_quota_key(self) -> None:
+        """Switches keys when the last response header showed the quota nearly gone."""
+        try:
+            if len(self.key_pool) < 2:
+                return
+            from src.config import key_min_remaining
+
+            seen = getattr(self.key_pool, "daily_remaining", {})
+            remaining = seen.get(self.api_key)
+            if remaining is None or remaining >= key_min_remaining():
+                return
+            seen.pop(self.api_key, None)  # one switch attempt per low reading
+            self.select_best_key()
+        except Exception:
+            pass
 
     def _headers_for(self, api_key: str) -> dict[str, str]:
         return {

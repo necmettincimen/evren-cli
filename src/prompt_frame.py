@@ -48,6 +48,12 @@ def field_prompt(label: str, hint: str, default: str = "") -> str:
 def is_execution_followup(text: str) -> bool:
     """Recognize short execution/approval replies, not arbitrary new task briefs."""
     normalized = " ".join(re.sub(r"[.!?,;]+", " ", text.casefold()).split())
+    if len(normalized) <= 60:
+        from src.intent import clef_label
+
+        label = clef_label(text, ["execute", "other"])
+        if label:
+            return label == "execute"
     return normalized in {
         "yap", "yap artık", "artık yap", "doğrudan yap", "soru sorma doğrudan yap",
         "uygula", "başla", "tüm görevleri yap", "hepsini yap",

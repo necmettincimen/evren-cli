@@ -332,7 +332,11 @@ THINKING_OFF_UNSAFE_MODELS = {"glm-5.3", "zai/glm-5.3-fp8"}
 
 def thinking_off_supported(model: str) -> bool:
     """True when `thinking: false` yields a clean answer for this model."""
-    return bool(model) and model not in THINKING_OFF_UNSAFE_MODELS
+    if not model or model in THINKING_OFF_UNSAFE_MODELS:
+        return False
+    from src.models import thinking_off_ok
+
+    return thinking_off_ok(model)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -366,12 +370,19 @@ def auto_route_enabled() -> bool:
 
 def planner_model() -> str:
     """Plan çıkaran model (EVREN_PLANNER_MODEL, varsayılan deepseek-v4.1-flash)."""
-    return (os.getenv("EVREN_PLANNER_MODEL") or "deepseek-v4.1-flash").strip()
+    from src.models import default_model_for
+
+    return (os.getenv("EVREN_PLANNER_MODEL") or default_model_for("planner", "deepseek-v4.1-flash")).strip()
 
 
 def executor_model(session_model: str) -> str:
     """Planı uygulayan model (EVREN_EXECUTOR_MODEL, yoksa oturum modeli)."""
     return (os.getenv("EVREN_EXECUTOR_MODEL") or session_model).strip()
+
+
+def clef_intent_enabled() -> bool:
+    """EVREN_CLEF_INTENT (varsayılan kapalı): niyet sınıflandırmada clef modelini dene."""
+    return _env_flag("EVREN_CLEF_INTENT", False)
 
 
 def route_min_tokens() -> int:
