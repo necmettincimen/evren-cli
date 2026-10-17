@@ -14,9 +14,9 @@ FORBIDDEN_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 PROTECTED_FILES = {".env", ".env.local"}
 
 
-# Automatic backups are ON by default (EVREN_BACKUP=false turns them off);
+# Automatic backups are OFF by default (EVREN_BACKUP=true turns them on);
 # the --backup flag still forces them on, see set_backup_enabled().
-BACKUP_ENABLED = os.getenv("EVREN_BACKUP", "true").strip().lower() in ("1", "true", "yes", "on")
+BACKUP_ENABLED = os.getenv("EVREN_BACKUP", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def set_backup_enabled(enabled: bool) -> None:
