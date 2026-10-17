@@ -279,6 +279,15 @@ from src.tool_registry import REPEAT_EXEMPT as _REG_REPEAT
 _REPEAT_EXEMPT_TOOLS = frozenset(_REG_REPEAT | {"stop_background"})
 # Blocked/flagged repeats after which the next turn must answer without tools.
 _LOOP_BLOCK_LIMIT = 3
+# A final answer that asks for approval although the task already ordered the
+# change ("düzelt", "ekle"); negated forms ("yazma", "değiştirme") do not count.
+_ASKS_APPROVAL_RE = re.compile(
+    r"(?i)(ister\s+mis(in|iniz)|uygulayay[ıi]m\s+m[ıi]|yapay[ıi]m\s+m[ıi]|onay[ıi]n[ıi]?z?\s+(al[ıi]yorum|bekliyorum)"
+    r"|onay\s+bekliyorum|onayl[ıi]yor\s+musun)"
+)
+_IMPERATIVE_RE = re.compile(
+    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır)(?!me\b|ma\b|meyin|mayın)\w*"
+)
 # Same command family (pytest, dotnet test...) runs allowed between writes.
 _FAMILY_RUN_LIMIT = 4
 
@@ -1368,6 +1377,7 @@ class AgentSession:
         self._verified_since_write = False
         self._verify_nudged = False
         self._verify_note = ""
+        self._approval_nudged = False
         # Progress guard: steps since the last file change while a todo list
         # still has open items (a planned change task that only explores).
         self._idle_steps = 0
@@ -2099,6 +2109,22 @@ class AgentSession:
                 if note:
                     self._verify_note = note
                     continue
+            if (
+                effective_mode == AgentMode.NORMAL
+                and not getattr(self, "_approval_nudged", False)
+                and self._write_epoch == 0
+                and step_count < max_steps
+                and _ASKS_APPROVAL_RE.search(final_content[-500:])
+                and _IMPERATIVE_RE.search(self.task_goal or "")
+            ):
+                # "çalışmıyorsa düzelt" was answered twice with "uygulamamı ister
+                # misin?": the instruction already is the approval.
+                self._approval_nudged = True
+                self._verify_note = (
+                    "[EVREN] Kullanıcı görevde zaten düzelt/ekle/uygula dedi; onay bekleme. "
+                    "Önerdiğin değişikliği şimdi uygula ve doğrula."
+                )
+                continue
             # Content was already streamed live; only render markdown if it
             # never arrived as stream deltas (e.g. empty stream).
             if final_content and not stream_state["in_content"]:
