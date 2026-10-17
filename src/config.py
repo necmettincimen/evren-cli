@@ -223,6 +223,37 @@ def compaction_ratio() -> float:
     return value if 0.2 <= value <= 1.0 else 0.6
 
 
+# Mutlak bağlam bütçesi (token). Gateway önbellekli prompt token'ını ~%3'e
+# faturalar ama önbellek bayt-aynı önek ister; bu yüzden sıkıştırma nadir ve
+# derin olmalı: tahmin bütçeyi aşınca bütçenin `compact_target_ratio()` kadarına
+# inilir, sonraki adımlar sabit bir öneke eklenir.
+DEFAULT_CONTEXT_BUDGET = 32_000
+
+
+def context_budget() -> int:
+    """Absolute prompt budget in tokens (EVREN_CONTEXT_BUDGET, 4000-2000000)."""
+    return _env_int("EVREN_CONTEXT_BUDGET", DEFAULT_CONTEXT_BUDGET, 4_000, 2_000_000)
+
+
+def compact_target_ratio() -> float:
+    """Share of the limit a compaction shrinks the history to (0.3-0.8, default 0.5)."""
+    try:
+        value = float(os.getenv("EVREN_COMPACT_TARGET", "0.5"))
+    except (TypeError, ValueError):
+        return 0.5
+    return value if 0.3 <= value <= 0.8 else 0.5
+
+
+def smart_compact_enabled() -> bool:
+    """EVREN_SMART_COMPACT (varsayılan açık): künye + özet sıkıştırması; kapalıysa eski davranış."""
+    return _env_flag("EVREN_SMART_COMPACT", True)
+
+
+def summary_model() -> str:
+    """Cheap summarizer model for compaction (EVREN_SUMMARY_MODEL)."""
+    return (os.getenv("EVREN_SUMMARY_MODEL") or "qwen3.8-flash-next").strip()
+
+
 def default_max_steps() -> int:
     """Agent step ceiling; read at call time so `/steps` and env changes apply.
 
@@ -361,6 +392,24 @@ def executor_thinking() -> bool:
     yanıt her durumda düşünme kapalı yeniden denenir.
     """
     return _env_flag("EVREN_EXECUTOR_THINKING", False)
+
+
+def paste_max_lines() -> int:
+    """Pasted task text above this many lines is saved to .evren/tmp and summarized
+    for the model (EVREN_PASTE_MAX_LINES, default 80)."""
+    return _env_int("EVREN_PASTE_MAX_LINES", 80, 20, 1_000_000)
+
+
+def paste_max_chars() -> int:
+    """Same limit for the character count (EVREN_PASTE_MAX_CHARS, default 6000)."""
+    return _env_int("EVREN_PASTE_MAX_CHARS", 6000, 1000, 100_000_000)
+
+
+def trace_enabled() -> bool:
+    """EVREN_TRACE (varsayılan açık): her görevin adım izi `.evren/logs/trace.jsonl`
+    dosyasına yazılır; false/0/off/no değeri kapatır (`evren debug last` ile okunur)."""
+    raw = (os.getenv("EVREN_TRACE") or "").strip().lower()
+    return raw not in ("false", "0", "off", "no", "hayır", "hayir")
 
 # SSL/TLS verification configuration.
 # - EVREN_CA_BUNDLE : optional path to a custom CA bundle (PEM). Use this when the

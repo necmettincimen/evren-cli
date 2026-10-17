@@ -6,6 +6,7 @@ file reading, writing, surgical editing, directory inspection, and command runni
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -39,21 +40,21 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "view_file",
-            "description": "Dosyayı satır numaralarıyla okur. Aralık verilmezse ilk 250 satır, aralıkla en fazla 400 satır döner. Büyük dosyada önce find_files(query) ile yeri bulup yalnızca ilgili aralığı oku.",
+            "description": "Dosyayı satır numaralarıyla okur (aralıksız ilk 250, aralıkla en fazla 400 satır). Büyük dosyada önce find_files ile yeri bul.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Okunacak dosyanın göreceli yolu (örn: src/main.py)",
+                        "description": "Dosya yolu",
                     },
                     "start_line": {
                         "type": "integer",
-                        "description": "Başlangıç satır numarası (1-indeksli, isteğe bağlı)",
+                        "description": "Başlangıç satırı (1'den)",
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "Bitiş satır numarası (isteğe bağlı)",
+                        "description": "Bitiş satırı",
                     },
                 },
                 "required": ["path"],
@@ -64,30 +65,30 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Dosya içindeki belirli bir kod bloğunu (veya birden çok bloğu) yeni kodla cerrahi olarak değiştirir. Değişiklik öncesi diff gösterilir ve yedek alınır. CRLF/BOM korunur.",
+            "description": "Dosyada kod bloğunu (veya `edits` ile birden çok bloğu) cerrahi değiştirir; diff gösterilir, yedek alınır, CRLF/BOM korunur.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Düzenlenecek dosyanın göreceli yolu (örn: src/api_client.py)",
+                        "description": "Dosya yolu",
                     },
                     "target_snippet": {
                         "type": "string",
-                        "description": "Dosya içinden birebir eşleşmesi gereken eski kod parçası (tek edit için)",
+                        "description": "Birebir eşleşecek eski kod",
                     },
                     "replacement_snippet": {
                         "type": "string",
-                        "description": "Eski kod parçasının yerine geçecek yeni kod (tek edit için)",
+                        "description": "Yeni kod",
                     },
                     "all": {
                         "type": "boolean",
-                        "description": "true ise target_snippet'in TÜM eşleşmelerini değiştirir (varsayılan: false).",
+                        "description": "true: tüm eşleşmeler",
                         "default": False,
                     },
                     "edits": {
                         "type": "array",
-                        "description": "Çoklu düzenleme listesi. Her öğe: {target_snippet, replacement_snippet, all?}. Verilirse target_snippet/replacement_snippet yok sayılır.",
+                        "description": "Çoklu düzenleme; verilirse target/replacement_snippet yok sayılır",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -107,17 +108,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Yeni bir dosya oluşturur veya mevcut bir dosyayı tamamen yeni içerikle yazar. Otomatik yedek alır.",
+            "description": "Dosya oluşturur veya tamamen yeniden yazar (yedek alınır).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Oluşturulacak veya yazılacak dosyanın yolu (örn: tests/test_new.py)",
+                        "description": "Dosya yolu",
                     },
                     "content": {
                         "type": "string",
-                        "description": "Dosyaya yazılacak tam metin içeriği",
+                        "description": "Tam içerik",
                     },
                 },
                 "required": ["path", "content"],
@@ -128,18 +129,18 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "Belirtilen klasördeki dosyaları ve alt dizinleri listeler.",
+            "description": "Klasördeki dosya ve alt dizinleri listeler.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Listelenecek klasör yolu (varsayılan: .)",
+                        "description": "Klasör yolu",
                         "default": ".",
                     },
                     "recursive": {
                         "type": "boolean",
-                        "description": "Alt klasörleri de özyinelemeli listelesin mi?",
+                        "description": "Özyinelemeli",
                         "default": False,
                     },
                 },
@@ -150,17 +151,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "find_files",
-            "description": "Dosya adına göre (glob) arar; query verilirse içerikte arar ve eşleşen satırları `yol:satır: metin` olarak döndürür (grep -n gibi, büyük/küçük harf duyarsız, alternatifler | ile, regex de olur). Satır girintisiyle birebir verilir: tek satırlık değişiklikte bu satırı doğrudan edit_file hedefi yapabilirsin. Kod aramak için findstr/grep yerine bunu kullan.",
+            "description": "Dosya adına göre (glob) arar; query verilirse içerikte arar ve `yol:satır: metin` döner (büyük/küçük harf duyarsız, a|b alternatif, regex olur). Kod aramada findstr/grep yerine bunu kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Dosya deseni (örn: *.py, src/*.py, src/repl.py)",
+                        "description": "Dosya deseni (*.py)",
                     },
                     "query": {
                         "type": "string",
-                        "description": "İçerikte aranacak metin; birden çok için a|b|c (isteğe bağlı)",
+                        "description": "İçerikte aranacak metin (a|b|c)",
                     },
                 },
                 "required": ["pattern"],
@@ -171,26 +172,26 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "EVREN CLI'nin çalıştığı YEREL makinede, aktif çalışma alanını cwd kullanarak komut çalıştırır (test, derleme, sistem kontrolü vb.). Bu host/bu hosts/bu makine/localhost isteklerinde bunu kullan; SSH gerekmez. Windows'ta varsayılan kabuk cmd.exe'dir; PowerShell sözdizimi için use_powershell=true ver. Python kodu (çok satırlı olabilir) için use_python=true ver ve command'a yalnızca kodu yaz; python -c ile sarmalama. cmd.exe çok satırlı komut çalıştıramaz. Çıktı 8000 karakterde kırpılır; hedefli komut kullan.",
+            "description": "YEREL makinede, çalışma alanında komut çalıştırır (test, derleme, sistem kontrolü). Windows varsayılan kabuğu cmd.exe: PowerShell için use_powershell=true, Python kodu için use_python=true. Çok satırlı cmd yok. Çıktı uzunsa özetlenir; hedefli komut kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Çalıştırılacak komut (örn: pytest, npm test, python -m unittest)",
+                        "description": "Komut",
                     },
                     "timeout_seconds": {
                         "type": "integer",
-                        "description": "Zaman aşımı saniye cinsinden (varsayılan 180, en fazla 600).",
+                        "description": "Zaman aşımı sn (varsayılan 180, en çok 600)",
                         "default": 180,
                     },
                     "use_python": {
                         "type": "boolean",
-                        "description": "true: command Python kodu olarak çalışır (sys.executable -c), çok satırlı olabilir, kabuk tırnaklama/kaçış gerekmez.",
+                        "description": "true: command Python kodudur",
                     },
                     "use_powershell": {
                         "type": "boolean",
-                        "description": "true: komut PowerShell betiği olarak çalışır (elle powershell -Command sarmalama/tırnak gerekmez). Varsayılan false: sistem kabuğu (Windows'ta cmd.exe).",
+                        "description": "true: komut PowerShell betiğidir",
                     },
                     "run_in_background": {
                         "type": "boolean",
@@ -206,17 +207,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "check_background",
-            "description": "run_command(run_in_background=true) ile başlatılan arka plan komutunun son okumadan bu yana gelen çıktısını ve durumunu (çalışıyor / bitti + çıkış kodu) döndürür. Çıktı artımlıdır. Süreç çalışıyorsa bitmesini varsayılan 20 sn bekler (bitince hemen döner); bitmesini bekliyorsan art arda hızlı çağrı yapma, daha uzun wait_seconds ver.",
+            "description": "run_in_background ile başlatılan komutun yeni çıktısını ve durumunu döner; çalışıyorsa bitmesini wait_seconds (varsayılan 20) kadar bekler. Art arda hızlı çağırma.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "run_command'ın döndürdüğü arka plan kimliği (örn: bg-1)",
+                        "description": "Arka plan kimliği (bg-1)",
                     },
                     "wait_seconds": {
                         "type": "integer",
-                        "description": "Bitmesi için en fazla kaç saniye beklensin (varsayılan 20, 0 = hemen bak, en fazla 300).",
+                        "description": "Bekleme sn (varsayılan 20, 0 = hemen, en çok 300)",
                     },
                 },
                 "required": ["id"],
@@ -227,13 +228,13 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "stop_background",
-            "description": "run_command(run_in_background=true) ile başlatılan arka plan komutunu ve tüm süreç ağacını sonlandırır. CLI kapanırken çalışan tüm arka plan süreçleri zaten otomatik temizlenir.",
+            "description": "Arka plan komutunu ve süreç ağacını sonlandırır.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "Sonlandırılacak arka plan kimliği (örn: bg-1)",
+                        "description": "Arka plan kimliği",
                     },
                 },
                 "required": ["id"],
@@ -244,17 +245,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "create_plan",
-            "description": "Plan modunda bir uygulama planı yazar (plans/<ad>/plan.md). Kaynak dosyalara dokunmaz.",
+            "description": "Plan modunda plans/<ad>/plan.md yazar; kaynak dosyalara dokunmaz.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Plan adı (klasör adı olur, örn: refactor-api-client)",
+                        "description": "Plan adı (klasör adı)",
                     },
                     "content": {
                         "type": "string",
-                        "description": "Plan içeriği (Markdown)",
+                        "description": "Markdown plan",
                     },
                 },
                 "required": ["name", "content"],
@@ -265,7 +266,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_list_hosts",
-            "description": "Yalnızca kullanıcı açıkça UZAK sunucu/SSH işlemi veya kayıtlı host listesini istediğinde SSH alias'larını listeler. Bu host/bu hosts/bu makine/localhost yereldir; bu istekler için kullanma.",
+            "description": "Kayıtlı SSH alias'larını listeler. Yalnızca UZAK sunucu işlemi için; bu host/localhost yereldir.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -276,30 +277,30 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_run",
-            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucuda (alias ile) komut çalıştırır. Yerel/bu host/bu hosts/localhost isteğinde run_command kullan. ask/plan modunda yalnızca salt-okuma komutlarına izin verilir. Çalıştırmadan önce kullanıcı onayı istenir.",
+            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucuda (alias) komut çalıştırır; yerel için run_command. ask/plan modunda salt-okuma; çalıştırmadan önce onay istenir.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "Kayıtlı SSH host alias'ı (örn: prod-web)",
+                        "description": "SSH alias",
                     },
                     "command": {
                         "type": "string",
-                        "description": "Uzak sunucuda çalıştırılacak komut (örn: systemctl status nginx). preset verilirse boş bırak.",
+                        "description": "Uzak komut; preset verilirse boş bırak",
                     },
                     "preset": {
                         "type": "string",
                         "enum": ["k8s_health", "k8s_resources"],
-                        "description": "Hazır salt-okuma komutu (command yerine): k8s_health = pod/küme sağlık anlık görüntüsü; k8s_resources = container başına request/limit tablosu.",
+                        "description": "Hazır salt-okuma komutu (command yerine)",
                     },
                     "namespace": {
                         "type": "string",
-                        "description": "preset için tek namespace (boş = tüm namespace'ler).",
+                        "description": "preset için namespace (boş = tümü)",
                     },
                     "timeout_seconds": {
                         "type": "integer",
-                        "description": "Zaman aşımı saniye cinsinden (varsayılan 60, en fazla 600).",
+                        "description": "Zaman aşımı sn (varsayılan 60, en çok 600)",
                         "default": 60,
                     },
                 },
@@ -311,17 +312,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_read_file",
-            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucudaki dosyayı okur (salt-okuma). Yerel dosya için view_file kullan. Her modda izinlidir.",
+            "description": "Yalnızca UZAK hedefte kayıtlı sunucudaki dosyayı okur (salt-okuma, her modda).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "Kayıtlı SSH host alias'ı",
+                        "description": "SSH alias",
                     },
                     "remote_path": {
                         "type": "string",
-                        "description": "Uzak sunucudaki dosya yolu (örn: /etc/nginx/nginx.conf)",
+                        "description": "Uzak dosya yolu",
                     },
                 },
                 "required": ["alias", "remote_path"],
@@ -332,21 +333,21 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_write_file",
-            "description": "Yalnızca açık UZAK hedef isteğinde kayıtlı sunucudaki dosyaya yazar. Yerel dosya için edit_file/write_file kullan. Host'ta allow_write=true olmalı ve kullanıcı onayı gerekir. ask/plan modunda devre dışıdır.",
+            "description": "Yalnızca UZAK hedefte sunucudaki dosyaya yazar; host'ta allow_write=true ve kullanıcı onayı gerekir. ask/plan'da kapalı.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "Kayıtlı SSH host alias'ı",
+                        "description": "SSH alias",
                     },
                     "remote_path": {
                         "type": "string",
-                        "description": "Yazılacak uzak dosya yolu",
+                        "description": "Uzak dosya yolu",
                     },
                     "content": {
                         "type": "string",
-                        "description": "Dosyaya yazılacak tam metin içeriği",
+                        "description": "Tam içerik",
                     },
                 },
                 "required": ["alias", "remote_path", "content"],
@@ -357,17 +358,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ask_user",
-            "description": "Yalnızca geçmiş/form yanıtlarında çözülmemiş, gerçekten bloklayıcı belirsizlik veya yeni risk için soru sorar. Verilmiş onayı ya da yanıtlanmış soruyu tekrarlama; araçlarla keşfedilebilecek ayrıntıları kullanıcıya sorma. kind=confirm ise olumlu yanıt plan→normal geçişini tetikler.",
+            "description": "Yalnızca gerçek bloklayıcı belirsizlik veya yeni risk için sorar; yanıtlanmış soruyu tekrarlama. kind=confirm olumlu yanıtı plan→normal geçişi tetikler.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question": {
                         "type": "string",
-                        "description": "Kullanıcıya sorulacak soru",
+                        "description": "Soru",
                     },
                     "kind": {
                         "type": "string",
-                        "description": "Soru tipi: 'confirm' (evet/hayır) veya 'text' (serbest metin)",
+                        "description": "confirm (evet/hayır) veya text",
                         "enum": ["confirm", "text"],
                         "default": "confirm",
                     },
@@ -380,17 +381,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "todo_write",
-            "description": "Çok adımlı işlerde yapılacaklar listesini tutar. Her güncellemede TÜM listeyi (içerik + durum: pending/in_progress/completed) yeniden gönder; liste terminalde kısa checklist olarak gösterilir ve kullanıcı /todos ile görebilir. Aynı anda yalnızca bir madde in_progress olabilir; iş bitince completed yap.",
+            "description": "Çok adımlı işte yapılacaklar listesini tutar; her güncellemede TÜM listeyi gönder (content + status). Aynı anda tek in_progress.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "todos": {
                         "type": "array",
-                        "description": "Listemin tamamı (her güncellemede tam liste). Boş dizi listeyi temizler.",
+                        "description": "Tam liste; boş dizi temizler",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "content": {"type": "string", "description": "Kısa görev açıklaması"},
+                                "content": {"type": "string", "description": "Görev"},
                                 "status": {
                                     "type": "string",
                                     "enum": ["pending", "in_progress", "completed"],
@@ -409,21 +410,21 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "Verilen http/https URL'yi GET ile indirir. HTML'i okunur düz metne çevirir (script/style/nav atılır, başlıklar ve linkler korunur); JSON ve düz metni olduğu gibi döndürür. Salt-okuma aracıdır; çıktı makul boyutta kırpılır, zaman aşımı ve boyut sınırı vardır.",
+            "description": "http/https URL'yi GET ile indirir; HTML okunur metne çevrilir, JSON/düz metin olduğu gibi. Salt-okuma, boyut ve zaman sınırlı.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "İndirilecek http/https adresi (örn: https://example.com/docs)",
+                        "description": "http/https adresi",
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "İstek zaman aşımı saniye (varsayılan 15, en fazla 60).",
+                        "description": "Zaman aşımı sn (varsayılan 15, en çok 60)",
                     },
                     "max_chars": {
                         "type": "integer",
-                        "description": "Döndürülecek azami karakter sayısı (varsayılan 20000).",
+                        "description": "Azami karakter (varsayılan 20000)",
                     },
                 },
                 "required": ["url"],
@@ -434,17 +435,17 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "delegate",
-            "description": "Bağımsız bir araştırma alt görevini temiz bağlamlı bir alt oturuma devreder (Task benzeri). Alt ajan salt-okuma araçlarıyla az adımda çalışır; ana geçmişe yalnızca alt ajanın kısa özeti döner. Yalnızca normal modda; alt ajan delegate veya yazma aracı kullanamaz.",
+            "description": "Bağımsız araştırma görevini temiz bağlamlı salt-okuma alt ajana devreder; yalnızca kısa özet döner. Yalnızca normal modda.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "Alt ajana verilecek bağımsız görev (örn: 'X nerede tanımlı, nasıl kullanılıyor'). Kendi başına anlaşılır olmalı; ana konuşma bağlamı taşınmaz.",
+                        "description": "Kendi başına anlaşılır araştırma görevi",
                     },
                     "max_steps": {
                         "type": "integer",
-                        "description": "Alt ajanın azami adım sayısı (varsayılan 6, en fazla 12).",
+                        "description": "Azami adım (varsayılan 6, en çok 12)",
                     },
                 },
                 "required": ["task"],
@@ -466,7 +467,10 @@ TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
 ASK_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
 PLAN_HIDDEN_TOOLS = {"edit_file", "write_file", "ssh_write_file", "delegate"}
 
-def tools_for_mode(mode) -> list[dict]:
+SSH_TOOL_NAMES = {"ssh_list_hosts", "ssh_run", "ssh_read_file", "ssh_write_file"}
+
+
+def tools_for_mode(mode, include_ssh: bool = True) -> list[dict]:
     """Returns the tool schemas that should be advertised for `mode`.
 
     `normal` returns the full TOOLS_SCHEMA unchanged. `ask` and `plan` drop the
@@ -477,11 +481,15 @@ def tools_for_mode(mode) -> list[dict]:
     from src.modes import AgentMode
 
     if mode == AgentMode.ASK:
-        hidden = ASK_HIDDEN_TOOLS
+        hidden = set(ASK_HIDDEN_TOOLS)
     elif mode == AgentMode.PLAN:
-        hidden = PLAN_HIDDEN_TOOLS
-    else:
+        hidden = set(PLAN_HIDDEN_TOOLS)
+    elif include_ssh:
         return TOOLS_SCHEMA
+    else:
+        hidden = set()
+    if not include_ssh:
+        hidden |= SSH_TOOL_NAMES
     return [t for t in TOOLS_SCHEMA if t.get("function", {}).get("name") not in hidden]
 
 
@@ -689,6 +697,30 @@ FIND_MAX_PER_FILE = 12
 FIND_LINE_CHARS = 180
 
 
+def _git_ignored(root: Path, paths: list[Path]) -> set[str]:
+    """Relative posix paths ignored by .gitignore (empty set outside a git repo)."""
+    if not paths or not (root / ".git").exists():
+        return set()
+    rels = [p.relative_to(root).as_posix() for p in paths]
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"], cwd=str(root), input="\0".join(rels) + "\0",
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {x for x in proc.stdout.split("\0") if x}
+
+
+def _looks_binary(path: Path) -> bool:
+    """True when the first KB holds a NUL byte."""
+    try:
+        with open(path, "rb") as fh:
+            return b"\0" in fh.read(1024)
+    except OSError:
+        return False
+
+
 def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None = None) -> str:
     """Finds files by glob; with `query`, returns matching lines like `grep -n`.
 
@@ -708,10 +740,15 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
     lines_out: list[str] = []
     truncated = False
 
-    for path in sorted(root.rglob(pattern or "*")):
-        if any(p in skip for p in path.parts) or not path.is_file():
-            continue
+    candidates = [
+        path for path in sorted(root.rglob(pattern or "*"))
+        if not any(p in skip for p in path.parts) and path.is_file()
+    ]
+    ignored = _git_ignored(root, candidates)
+    for path in candidates:
         rel = path.relative_to(root).as_posix()
+        if rel in ignored or _looks_binary(path):
+            continue
         if not needles:
             files.append(rel)
             if len(files) >= 100:
@@ -897,7 +934,7 @@ def tool_run_command(
 
             # Output was already streamed live; only save it and tell the model.
             result_lines.append(
-                f"STDOUT:\n{spill_long_output(out, root, 'cmd', shown_live=True)}"
+                f"STDOUT:\n{spill_long_output(out, root, 'cmd', shown_live=True, command=command)}"
             )
         if err:
             result_lines.append(f"STDERR:\n{_truncate_output(err)}")

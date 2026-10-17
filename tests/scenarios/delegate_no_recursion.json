@@ -1,0 +1,22 @@
+{
+  "name": "delegate_no_recursion",
+  "description": "In normal mode `delegate` starts one read-only sub-agent (ask mode, clean context). When the sub-agent tries to delegate again the mode gate denies it, and only the sub-agent's summary comes back to the parent history. Old bug: delegate was handled before the mode gate, so a sub-agent could spawn sub-agents without limit.",
+  "user_inputs": ["X sınıfı nerede tanımlı, araştır."],
+  "model_replies": [
+    {"tool_calls": [{"name": "delegate", "arguments": {"task": "X sınıfı nerede tanımlı?"}}]},
+    {"tool_calls": [{"name": "delegate", "arguments": {"task": "tekrar araştır"}}]},
+    {"content": "X, src/a.py:3 satırında tanımlı."},
+    {"content": "Araştırma tamam: X src/a.py içinde."}
+  ],
+  "expect": {
+    "request_count": 4,
+    "executed_count": 0,
+    "denied_count": 1,
+    "requests": [
+      {"index": 0, "tools_include": ["delegate", "edit_file"]},
+      {"index": 1, "tools_include": ["view_file"], "tools_exclude": ["delegate", "edit_file", "write_file"]}
+    ],
+    "messages_contain": ["ALT AJAN ÖZETİ", "src/a.py:3", "'delegate' yalnızca normal modda kullanılabilir"],
+    "final_contains": "Araştırma tamam"
+  }
+}

@@ -4,6 +4,7 @@ Provides the EVREN TUI terminal experience, slash commands,
 context management, model switching, and real-time agent interaction.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +28,13 @@ from src.agent import AgentSession
 from src.project_scanner import scan_workspace, generate_tree
 from src.file_ops import rollback_last_backup, resolve_workspace_path
 from src.terms import ensure_terms_accepted, ensure_terms_for_keys, get_terms_status
+from src.commands import is_command_input, unknown_command_message
+from src.extras import (
+    expand_mentions, handle_commit, handle_compact, handle_context, handle_doctor,
+    handle_init, handle_review, handle_rewind, handle_role, is_continue_phrase,
+    make_completer, make_status_line, refresh_custom_commands, render_custom_command,
+    resume_last_task,
+)
 from src.prompt_frame import (
     FORM_INTRO,
     collect_guided_prompt_frame,
@@ -149,7 +157,7 @@ def _take_interrupt_followup(session: AgentSession, read_line) -> tuple[str, str
         "Geçmiş duruyor. Düzeltme yazıp Enter'a basın; boş Enter kaldığı yerden devam eder."
     )
     text = (read_line("Düzeltme > ") or "").strip()
-    if text.startswith("/"):
+    if is_command_input(text):
         return ("command", text)
     session.interrupted = False
     if text:
@@ -192,8 +200,15 @@ def _collect_frame(session: AgentSession, pt_session, previous=None):
     )
 
 
-def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bool = False) -> None:
-    """Run or continue, then offer opt-in persistence outside auto-approval."""
+def _run_agent(
+    session: AgentSession, prompt: str | None = None, *, followup: bool = False,
+    compact: bool = False,
+) -> None:
+    """Run or continue, then offer opt-in persistence outside auto-approval.
+
+    `compact=True` is for text the user typed or pasted: a big paste is saved to
+    .evren/tmp and summarized (skill, template and playbook prompts stay whole).
+    """
     from src.workflow_state import clear_checkpoint
 
     if followup:
@@ -206,7 +221,7 @@ def _run_agent(session: AgentSession, prompt: str | None = None, *, followup: bo
         session.continue_task()
     else:
         clear_checkpoint(session.workspace_root)
-        session.run_step(prompt)
+        session.run_step(prompt, compact=compact)
 
     if session.interrupted:
         return
@@ -371,6 +386,22 @@ def print_key_quotas(rows: list[dict]) -> None:
         print("     " + "  ".join(parts))
 
 
+HELP_LEGACY = """
+[bold cyan]Eski (Foreman) komutlar - hâlâ çalışır:[/bold cyan]
+  [green]/diagnose [ad][/green]        Arıza triyajı çalıştırır (örn: /diagnose build-failure)
+  [green]/template [ad][/green]        Çıktı şablonunu doldurur (örn: /template adr)
+  [green]/track [filtre][/green]       Görevleri listeler (all|open|<durum>)
+  [green]/task add <id> <açıklama>[/green]  Yeni takip görevi ekler
+  [green]/progress <id> <yüzde>[/green]     Görev ilerlemesini günceller
+  [green]/playbook [ad][/green]        Playbook'ları listeler veya başlatır
+  [green]/resume[/green]               Kaydedilmiş playbook adımından devam eder
+  [green]/checkpoint [save|clear][/green]  Onaylı kalıcı görev kaydı
+  [green]/blockers[/green]             Engelleri ve çözüm yönlendirmelerini gösterir
+  [green]/check-in [update][/green]     Açık/gecikmiş/duraklamış görevleri gözden geçirir
+  [green]/decisions [add][/green]       Onaylı mimari karar günlüğü
+"""
+
+
 HELP_TEXT = """
 [bold cyan]EVREN CLI - Kullanılabilir Komutlar:[/bold cyan]
 
@@ -383,6 +414,7 @@ HELP_TEXT = """
   [green]/models[/green]               EVREN API'deki tüm modelleri çeker ve listeler
   [green]/quota[/green]                Tüm API anahtarlarının kalan/limit/reset kotasını gösterir
   [green]/tokens[/green]               Bağlam/token bütçesi raporunu gösterir
+  [green]/debug [N][/green]            Son görevin adım tablosunu gösterir (istek, araç, süre; N = sondan N. görev)
   [green]/docs [alt komut][/green]      agent.md/changelog.md durumu; refresh|unmark|path
   [green]/keys[/green]                 API anahtar havuzunu listeler (maskeli) ve yönetir
   [green]/keys add/remove[/green]      Anahtar ekler/çıkarır (~/.evren-cli/config.json)
@@ -390,16 +422,9 @@ HELP_TEXT = """
   [green]/terms[/green]                Tüm anahtarlar için şartları denetler / kabul eder (/terms force)
   [green]/skills [kategori][/green]    Kullanılabilir mühendislik becerilerini listeler
   [green]/skill <beceri>[/green]       Bir beceriyi (yerleşik veya kullanıcı) uygular (örn: /skill root-cause-debug; eşdeğeri /apply)
-  [green]/diagnose [ad][/green]        Arıza triyajı çalıştırır (örn: /diagnose build-failure)
-  [green]/template [ad][/green]        Çıktı şablonunu doldurur (örn: /template adr)
   [green]/memory[/green]               Proje hafızasını (profil + notlar) gösterir
   [green]/memory set <k> <v>[/green]   Profil alanı kaydeder (örn: /memory set stack FastAPI)
   [green]/memory note <metin>[/green]  Hafızaya not ekler
-  [green]/track [filtre][/green]       Görevleri listeler (all|open|<durum>)
-  [green]/task add <id> <açıklama>[/green]  Yeni takip görevi ekler
-  [green]/progress <id> <yüzde>[/green]     Görev ilerlemesini günceller
-  [green]/playbook [ad][/green]        Playbook'ları listeler veya başlatır
-  [green]/resume[/green]               Kaydedilmiş playbook adımından devam eder
   [green]/language [ad][/green]        Çıktı dilini ayarlar (örn: /language tr)
   [green]/scan [klasör][/green]        Çalışma alanını tarar, dosya ağacını ve istatistikleri çıkarır
   [green]/files[/green]                İstem bağlamına eklenmiş aktif dosyaları listeler
@@ -418,10 +443,15 @@ HELP_TEXT = """
   [green]/clear[/green]                Mevcut sohbet ve bağlam geçmişini sıfırlar
   [green]/continue[/green]             Adım sınırında duraklayan görevi geçmişle sürdürür (Brief: devam)
   [green]/execute <yanıt>[/green]       Formu atlayarak mevcut göreve onay/takip yanıtı gönderir
-  [green]/checkpoint [save|clear][/green]  Onaylı kalıcı görev kaydı
-  [green]/blockers[/green]             Engelleri ve çözüm yönlendirmelerini gösterir
-  [green]/check-in [update][/green]     Açık/gecikmiş/duraklamış görevleri gözden geçirir
-  [green]/decisions [add][/green]       Onaylı mimari karar günlüğü
+  [green]/context[/green]              Bağlam kırılımı (sistem, araç şeması, geçmiş, araç çıktıları)
+  [green]/compact [odak][/green]       Geçmişi şimdi sıkıştırır
+  [green]/commit[/green]               Diff'ten commit mesajı üretir, onayınla commit eder (push yok)
+  [green]/review[/green]               git diff'i ask kipinde inceletir
+  [green]/init[/green]                 Proje için AGENTS.md üretir
+  [green]/rewind[/green]               Son görevin değiştirdiği dosyaları geri alır
+  [green]/doctor[/green]               Ortam tanılaması (Python, PATH, sürüm, API, kota, SSH)
+  [green]/rol [metin|temizle][/green]  Kalıcı rol (.evren/settings.json); her görevde uygulanır
+  [green]/help legacy[/green]          Eski (Foreman) komutları listeler
   [green]/exit[/green] veya [green]/quit[/green]       Uygulamadan çıkar
 
 [bold]Görev kalıbı (her tur):[/bold]
@@ -440,7 +470,21 @@ HELP_TEXT = """
 
 [bold]Serbest istek:[/bold]
   Kalıbı boş geçince yazdığın metin eskisi gibi tek prompt olarak gider.
+  İlk sözcüğü kayıtlı bir komut değilse (örn. yapıştırılan /src/x.csproj : error ...) metin görev sayılır.
+  Uzun yapıştırmalar (80 satır / 6000 karakter üstü) .evren/tmp/paste-N.txt'ye kaydedilir;
+  modele baş/son satırlar ve hata satırları gider (EVREN_PASTE_MAX_LINES, EVREN_PASTE_MAX_CHARS).
 """
+
+
+def _handle_debug_command(arg: str, workspace_root) -> None:
+    """`/debug [last] [N]` — step table of the N-th last task (.evren/logs/trace.jsonl)."""
+    from src.trace import print_last_task
+
+    words = [word for word in (arg or "").split() if word.lower() != "last"]
+    if words and not words[0].isdigit():
+        print_warning("Kullanım: /debug [last] [N]  (N: sondan N. görev, varsayılan 1)")
+        return
+    print_last_task(workspace_root, int(words[0]) if words else 1)
 
 
 def _handle_docs_command(arg: str, session, workspace_root) -> None:
@@ -633,7 +677,13 @@ def _handle_ssh_command(arg: str, workspace_root: Path):
     print("\nKomutlar: /ssh add <alias> <user@host> [port] | /ssh remove <alias> | /ssh test <alias>")
 
 
-def show_help():
+def show_help(topic: str = ""):
+    if topic.strip().lower() == "legacy":
+        if HAVE_RICH:
+            console.print(HELP_LEGACY)
+        else:
+            print(re.sub(r"\[/?[a-z ]+\]", "", HELP_LEGACY))
+        return
     if HAVE_RICH:
         console.print(HELP_TEXT)
     else:
@@ -647,6 +697,7 @@ EVREN CLI Komutları:
   /models       - Modelleri listele
   /quota        - Kalan token kotası
   /tokens       - Bağlam/token bütçesi raporu
+  /debug [N]    - Son görevin adım tablosu (sondan N. görev)
   /steps [n]    - Adım tavanını göster veya ayarla (tasarruf: düşük tut)
   /keys         - API anahtar havuzunu yönet
   /keys next    - Sıradaki API anahtarına geç
@@ -753,6 +804,9 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
             pt_session = PromptSession(
                 history=FileHistory(str(history_file)),
                 auto_suggest=AutoSuggestFromHistory(),
+                completer=make_completer(workspace_root),
+                complete_while_typing=True,
+                bottom_toolbar=make_status_line(session),
             )
         except Exception:
             pt_session = None
@@ -776,6 +830,7 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
     """Interactive command loop; returns on /exit or EOF. Cleanup lives in start_repl."""
     workspace_root = Path(workspace_root)
     last_frame = None
+    custom_commands = refresh_custom_commands(workspace_root)
     while True:
         try:
             mode_tag = "" if session.mode.value == "normal" else f" ({session.mode.value})"
@@ -807,7 +862,10 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print_info(f"Kalıp API'ye ayrıldı: {delivery_summary(collected)}")
                     from src.workflow_state import clear_checkpoint
                     clear_checkpoint(workspace_root)
-                    _run_agent(session, session.apply_frame(collected, replace_identity=True))
+                    _run_agent(
+                        session, session.apply_frame(collected, replace_identity=True),
+                        compact=True,
+                    )
                     continue
                 else:
                     user_input = _read_line(pt_session, "İstek > ")
@@ -815,7 +873,12 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                         continue
 
             # Check slash commands
-            if user_input.strip().casefold() in ("devam", "/continue"):
+            if user_input.strip().casefold() in ("devam", "/continue") or (
+                is_continue_phrase(user_input) and session.pending_mode is None
+            ):
+                if session.pending_mode is None and session.task_goal:
+                    resume_last_task(session, _run_agent)
+                    continue
                 if session.pending_mode is None:
                     from src.workflow_state import checkpoint_path
                     if checkpoint_path(workspace_root).exists():
@@ -827,13 +890,15 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                         session.restore_checkpoint()
                 _run_agent(session)
                 continue
-            if user_input.startswith("/"):
+            if is_command_input(user_input):
                 parts = user_input.split(maxsplit=1)
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else ""
                 if cmd == "/execute":
                     if not arg:
                         print_warning("Kullanım: /execute <onay veya takip yanıtı>")
+                    elif is_continue_phrase(arg) and session.pending_mode is None:
+                        resume_last_task(session, _run_agent)
                     else:
                         _run_agent(session, arg, followup=True)
                     continue
@@ -845,7 +910,7 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     break
 
                 elif cmd in ("/help", "/h", "/?"):
-                    show_help()
+                    show_help(arg)
 
                 elif cmd in ("/version", "/ver", "/v"):
                     from src.version import get_version, get_changelog_notes
@@ -942,7 +1007,7 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print(f"  • Çıktı bütçesi        : {rep['output_budget']:,}")
                     print(f"  • Bağlam penceresi     : {rep['context_window']:,}")
                     print(f"  • Sıkıştırma eşiği     : {rep.get('compaction_limit', 0):,} "
-                          f"(pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
+                          f"(bütçe {rep.get('context_budget', 0):,}, pencerenin %{int(rep.get('compaction_ratio', 1) * 100)})")
                     print(f"  • Kalan bağlam         : {rep['remaining_context']:,}")
                     print(f"  • Kalibrasyon oranı    : {rep['calibration']}")
                     if rep["last_usage"]:
@@ -967,6 +1032,9 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                                   f"önbellek isabeti %{round(summary.get('cache_ratio', 0) * 100)}")
                     except Exception:
                         pass
+
+                elif cmd == "/debug":
+                    _handle_debug_command(arg, workspace_root)
 
                 elif cmd == "/steps":
                     from src.config import default_max_steps
@@ -1309,6 +1377,33 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     else:
                         print_error(f"Güncelleme başarısız: {msg}")
 
+                elif cmd == "/commit":
+                    handle_commit(session)
+
+                elif cmd == "/review":
+                    handle_review(session, _run_agent)
+
+                elif cmd == "/init":
+                    handle_init(session, _run_agent)
+
+                elif cmd == "/context":
+                    handle_context(session)
+
+                elif cmd == "/compact":
+                    handle_compact(arg, session)
+
+                elif cmd == "/rewind":
+                    handle_rewind(session)
+
+                elif cmd == "/doctor":
+                    handle_doctor(session)
+
+                elif cmd == "/rol":
+                    handle_role(arg, session)
+
+                elif cmd in custom_commands:
+                    _run_agent(session, render_custom_command(custom_commands[cmd], arg), compact=True)
+
                 elif cmd == "/clear":
                     from src.workflow_state import clear_checkpoint
                     clear_checkpoint(workspace_root)
@@ -1316,11 +1411,14 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print_success("Sohbet geçmişi, kalıp ve aktif bağlam temizlendi.")
 
                 else:
-                    print_warning(f"Bilinmeyen komut: '{cmd}'. Komut listesi için /help yazın.")
+                    print_warning(unknown_command_message(cmd))
                 continue
 
-            # Regular prompt: run autonomous agent loop
-            _run_agent(session, user_input)
+            # Regular prompt: run autonomous agent loop (expand @file mentions first)
+            user_input, mention_warnings = expand_mentions(user_input, workspace_root)
+            for note in mention_warnings:
+                print_warning(note)
+            _run_agent(session, user_input, compact=True)
 
         except KeyboardInterrupt:
             if session.task_goal:

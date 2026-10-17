@@ -751,6 +751,9 @@ def append_changelog_entry(root: Path, entry: dict) -> bool:
     """Appends one session entry. Returns False when nothing was written."""
     if not isinstance(entry, dict):
         return False
+    # EVREN_AUTO_DOCS=false must stop every docs write, not only the bootstrap.
+    if not docs_enabled(root)[0]:
+        return False
     try:
         signature = _entry_signature(entry)
         state = load_state(root)

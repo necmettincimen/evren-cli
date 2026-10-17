@@ -1,0 +1,30 @@
+{
+  "name": "git_grep_repeat_guard",
+  "description": "The same `git grep` run_command four times in one task executes once (one approval prompt); the three repeats are blocked with TEKRAR ENGELLENDİ, and the next model turn is forced to answer without tools (tool_choice=none). Old bug: `git grep` was classified as a file-changing command, every run reset the repeat guard, and a REPL session ran the same grep 25+ times per turn.",
+  "workspace_files": {
+    "Presentation/Program.cs": "using System;\nclass TransferWorker {}\nclass PreparationWorker {}\n"
+  },
+  "user_inputs": ["Worker sınıflarını bul ve kalan işi söyle."],
+  "approvals": ["y"],
+  "model_replies": [
+    {"tool_calls": [{"name": "run_command", "arguments": {"command": "git grep --no-index -n -E \"TransferWorker|PreparationWorker\"", "timeout_seconds": 60}}]},
+    {"tool_calls": [{"name": "run_command", "arguments": {"command": "git grep --no-index -n -E \"TransferWorker|PreparationWorker\"", "timeout_seconds": 60}}]},
+    {"tool_calls": [{"name": "run_command", "arguments": {"command": "git grep --no-index -n -E \"TransferWorker|PreparationWorker\"", "timeout_seconds": 60}}]},
+    {"tool_calls": [{"name": "run_command", "arguments": {"command": "git grep --no-index -n -E \"TransferWorker|PreparationWorker\"", "timeout_seconds": 60}}]},
+    {"content": "Bulgular: Presentation/Program.cs. Kalan iş: düzenleme."}
+  ],
+  "expect": {
+    "executed_tools": ["run_command"],
+    "executed_count": 1,
+    "blocked_count": 3,
+    "confirm_prompts": 1,
+    "request_count": 5,
+    "last_tool_choice": "none",
+    "requests": [
+      {"index": 3, "tool_choice": null},
+      {"index": 4, "tool_choice": "none"}
+    ],
+    "messages_contain": ["DÖNGÜ: aynı araç çağrılarını tekrarlıyorsun"],
+    "final_contains": "Kalan iş"
+  }
+}

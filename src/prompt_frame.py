@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, TYPE_CHECKING
 
+from src.commands import is_command_input
+
 if TYPE_CHECKING:
     from src.api_client import EvrenClient
 
@@ -50,6 +52,7 @@ def is_execution_followup(text: str) -> bool:
         "yap", "yap artık", "artık yap", "doğrudan yap", "soru sorma doğrudan yap",
         "uygula", "başla", "tüm görevleri yap", "hepsini yap",
         "soru sorma", "onay veriyorum", "kabul ediyorum",
+        "devam et", "onaylıyorum", "kalan işleri tamamla", "kalanları tamamla",
     } or bool(re.fullmatch(
         r"(?:hepsi|hepsine|hepsi için|tüm görevler için|tüm görevleri yap hepsine|"
         r"tümüne|tamamını) (?:için )?onay veriyorum(?: kabul ediyorum)?",
@@ -96,8 +99,9 @@ class PromptFrame:
 def collect_prompt_frame(read_line, previous: "PromptFrame | None" = None) -> PromptFrame | str:
     """Reads the five lines.
 
-    If the first line is a slash command, it is returned as-is and the
-    remaining lines are not asked.
+    If the first line is a slash command (see `src.commands`), it is returned
+    as-is and the remaining lines are not asked. Path-like text such as a
+    pasted `/src/x.csproj : error ...` is an ordinary answer.
 
     When `previous` is given, each field shows the prior turn's value and a
     blank answer keeps it (Enter accepts the default).
@@ -106,7 +110,7 @@ def collect_prompt_frame(read_line, previous: "PromptFrame | None" = None) -> Pr
     for index, (key, label, hint) in enumerate(FIELD_SPECS):
         prev_val = getattr(previous, key, "") if previous else ""
         raw = (read_line(field_prompt(label, hint, prev_val)) or "").strip()
-        if index == 0 and raw.startswith("/"):
+        if index == 0 and is_command_input(raw):
             return raw
         values[key] = raw if raw else prev_val
     return PromptFrame(**values)
@@ -310,7 +314,7 @@ def collect_guided_prompt_frame(
         return "/continue"
     if is_execution_followup(brief):
         return "/execute " + brief
-    if brief.startswith("/"):
+    if is_command_input(brief):
         return brief
     if not brief and previous:
         frame = PromptFrame(**vars(previous))
@@ -333,7 +337,7 @@ def collect_guided_prompt_frame(
                     "önce salt-okuma keşfine geçmek için devam, iptal için iptal yazın.\n"
                     "Karar > "
                 ) or "").strip()
-                if decision.startswith("/"):
+                if is_command_input(decision):
                     return decision
                 if not decision or decision.casefold() == "iptal":
                     raise ValueError("Prompt hazırlama kullanıcı tarafından iptal edildi; görev başlatılmadı.")
@@ -348,7 +352,7 @@ def collect_guided_prompt_frame(
                 break
             asked.add(normalized)
             answer = (read_line(f"Netleştirme: {question}\nYanıt > ") or "").strip()
-            if answer.startswith("/"):
+            if is_command_input(answer):
                 return answer
             if not answer:
                 raise ValueError("Netleştirme yanıtı boş; görev başlatılmadı.")
@@ -387,7 +391,7 @@ def collect_guided_prompt_frame(
         else:
             prompt = field_prompt(label, hint, current)
         raw = (read_line(prompt) or "").strip()
-        if raw.startswith("/"):
+        if is_command_input(raw):
             return raw
         setattr(frame, key, "" if raw == "-" else raw or current or suggested)
     frame.clarifications = frame.clarifications.strip()

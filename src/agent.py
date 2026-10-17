@@ -26,12 +26,15 @@ from src.config import (
     planner_max_steps,
     executor_thinking,
 )
+from src.models import context_window_for
 from src.token_manager import TokenManager
 from src.history_compactor import HistoryCompactor
 from src.modes import AgentMode, parse_mode_prefix
 from src.prompt_frame import PromptFrame, build_user_content, compose_system
 from src.tool_gateway import check_tool_allowed
 from src.secret_vault import SecretVault, set_active_vault
+from src.paste import compact_paste, paste_info
+from src.trace import TaskTrace
 from src.ui import (
     print_tool_call,
     print_tool_result,
@@ -102,73 +105,42 @@ def _tool_arguments_complete(tool_calls) -> bool:
 
 
 SYSTEM_PROMPT = """Sen EVREN LLM API destekli, kullanıcının yerel proje çalışma alanında çalışan uzman bir yazılım mühendisi ajanısın.
-Gerçek işletim sistemi, kabuk ve çalışma dizini aşağıdaki YEREL ÇALIŞTIRMA BAĞLAMI ile belirtilir.
 
-ÇALIŞMA TARZI (ÖNEMLİ):
-- Hızlı ve kararlı ol. Kısa düşün ve ilk yararlı aracı hemen çağır; uzun iç muhakeme yerine araçla kanıt topla.
-- Makul ve geri alınabilir varsayımları kendin yap; son yanıtta tek satırla belirt.
-  Dosya adı, yol, sürüm gibi araçlarla bulunabilecek bilgileri kullanıcıya sorma, kendin bul.
-- 'ask_user' yalnızca gerçekten bloklayıcı durumda kullanılır: istek birden çok anlama geliyor ve yanlış seçim
-  ciddi iş kaybı doğurur, ya da geri dönüşü zor/riskli bir işlem (veri silme, üretim değişikliği, sır gerektiren adım) onay ister.
-  Önceki yanıtları, form bilgilerini ve verilmiş onayları tekrar sorma.
-- Bağımsız işlemleri (birden çok dosya okuma, arama, liste) aynı turda birlikte çağır;
-  yalnızca sonucu bilinmeyen bir çağrıya bağlı adımı sonraki tura bırak.
-- Aynı başarısız çağrıyı yeni kanıt olmadan tekrarlama. İki denemede olmazsa farklı yol dene veya somut engeli bildir.
-- 3+ adımlı işlerde (çok dosyalı özellik, plan uygulama) 'todo_write' ile kısa bir yapılacaklar listesi tut:
-  başta listeyi yaz, bir maddeye başlarken in_progress, bitince hemen completed yap (her seferinde tam liste).
-  Tek adımlı veya salt sorgu işlerinde kullanma.
-- Çok dosyaya yayılan bağımsız bir araştırmayı ("X nerede tanımlı, nasıl kullanılıyor") 'delegate' ile alt
-  ajana devret: ana bağlamın şişmez, yalnızca özet döner. Tek dosya okumak veya tek arama için kullanma.
-- İş doğrulanınca dur. Son yanıt: yapılan iş, doğrulama sonucu ve varsa kalan engel. Kapsam dışı iş ekleme.
-- İstenen çıktıya ulaşınca DUR. Kullanıcı listeleme/kontrol/sorgu istediyse kök neden analizi, log çekme,
-  düzeltme gibi ek işleri kendiliğinden yapma; gerekirse son yanıtta tek satırlık öneri olarak yaz.
-- Öneri/değerlendirme/teşhis isteklerinde önce TEK komutla geniş salt-okuma anlık görüntü al (durum, hata,
-  restart, event, kaynak), sonra yalnızca gerekirse 1-2 hedefli ayrıntı komutu çalıştır. Her öneriyi gözlenen
-  bir kanıta (satır, sayı, event) dayandır; kontrol etmediğin konu için öneri yazma, "kontrol edilmedi" de.
-  Önerileri etki sırasına koy; düzeltme komutunu yalnızca öner, kullanıcı istemedikçe uygulama.
-- Sorgu ve salt-okuma işlerinde çalışma alanına dosya (ara JSON, yardımcı betik) yazma; veriyi tek komutta süz.
-- Deneme/yer tutucu komut (`echo test`, `echo PLACEHOLDER`, `print('test')`) çalıştırma; kabuk ve araçlar çalışır.
-  Dosyanın bir bölümünü görmek için eşleşmeyecek deneme edit_file gönderme; view_file kullan.
-  Betik gerçekten gerekiyorsa .evren/tmp/ altına yaz.
-- Kullanıcının son açık onayı araç izinlerini, salt-okuma kipini, SSH allow_write ayarını veya komut onay mekanizmasını geçersiz kılmaz.
+ÇALIŞMA TARZI:
+- Hızlı ve kararlı ol: kısa düşün, ilk yararlı aracı hemen çağır; bağımsız araçları aynı turda birlikte çağır.
+- Makul, geri alınabilir varsayımları kendin yap ve son yanıtta tek satırla belirt. Araçla bulunabilecek bilgiyi sorma. 'ask_user' yalnızca bloklayıcı belirsizlikte veya geri dönüşü zor/riskli
+  işlemde (veri silme, üretim değişikliği, sır) kullanılır; verilmiş yanıt ve onayı tekrar sorma.
+- Aynı başarısız çağrıyı yeni kanıt olmadan tekrarlama; iki denemede olmazsa başka yol dene veya engeli bildir.
+- 3+ adımlı işlerde 'todo_write' ile kısa liste tut (her seferinde tam liste; başlarken in_progress, bitince completed).
+- Çok dosyaya yayılan bağımsız araştırmayı 'delegate' ile devret; tek dosya/tek arama için kullanma.
+- İstenen çıktıya ulaşınca DUR. Listeleme/kontrol/sorgu isteğinde kök neden analizi, log çekme, düzeltme gibi ek iş
+  yapma; gerekirse tek satır öneri yaz. Son yanıt: yapılan iş, doğrulama sonucu, kalan engel.
+- Öneri/teşhis isteğinde önce TEK komutla geniş salt-okuma anlık görüntü al, gerekirse 1-2 hedefli komut ekle. Her
+  öneriyi gözlenen kanıta dayandır, bakmadığın konuda "kontrol edilmedi" de; düzeltmeyi yalnızca öner.
+- Sorgu/salt-okuma işinde çalışma alanına dosya yazma; veriyi tek komutta süz. Deneme komutu (`echo test`) veya eşleşmeyecek deneme edit_file gönderme; betik gerekirse .evren/tmp/ altına yaz.
+- Kullanıcı onayı araç izinlerini, salt-okuma kipini ve komut onayını geçersiz kılmaz.
 
-DOSYA VE KOMUT KURALLARI:
-1. Değiştirmeden önce dosyayı oku. Kod aramak için findstr/grep değil find_files(query="a|b") kullan (satır
-   numarası döner), sonra view_file'ı start_line/end_line ile yalnızca ilgili aralık için çağır; aynı aralığı
-   tekrar okuma. Plan verildiyse planın satır bilgisini kullan, keşfi tekrarlama.
-   Düzenleme sonucu "SÖZDİZİMİ HATASI" içerirse başka işe geçmeden önce onu düzelt.
-   find_files satırı girintisiyle birebir verir; tek satırlık değişiklikte ayrıca view_file çağırma.
-   Çok dosyaya yayılan aynı türden değişiklikte (yeniden adlandırma, metin değiştirme) bağımsız
-   edit_file çağrılarını aynı turda topla.
-   CHANGELOG'da yayımlanmış sürüm notlarını değiştirme (geçmiş kayıttır); yeni notu [Unreleased]'a yaz.
-2. 'edit_file' ile cerrahi değişiklik yap; dosyayı baştan yazma, yorumları, stili ve girintiyi koru.
-3. Kod değişikliğinden sonra ilgili testi veya sözdizimi kontrolünü 'run_command' ile çalıştır; başarıyı yalnızca doğrulanmış sonuca göre bildir.
-4. Komutları gerçek kabuğa göre yaz. Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver;
-   komutu elle `powershell -Command "..."` içine sarmalama. Veri süzme/JSON işleme için Python kodu yazacaksan
-   use_python=true ver ve yalnızca kodu yaz (çok satırlı olabilir); `python -c "..."` içine sarmalama.
-5. Kritik değişikliklerde kullanıcıya diff gösterilir; otomatik yedek yalnızca CLI --backup bayrağıyla alınır.
-6. Commit: önce `git log -5` ile projenin mesaj biçimine (dil, ön ek, karakter kullanımı) bak ve ona uy.
-   Başlık en fazla ~72 karakter ve NE değiştiğini anlatsın (süreci değil); ayrıntıları gövdeye madde madde yaz:
-   `git commit -m "<başlık>" -m "- madde 1" -m "- madde 2"`. Türkçe karakter cmd/PowerShell'de sorunsuz
-   çalışır; yalnızca kodlama endişesiyle ASCII'ye çevirme. Kullanıcı açıkça istemedikçe push yapma.
+DOSYA VE KOMUTLAR:
+- Değiştirmeden önce oku. Kod aramak için find_files(query="a|b") kullan (girintili satır döner, tek satırlık
+  değişiklikte doğrudan edit_file hedefi olur), sonra view_file'ı yalnızca ilgili aralıkla çağır. "SÖZDİZİMİ HATASI" sonucunu önce düzelt.
+- 'edit_file' ile cerrahi değişiklik yap; yorum, stil ve girintiyi koru.
+- Kod değişikliğinden sonra ilgili testi/sözdizimi kontrolünü 'run_command' ile çalıştır; başarıyı yalnızca doğrulanmış sonuca göre bildir.
+- Windows'ta PowerShell sözdizimi için run_command use_powershell=true, Python kodu için use_python=true ver
+  (yalnızca kodu yaz); elle powershell -Command / python -c sarmalama.
+- CHANGELOG'da yayımlanmış sürüm notları geçmiştir, değiştirme; yeni notu [Unreleased]'a yaz.
+- Commit: önce `git log -5` ile mesaj biçimine uy; başlık en fazla ~72 karakter ve NE değiştiğini anlatsın,
+  ayrıntı gövdeye (`git commit -m "<başlık>" -m "- madde"`). ASCII'ye çevirme. İstenmedikçe push yapma.
 
 YEREL / UZAK HEDEF:
-- Varsayılan hedef EVREN CLI'nin çalıştığı yerel makinedir; önceki turda SSH kullanılmış olması bunu değiştirmez.
-- "bu host", "bu hosts", "bu hostta", "bu makine", "bu sunucu", "burada", "lokal", "local",
-  "localhost", "127.0.0.1" ve "::1" yerel makinedir: run_command/view_file/edit_file kullan, SSH kullanma.
-- SSH'ı yalnızca kullanıcı açıkça uzak sunucu veya kayıtlı alias istediğinde kullan. Kullanıcı alias verdiyse
-  doğrudan 'ssh_run'/'ssh_read_file' çağır (alias yoksa hata kayıtlı ve benzer alias'ları listeler);
-  'ssh_list_hosts'u yalnızca hedef belirsizse kullan. Rastgele host/IP kullanma. Bağlantı zaman aşımına
-  uğrarsa aynı çağrıyı tekrarlama; erişim sorununu bildir. 'ssh_write_file' yalnızca allow_write=true host'ta
-  ve kullanıcı onayıyla çalışır. Uzak işlemler .evren/logs/ssh_audit.log dosyasına kaydedilir.
+- Varsayılan hedef yerel makinedir ("bu host", "bu hosts", "bu makine", "burada", "localhost", "127.0.0.1", "::1" = yerel): run_command/view_file/edit_file
+  kullan. SSH'ı yalnızca kullanıcı açıkça uzak sunucu/kayıtlı alias isterse kullan; alias verildiyse doğrudan
+  'ssh_run'/'ssh_read_file' çağır, hedef belirsizse 'ssh_list_hosts'. Rastgele host/IP kullanma. 'ssh_write_file' yalnızca allow_write=true host'ta ve onayla çalışır.
 
-ÇALIŞMA KİPLERİ:
-- normal: tüm araçlar. ask: salt-okuma (yazma kapalı, run_command/ssh_run yalnızca salt-okuma komutları).
-  plan: kaynak dosyalara dokunulmaz, yalnızca 'create_plan' ile plans/<ad>/plan.md yazılır.
-- "REDDEDİLDİ: ..." sonucu kip kısıtıdır; aynı çağrıyı tekrarlama, kullanıcıdan normal moda geçmesini iste.
+KİPLER: normal: tüm araçlar. ask: salt-okuma. plan: yalnızca 'create_plan' ile plans/<ad>/plan.md yazılır.
+"REDDEDİLDİ: ..." kip kısıtıdır; tekrarlama, kullanıcıdan normal moda geçmesini iste.
 
-PROJE BELGELERİ: Aşağıdaki agent.md/changelog.md/AGENTS.md özetleri hazır bağlamdır; doğrudan kullan.
-Yalnızca bir değişiklik bu bilgiye dayanıyor ve canlı dosyayla çelişki görürsen teyit et. Sistem talimatı çelişkide kazanır.
+PROJE BELGELERİ: agent.md/changelog.md/AGENTS.md özetleri hazır bağlamdır; canlı dosyayla çelişirse canlı dosya
+ve sistem talimatı kazanır.
 """
 
 # Domain notes that used to ride on every request. They are only relevant to
@@ -344,8 +316,19 @@ class AgentSession:
         self.active_context_files: set[str] = set()
 
         # Token management: estimate + calibrate, and compact history when needed.
-        self.token_manager = TokenManager()
-        self.compactor = HistoryCompactor(self.token_manager)
+        from src.config import compact_target_ratio, smart_compact_enabled
+
+        self.token_manager = TokenManager(context_window=context_window_for(self.model))
+        self._window_model = self.model
+        self.compactor = HistoryCompactor(
+            self.token_manager,
+            smart=smart_compact_enabled(),
+            summarizer=self._summarize_for_compaction,
+            target_ratio=compact_target_ratio(),
+        )
+        # Read-repeat memory (see _read_repeat): (path, start, end) -> record.
+        self._reads: dict[tuple, dict[str, Any]] = {}
+        self._step_no = 0
         self.last_usage: dict[str, Any] | None = None
         # Session-wide server-reported totals (feeds /tokens and usage.jsonl).
         self.usage_totals: dict[str, int] = {
@@ -380,6 +363,8 @@ class AgentSession:
         self.task_goal = ""
         # Lightweight audit trail of the current task (feeds changelog.md).
         self.tool_trace: list[dict[str, Any]] = []
+        # Step trace of the running task (.evren/logs/trace.jsonl, see src/trace.py).
+        self._trace_writer: TaskTrace | None = None
 
     def _read_git_block(self) -> str:
         try:
@@ -425,6 +410,13 @@ class AgentSession:
         except Exception:
             pass
         try:
+            from src.extras import role_context_block
+            role = role_context_block(self.workspace_root)
+            if role:
+                blocks.append(role)
+        except Exception:
+            pass
+        try:
             from src.language import language_context_block
             lang = language_context_block(self.workspace_root)
             if lang:
@@ -441,6 +433,13 @@ class AgentSession:
 
     def set_model(self, new_model: str):
         self.model = new_model
+        self._sync_window()
+
+    def _sync_window(self) -> None:
+        """Keeps the token manager's context window in step with the model."""
+        if getattr(self, "_window_model", None) != self.model:
+            self._window_model = self.model
+            self.token_manager.context_window = context_window_for(self.model)
 
     def set_mode(self, mode: AgentMode):
         self.mode = mode
@@ -554,6 +553,9 @@ class AgentSession:
             error = "HATA: Uygulanacak önceki görev yok; önce somut bir Brief yazın."
             print_warning(error)
             return error
+        # A follow-up can be a big paste too (fresh build errors after "devam").
+        set_active_vault(self.vault)
+        text = self._compact_pasted_text(self.vault.capture(text))
         goal = self.task_goal
         mode = self.mode
         self.mode = self.pending_mode or self.mode
@@ -650,7 +652,21 @@ class AgentSession:
             raise ValueError(f"Şablon bulunamadı: {name}")
         return tmpl.prompt_block(context)
 
-    def _record_usage(self, response: Any, *, step: int | None = None) -> None:
+    def _summarize_for_compaction(self, messages: list[dict[str, Any]]) -> str | None:
+        """Cheap summarizer call for the compactor; None on any failure."""
+        from src.config import summary_model
+        from src.summarizer import summarize_messages
+
+        model = summary_model()
+        saved = self.last_usage
+
+        def _record(response: Any) -> None:
+            self._record_usage(response, model=model)
+            self.last_usage = saved
+
+        return summarize_messages(self.client, messages, model, on_response=_record)
+
+    def _record_usage(self, response: Any, *, step: int | None = None, model: str | None = None) -> None:
         """Stores the last server-reported usage and appends it to the usage log.
 
         Only token counters reach `.evren/logs/usage.jsonl`; message content and
@@ -674,7 +690,7 @@ class AgentSession:
 
             log_usage(
                 usage,
-                model=self.model,
+                model=model or self.model,
                 step=step,
                 mode=getattr(self.mode, "value", str(self.mode)),
                 workspace_root=self.workspace_root,
@@ -691,7 +707,16 @@ class AgentSession:
 
     def compaction_limit(self) -> int:
         """Token ceiling that triggers compaction for this session's model."""
-        return max(1024, int(self.token_manager.context_window * self.compaction_ratio()))
+        from src.config import context_budget
+
+        window_limit = int(self.token_manager.context_window * self.compaction_ratio())
+        return max(1024, min(context_budget(), window_limit))
+
+    @staticmethod
+    def _context_budget() -> int:
+        from src.config import context_budget
+
+        return context_budget()
 
     def token_report(self) -> dict[str, Any]:
         """Builds a token/context report for the /tokens command."""
@@ -706,6 +731,7 @@ class AgentSession:
             "context_window": self.token_manager.context_window,
             "compaction_limit": self.compaction_limit(),
             "compaction_ratio": self.compaction_ratio(),
+            "context_budget": self._context_budget(),
             "remaining_context": self.token_manager.remaining_context(self.messages, output_budget),
             "calibration": round(self.token_manager.calibration, 3),
             "last_usage": self.last_usage,
@@ -745,6 +771,46 @@ class AgentSession:
             self.tool_trace.append(record)
         except Exception:
             pass
+
+    # Step trace -> .evren/logs/trace.jsonl. Not to be confused with `tool_trace`
+    # above (the changelog audit); TaskTrace swallows its own errors.
+
+    def _trace_task_begin(self, text: str, mode: AgentMode) -> None:
+        try:
+            self._trace_writer = TaskTrace(self.workspace_root)
+            self._trace_writer.start(
+                model=self.model, mode=getattr(mode, "value", str(mode)), text=text,
+            )
+        except Exception:
+            self._trace_writer = None
+
+    def _trace_request(self, response: Any, started: float, *, error: bool = False) -> None:
+        if self._trace_writer is None:
+            return
+        try:
+            finish_reason = response.choices[0].finish_reason
+        except Exception:
+            finish_reason = None
+        self._trace_writer.request(
+            getattr(response, "usage", None),
+            ms=(time.perf_counter() - started) * 1000,
+            finish_reason=finish_reason,
+            model=self.model,
+            error=error,
+        )
+
+    def _trace_tool(
+        self, name: str, args: Any, started: float, result: str, *, blocked: bool = False,
+    ) -> None:
+        if self._trace_writer is not None:
+            self._trace_writer.tool(
+                name, args, ms=(time.perf_counter() - started) * 1000, result=result, blocked=blocked,
+            )
+
+    def _trace_task_end(self, result: str | None) -> None:
+        writer, self._trace_writer = self._trace_writer, None
+        if writer is not None:
+            writer.end(result)
 
     def changelog_entry(self, final_text: str = "") -> dict:
         """Builds the changelog payload for the task that just finished."""
@@ -814,8 +880,29 @@ class AgentSession:
             )
         return result_text
 
+    def _compact_pasted_text(self, text: str) -> str:
+        """Shrinks an oversized (already secret-masked) paste; see src/paste.py."""
+        compact, saved = compact_paste(text, self.workspace_root)
+        if saved is not None:
+            print_info(paste_info(text, saved))
+        return compact
+
+    def _include_ssh_tools(self) -> bool:
+        """SSH tools are sent only when hosts are registered; decided once per session."""
+        cached = getattr(self, "_ssh_tools_cached", None)
+        if cached is None:
+            try:
+                from src.ssh_hosts import load_hosts
+
+                cached = bool(load_hosts(self.workspace_root))
+            except Exception:
+                cached = True
+            self._ssh_tools_cached = cached
+        return cached
+
     def run_step(
         self, user_input: str, max_steps: int | None = None, *, route: bool = True,
+        compact: bool = False,
     ) -> str:
         """
         Executes an agentic goal loop.
@@ -830,6 +917,10 @@ class AgentSession:
         planner model (read-only, few steps) and then executed by the executor
         model with thinking off; plan mode runs on the planner model. `/continue`
         and follow-ups pass `route=False` and keep the last executor profile.
+
+        `compact=True` marks text the user typed or pasted (not a skill or
+        template prompt): above the paste limits it is saved to
+        `.evren/tmp/paste-N.txt` and only a compact form joins the history.
         """
         explicit_steps = max_steps is not None or self.max_steps is not None
         if max_steps is None:
@@ -843,6 +934,9 @@ class AgentSession:
         # changelog, checkpoints) sees the task text.
         set_active_vault(self.vault)
         cleaned_input = self.vault.capture(cleaned_input)
+        if compact:
+            # After capture: the saved paste file then holds placeholders only.
+            cleaned_input = self._compact_pasted_text(cleaned_input)
         effective_mode = turn_mode or self.mode
         self.pending_mode = None
         self.interrupted = False
@@ -874,6 +968,8 @@ class AgentSession:
         # the new one; keep only their head and tail (a REPL session reached 270
         # messages of old grep output and ~70k prompt tokens per step).
         self._trim_previous_tool_outputs()
+        self._collapse_previous_task()
+        self._reads = {}
         for notes in (
             domain_hints(cleaned_input),
             ssh_target_note(cleaned_input, self.workspace_root),
@@ -890,6 +986,8 @@ class AgentSession:
         text_continuations = 0
 
         session_model = self.model
+        self._trace_task_begin(cleaned_input, effective_mode)
+        outcome: str | None = None  # stays None when an exception escapes
         try:
             # Size is judged on what the user wrote (plus attached files), not on
             # the domain/target notes EVREN appended, which made short briefs
@@ -899,23 +997,26 @@ class AgentSession:
             )
             if not explicit_steps:
                 max_steps = self._planned_step_budget(max_steps)
-            return self._finish_task(
+            outcome = self._finish_task(
                 self._run_steps(
                     max_steps, effective_mode, step_count, stalled_steps, text_continuations,
                 ),
                 effective_mode,
             )
+            return outcome
         except KeyboardInterrupt:
             self.note_interrupt(effective_mode)
             print_warning(
                 "İşlem Ctrl+C ile durduruldu. Geçmiş duruyor; düzeltme yazarak devam edebilirsiniz."
             )
-            return "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+            outcome = "İPTAL: Kullanıcı Ctrl+C ile durdurdu. Geçmiş korunuyor."
+            return outcome
         finally:
             # The session model (/model) is what the user chose; routing only
             # borrows other models for the duration of one task.
             self.model = session_model
             self._thinking = None
+            self._trace_task_end(outcome)
 
     # ------------------------------------------------------------------ #
     # Planner / executor routing
@@ -1117,6 +1218,95 @@ class AgentSession:
             )
         return result
 
+    _TASK_NOISE_PREFIXES = ("[EVREN]", "Önceki yanıt token", "[Önceki")
+
+    def _collapse_previous_task(self) -> None:
+        """At a task boundary, folds the previous task into one deterministic summary.
+
+        Only when the history is past half of the limit; no API call. Runs once
+        per task (an early, deep change) so it does not disturb the cached prefix
+        between steps.
+        """
+        try:
+            if not self.compactor.smart:
+                return
+            used = self.token_manager.estimate_messages(self.messages)
+            if used <= self.compaction_limit() // 2:
+                return
+            start = None
+            for i in range(len(self.messages) - 1, 0, -1):
+                m = self.messages[i]
+                content = m.get("content")
+                if (
+                    m.get("role") == "user"
+                    and isinstance(content, str)
+                    and not content.startswith(self._TASK_NOISE_PREFIXES)
+                ):
+                    start = i
+                    break
+            if start is None or start <= 1:
+                return
+            from src.history_compactor import collapse_task
+
+            summary = collapse_task(self.messages[start:])
+            self.messages = self.messages[:start] + [{"role": "user", "content": summary}]
+        except Exception:
+            pass
+
+    def _read_repeat(self, fn_name: str, args: dict) -> str:
+        """Answers an unchanged re-read of the same file range without resending it."""
+        if fn_name != "view_file":
+            return ""
+        key = self._read_key(args)
+        record = self._reads.get(key) if key else None
+        if not record:
+            return ""
+        digest = self._file_digest(str(args.get("path", "")))
+        if digest is None or digest != record["digest"]:
+            return ""
+        for m in self.messages:
+            if m.get("role") == "tool" and m.get("tool_call_id") == record["call_id"]:
+                content = m.get("content")
+                if isinstance(content, str) and not content.startswith(("[özet]", "BİLGİ:")) \
+                        and "[araç çıktısı bağlam için kırpıldı]" not in content:
+                    rng = self._range_text(args)
+                    return (
+                        f"BİLGİ: {args.get('path')} {rng} adım {record['step']}'te okundu ve o zamandan beri "
+                        "değişmedi; yukarıdaki çıktıyı kullan."
+                    )
+        return ""
+
+    @staticmethod
+    def _read_key(args: dict) -> tuple | None:
+        path = args.get("path")
+        if not isinstance(path, str) or not path:
+            return None
+        return (path, args.get("start_line"), args.get("end_line"))
+
+    @staticmethod
+    def _range_text(args: dict) -> str:
+        start, end = args.get("start_line"), args.get("end_line")
+        if start is None and end is None:
+            return "(ilk 250 satır)"
+        return f"{start or 1}-{end or 'son'}"
+
+    def _file_digest(self, path: str) -> str | None:
+        import hashlib
+
+        try:
+            target = (Path(self.workspace_root) / path).resolve()
+            return hashlib.sha1(target.read_bytes()).hexdigest()
+        except Exception:
+            return None
+
+    def _note_read(self, fn_name: str, args: dict, result: str, call_id: str) -> None:
+        if fn_name != "view_file" or result.startswith(("HATA", "BİLGİ:", "TEKRAR")):
+            return
+        key = self._read_key(args)
+        digest = self._file_digest(str(args.get("path", ""))) if key else None
+        if key and digest:
+            self._reads[key] = {"digest": digest, "step": self._step_no, "call_id": call_id}
+
     def _trim_previous_tool_outputs(self) -> None:
         from src.history_compactor import _truncate_tool_content
 
@@ -1174,6 +1364,8 @@ class AgentSession:
     ) -> str:
         while step_count < max_steps:
             step_count += 1
+            self._step_no = step_count
+            self._sync_window()
 
             # Compact history before each request so the context budget is
             # never exceeded (truncate tools -> drop middle -> system+last).
@@ -1199,9 +1391,9 @@ class AgentSession:
             if len(self.messages) < before and not self._compaction_notified:
                 self._compaction_notified = True
                 print_info(
-                    f"Bağlam {int(self.compaction_ratio() * 100)}% eşiğinde sıkıştırıldı "
+                    f"Bağlam {compact_limit:,} token bütçesini aştı, sıkıştırıldı "
                     f"({before} mesaj -> {len(self.messages)}). "
-                    "Ayar: set EVREN_COMPACT_RATIO=1.0 (eski davranış)."
+                    "Ayar: EVREN_CONTEXT_BUDGET, EVREN_SMART_COMPACT=false (eski davranış)."
                 )
 
             status_msg = (
@@ -1210,6 +1402,7 @@ class AgentSession:
                 else f"[Adım {step_count}/{max_steps}] Model analiz ediyor... [{self.model}]"
             )
 
+            request_started = time.perf_counter()
             try:
                 from src.ui import StatusTracker, HAVE_RICH, console
                 estimated = self.token_manager.estimate_messages(self.messages)
@@ -1270,7 +1463,7 @@ class AgentSession:
                         messages=normalize_chat_messages(outgoing),
                         model=self.model,
                         max_tokens=output_budget,
-                        tools=tools_for_mode(effective_mode),
+                        tools=tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools()),
                         # Same tool list keeps the cached prefix; "none" only forbids calls.
                         tool_choice="none" if (
                             self._listing_done or self._loop_blocks >= _LOOP_BLOCK_LIMIT
@@ -1290,7 +1483,9 @@ class AgentSession:
                 # Calibrate the estimator against server-reported usage.
                 self.token_manager.calibrate_from_response(estimated, response)
                 self._record_usage(response, step=step_count)
+                self._trace_request(response, request_started)
             except Exception as e:
+                self._trace_request(None, request_started, error=True)
                 if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
                     stalled_steps += 1
                     print_warning(
@@ -1397,6 +1592,7 @@ class AgentSession:
                 # Execute each tool call
                 for tc in tool_calls:
                     fn_name = tc.function.name
+                    t_tool = time.perf_counter()
                     raw_args = tc.function.arguments
                     try:
                         if isinstance(raw_args, dict):
@@ -1413,6 +1609,7 @@ class AgentSession:
                     except (json.JSONDecodeError, TypeError, ValueError) as e:
                         result = f"HATA: '{fn_name}' için geçersiz araç argümanları: {e}"
                         print_tool_result(fn_name, result, is_error=True)
+                        self._trace_tool(fn_name, {"raw": raw_args}, t_tool, result)
                         self.messages.append({
                             "role": "tool", "tool_call_id": tc.id,
                             "name": fn_name, "content": result,
@@ -1427,6 +1624,7 @@ class AgentSession:
                     if not allowed:
                         result = f"REDDEDİLDİ: {deny_reason}"
                         print_tool_result(fn_name, deny_reason, is_error=True)
+                        self._trace_tool(fn_name, args, t_tool, result)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -1448,6 +1646,7 @@ class AgentSession:
                         summary = (result.splitlines()[0] if result else "Tamamlandı")
                         print_tool_result(fn_name, summary, is_error=is_err)
                         self._note_tool_call(fn_name, args, result)
+                        self._trace_tool(fn_name, args, t_tool, result)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -1459,11 +1658,25 @@ class AgentSession:
                     blocked = self._repeat_guard(fn_name, args)
                     if blocked:
                         print_tool_result(fn_name, "tekrar eden çağrı engellendi", is_error=True)
+                        self._trace_tool(fn_name, args, t_tool, blocked, blocked=True)
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
                             "name": fn_name,
                             "content": blocked,
+                        })
+                        continue
+
+                    repeated = self._read_repeat(fn_name, args)
+                    if repeated:
+                        print_tool_result(fn_name, "değişmemiş dosya yeniden okunmadı")
+                        self._note_tool_call(fn_name, args, repeated)
+                        self._trace_tool(fn_name, args, t_tool, repeated)
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": fn_name,
+                            "content": repeated,
                         })
                         continue
 
@@ -1485,6 +1698,7 @@ class AgentSession:
                     # A file or command output may still echo a known secret.
                     result = self.vault.mask(result)
                     result = self._after_tool(fn_name, args, result)
+                    self._note_read(fn_name, args, result, tc.id)
                     if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
                         self._listing_done = True
                     is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
@@ -1495,6 +1709,7 @@ class AgentSession:
                         summary = result
                     print_tool_result(fn_name, summary, is_error=is_err)
                     self._note_tool_call(fn_name, args, result)
+                    self._trace_tool(fn_name, args, t_tool, result)
 
                     # Add tool response to messages
                     self.messages.append({
