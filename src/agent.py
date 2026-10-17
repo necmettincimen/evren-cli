@@ -1435,7 +1435,10 @@ class AgentSession:
         """Tracks writes and flags results already seen in this task."""
         if fn_name in ("edit_file", "write_file", "ssh_write_file") and result.startswith("BAŞARILI"):
             self._write_epoch += 1
-            if Path(str(args.get("path", ""))).suffix.lower() in _CODE_EXTS:
+            written = str(args.get("path", "")).replace("\\", "/").lstrip("./")
+            # Scratch scripts in .evren/tmp are not project code: the gate made
+            # a "count lines" task run the full test suite (41 s) for nothing.
+            if Path(written).suffix.lower() in _CODE_EXTS and not written.startswith(".evren/"):
                 self._code_written = True
                 self._verified_since_write = False
             return result
