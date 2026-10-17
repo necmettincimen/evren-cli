@@ -175,6 +175,10 @@ TOOLS_SCHEMA = [
                         "type": "string",
                         "description": "İçerikte aranacak metin (a|b|c)",
                     },
+                    "context": {
+                        "type": "integer",
+                        "description": "Eşleşmenin önü/arkasından gösterilecek satır (0-15); view_file tahminini önler",
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -843,7 +847,31 @@ def _looks_binary(path: Path) -> bool:
         return False
 
 
-def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None = None) -> str:
+def _context_blocks(rel: str, lines: list[str], matcher, context: int) -> list[str]:
+    """Matching lines with `context` neighbours, merged, `--` between blocks."""
+    context = max(1, min(15, int(context)))
+    hit_idx = [i for i, ln in enumerate(lines) if matcher(ln)][:FIND_MAX_PER_FILE]
+    if not hit_idx:
+        return []
+    out: list[str] = []
+    last = -1
+    hits = set(hit_idx)
+    for i in hit_idx:
+        start, end = max(0, i - context), min(len(lines), i + context + 1)
+        if start <= last:
+            start = last + 1
+        elif out:
+            out.append("--")
+        for j in range(start, end):
+            sep = ":" if j in hits else "-"
+            out.append(f"{rel}{sep}{j + 1}{sep} {lines[j].rstrip()[:FIND_LINE_CHARS]}")
+        last = max(last, end - 1)
+    return out
+
+
+def tool_find_files(
+    pattern: str, query: str = "", workspace_root: Path | None = None, context: int = 0,
+) -> str:
     """Finds files by glob; with `query`, returns matching lines like `grep -n`.
 
     The content search used to answer only "path (Eşleşti)", so the model
@@ -882,6 +910,16 @@ def tool_find_files(pattern: str, query: str = "", workspace_root: Path | None =
         except Exception:
             continue
         hits = 0
+        if context:
+            # grep -C: a 2000-line repl.py task guessed six view_file ranges to
+            # find one table; showing the neighbourhood answers in one call.
+            block = _context_blocks(rel, text.splitlines(), matcher, context)
+            if block:
+                lines_out.extend(block)
+                if len(lines_out) >= FIND_MAX_LINES * 3:
+                    lines_out.append("... [satır sınırı; aramayı daralt]")
+                    break
+            continue
         for number, line in enumerate(text.splitlines(), 1):
             if matcher(line):
                 hits += 1
@@ -1364,6 +1402,7 @@ def execute_tool_call(
             pattern=arguments.get("pattern", "*"),
             query=arguments.get("query", ""),
             workspace_root=root,
+            context=int(arguments.get("context") or 0),
         )
     elif name == "run_command":
         if arguments.get("run_in_background") is True:
