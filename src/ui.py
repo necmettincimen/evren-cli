@@ -518,6 +518,11 @@ def prompt_confirm(prompt_msg: str, default: bool = False) -> bool:
         active.stop()
 
     choices = "[Y/n]" if default else "[y/N]"
+    from src import settings as _settings
+
+    can_remember = _settings.current_call() is not None
+    if can_remember:
+        choices = choices[:-1] + "/a=hep izin ver]"
     full_prompt = f"\n{prompt_msg} {choices}: "
     try:
         sys.stdout.flush()
@@ -525,6 +530,11 @@ def prompt_confirm(prompt_msg: str, default: bool = False) -> bool:
         ans = input(full_prompt).strip().lower()
         if not ans:
             return default
+        if can_remember and ans in ("a", "hep"):
+            rule = _settings.remember_current()
+            if rule:
+                print(f"Kural eklendi (.evren/settings.local.json): {rule}")
+            return True
         return ans in ("y", "yes", "evet", "e")
     except (KeyboardInterrupt, EOFError):
         print("\nİşlem iptal edildi.")

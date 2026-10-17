@@ -13,6 +13,17 @@ from typing import Any
 from src.api_client import EvrenClient, normalize_chat_messages
 from src.errors import EvrenApiError
 from src.tools import TOOLS_SCHEMA, execute_tool_call, tools_for_mode
+from src import settings as _settings
+from src.tool_ext import extra_schemas as _ext_schemas
+
+
+def _check_esc() -> None:
+    from src.interrupt import STOP
+
+    if STOP.is_set():
+        STOP.clear()
+        raise KeyboardInterrupt
+
 from src.config import (
     get_workspace_dir,
     execution_context_block,
@@ -481,6 +492,18 @@ class AgentSession:
 
     def set_mode(self, mode: AgentMode):
         self.mode = mode
+
+    def _permission_gate(self, fn_name: str, args: dict) -> tuple[bool, str]:
+        """Returns (allowed_by_rule, refusal_message). Also records the call for the 'a' answer."""
+        _settings.set_workspace(self.workspace_root)
+        verdict = _settings.check_permission(fn_name, args, self.workspace_root)
+        if verdict == "deny":
+            return False, "ayar dosyasındaki izin kuralı bu aracı engelliyor (permissions.deny)."
+        reason = _settings.run_pre_tool(fn_name, args, self.workspace_root)
+        if reason:
+            return False, f"pre_tool hook engelledi: {reason}"
+        _settings.set_current(fn_name, args)
+        return verdict == "allow", ""
 
     def set_auto_approve(self, auto_approve: bool):
         self.auto_approve = auto_approve
@@ -1561,6 +1584,7 @@ class AgentSession:
                 stream_state = {"first": True, "in_reasoning": False, "in_content": False}
 
                 def _on_reasoning(text: str):
+                    _check_esc()
                     if stream_state["first"]:
                         tracker.stop()
                         stream_state["first"] = False
@@ -1575,6 +1599,7 @@ class AgentSession:
                     print_reasoning(text, is_chunk=True)
 
                 def _on_content(text: str):
+                    _check_esc()
                     if stream_state["first"]:
                         tracker.stop()
                         stream_state["first"] = False
@@ -1614,6 +1639,7 @@ class AgentSession:
                         max_tokens=output_budget,
                         tools=self._filter_delegate_tools(self._agent_tools(
                             tools_for_mode(effective_mode, include_ssh=self._include_ssh_tools())
+                            + (_ext_schemas(self.workspace_root) if effective_mode == AgentMode.NORMAL else [])
                         )),
                         # Same tool list keeps the cached prefix; "none" only forbids calls.
                         tool_choice="none" if (
@@ -1786,6 +1812,18 @@ class AgentSession:
                         })
                         continue
 
+                    # Settings permission rules + pre_tool hooks (src/settings.py).
+                    perm_allow, perm_msg = self._permission_gate(fn_name, args)
+                    if perm_msg:
+                        result = f"REDDEDİLDİ: {perm_msg}"
+                        print_tool_result(fn_name, perm_msg, is_error=True)
+                        self._trace_tool(fn_name, args, t_tool, result)
+                        self.messages.append({
+                            "role": "tool", "tool_call_id": tc.id,
+                            "name": fn_name, "content": result,
+                        })
+                        continue
+
                     # Delegation is handled by the session itself: it swaps the
                     # message history and reuses _run_steps, so it must never
                     # reach the stateless execute_tool_call dispatcher. It sits
@@ -1841,8 +1879,10 @@ class AgentSession:
                             name=fn_name,
                             arguments=args,
                             workspace_root=self.workspace_root,
-                            auto_approve=self.auto_approve,
+                            auto_approve=self.auto_approve or perm_allow,
                         )
+                    _settings.set_current(None)
+                    _settings.run_post_tool(fn_name, args, self.workspace_root)
 
                     # ask_user with a positive confirm in plan mode -> switch to normal.
                     if fn_name == "ask_user" and effective_mode == AgentMode.PLAN:
@@ -1898,6 +1938,7 @@ class AgentSession:
             if final_content and not stream_state["in_content"]:
                 print_markdown(final_content)
             self._print_task_summary(step_count)
+            _settings.run_stop(self.workspace_root)
             return final_content
 
         self.pending_mode = effective_mode

@@ -209,6 +209,58 @@ def _run_agent(
     `compact=True` is for text the user typed or pasted: a big paste is saved to
     .evren/tmp and summarized (skill, template and playbook prompts stay whole).
     """
+    from src.interrupt import RunWatcher, pop_queued
+
+    try:
+        with RunWatcher():
+            _run_agent_inner(session, prompt, followup=followup, compact=compact)
+        _offer_plan_execution(session)
+    finally:
+        try:
+            from src.sessions import save_session
+
+            save_session(session)
+        except Exception:
+            pass
+    queued = pop_queued()
+    if queued and not session.interrupted:
+        print_info(f"Sıradaki istek çalıştırılıyor: {queued}")
+        _run_agent(session, queued, compact=True)
+
+
+def _offer_plan_execution(session: AgentSession) -> None:
+    """Plan mode flow: after a plan was written, offer to apply it in the same session."""
+    import time as _t
+
+    from src.modes import AgentMode
+
+    if session.mode != AgentMode.PLAN or session.interrupted:
+        return
+    plans = sorted(Path(session.workspace_root).glob("plans/*/plan.md"), key=lambda p: p.stat().st_mtime)
+    if not plans or _t.time() - plans[-1].stat().st_mtime > 600:
+        return
+    if not (getattr(session, "_plan_seen", None) != str(plans[-1].stat().st_mtime)):
+        return
+    session._plan_seen = str(plans[-1].stat().st_mtime)
+    try:
+        ans = input("\nPlanı uygula? [e/H]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if ans not in ("e", "evet", "y", "yes"):
+        return
+    session.mode = AgentMode.NORMAL
+    print_info("Normal moda geçildi.")
+    rel = plans[-1].relative_to(session.workspace_root).as_posix()
+    _run_agent(
+        session,
+        f"{rel} dosyasındaki planı uygula. Önce adımları todo_write ile görev listesine dök, sonra sırayla yap.",
+    )
+
+
+def _run_agent_inner(
+    session: AgentSession, prompt: str | None = None, *, followup: bool = False,
+    compact: bool = False,
+) -> None:
     from src.workflow_state import clear_checkpoint
 
     if followup:
@@ -728,7 +780,8 @@ EVREN CLI Komutları:
 """)
 
 
-def start_repl(workspace_path: str | None = None, initial_model: str | None = None):
+def start_repl(workspace_path: str | None = None, initial_model: str | None = None,
+               continue_last: bool = False):
     """Starts the interactive EVREN CLI REPL."""
     workspace_root = get_workspace_dir(workspace_path)
     evren_dir = get_evren_dir(workspace_root)
@@ -812,9 +865,29 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
         except Exception:
             pt_session = None
 
+    from src import settings as _settings
+
+    _settings.set_workspace(workspace_root)
+    if continue_last:
+        from src.sessions import list_sessions, load_session
+
+        found = list_sessions(workspace_root, 1)
+        if found and load_session(session, found[0]):
+            print_info(f"Son oturum yüklendi: {found[0].stem}")
+        else:
+            print_warning("Devam ettirilecek oturum yok.")
     try:
         _repl_loop(session, client, workspace_root, pt_session)
     finally:
+        try:
+            from src.sessions import save_session
+
+            save_session(session)
+            from src.mcp_client import shutdown
+
+            shutdown()
+        except Exception:
+            pass
         # Kill any still-running background command trees so the REPL never
         # orphans processes started via run_command(run_in_background=true).
         try:
@@ -1416,6 +1489,11 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
 
                 elif cmd in custom_commands:
                     _run_agent(session, render_custom_command(custom_commands[cmd], arg), compact=True)
+
+                elif cmd == "/resume":
+                    from src.sessions import handle_resume
+
+                    handle_resume(session)
 
                 elif cmd == "/clear":
                     from src.workflow_state import clear_checkpoint
