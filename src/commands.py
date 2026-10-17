@@ -117,11 +117,20 @@ def is_command(text: str) -> bool:
 
 
 def suggest_command(token: str, cutoff: float = 0.6) -> str | None:
-    """Closest registered command for a mistyped token, e.g. /cleare -> /clear."""
-    matches = difflib.get_close_matches(
-        (token or "").lower(), sorted(KNOWN_COMMANDS), n=1, cutoff=cutoff,
-    )
-    return matches[0] if matches else None
+    """Closest registered command for a mistyped token, e.g. /cleare -> /clear.
+
+    A same-letters candidate (swapped letters: /modle -> /model, /hlep -> /help)
+    wins over a higher difflib ratio for a shorter word (/mode), which is what
+    a typo usually is.
+    """
+    tok = (token or "").lower()
+    matches = difflib.get_close_matches(tok, sorted(KNOWN_COMMANDS), n=4, cutoff=cutoff)
+    if not matches:
+        return None
+    for cand in matches:
+        if len(cand) == len(tok) and sorted(cand) == sorted(tok):
+            return cand
+    return matches[0]
 
 
 def is_unknown_command(text: str) -> bool:
