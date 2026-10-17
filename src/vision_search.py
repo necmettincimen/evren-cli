@@ -26,7 +26,7 @@ _TEXT_EXTS = {
 
 
 def semantic_search_enabled() -> bool:
-    return os.environ.get("EVREN_SEMANTIC_SEARCH", "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get("EVREN_SEMANTIC_SEARCH", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _auth() -> dict[str, str]:
