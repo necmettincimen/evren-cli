@@ -146,46 +146,23 @@ ve sistem talimatı kazanır.
 # Domain notes that used to ride on every request. They are only relevant to
 # HTTP / Argo CD work, so they are attached to the task text when it mentions
 # those topics instead of inflating the system prompt for every other task.
-HTTP_ARGO_NOTES = """HTTP VE ARGO CD NOTLARI:
-- run_command çıktısı 8000 karakterde kırpılır: büyük JSON yanıtını ham yazdırma. PowerShell
-  (use_powershell=true, Invoke-RestMethod) veya python ile yalnızca gereken alanları süzüp yazdır.
-- curl gövdesini JSON sanma. İstek `-sS -w "\\nHTTP:%{http_code}"` ile gitsin. Kod 200 ve gövde JSON değilse parse etme; kodu ve ilk baytları yaz, aynı aileyi uydurma.
-- Argo CD uygulama özeti: `GET /api/v1/applications/{ad}` içindeki `status.resources` (kind, name, sync, health, message).
-- Pod ve canlı ağaç: `GET /api/v1/applications/{ad}/resource-tree`. Pod düğümleri `nodes` içindedir (`kind==Pod`).
-- Tek nesne: `GET /api/v1/applications/{ad}/resource?namespace=&resourceName=&name=&version=&kind=&group=`.
-- Pod logu: `GET /api/v1/applications/{ad}/logs?namespace=&podName=&container=&tailLines=100`. Bu uç metin döner, JSON değildir.
-- Şu yollar yoktur; 404 alınca tekrarlama: `/pods`, `/resource/pods`, `/resource/tree`.
-- `sync: OutOfSync` ve `health: Missing` kaynak henüz uygulanmamıştır; pod arama. `exceeded its progress deadline` yeni ReplicaSet'in hazır olmamasıdır; resource-tree içindeki Pod ve ardından logs ucuna bak."""
 
-DRONE_NOTES = """DRONE CI API NOTLARI:
-- Kimlik doğrulama: `GET /api/user` (200 = token geçerli).
-- Her reponun SON build'i tek istekte gelir: `GET /api/user/repos?latest=true`; her repo nesnesinde
-  `build` alanı son build'dir (`number`, `status`: success|failure|error|killed|running|pending,
-  `target`, `event`, `finished`). Son build'i hatalı repolar için repo başına istek atma; bu
-  yanıtı süz (status failure|error|killed). `build` alanı olmayan repo hiç build almamıştır.
-  `latest=true` olmadan `/api/user/repos` build bilgisi döndürmez.
-- Ayrıntı yalnızca istenirse: `GET /api/repos/{owner}/{repo}/builds/{number}` (stages[].number,
-  stages[].steps[]: number, name, status, exit_code). Log: `GET .../builds/{number}/logs/{stage_number}/{step_number}`
-  — adım ADI değil NUMARASI (isim verilirse 400 strconv.Atoi); yanıt `[{pos,out,time}]` dizisidir, `out` alanlarını birleştir."""
 
-K8S_NOTES = """KUBERNETES NOTLARI:
-- Kullanıcı bir host/alias (ör. koyu3-k8s) verdiyse kubectl'i O host'ta ssh_run ile çalıştır; yerel run_command
-  ile kubectl çalıştırma (yerel kubeconfig BAŞKA bir kümeyi gösterebilir). Ön kontrol (`kubectl version`,
-  `get nodes`) yapma; `-w/--watch` ve uzun `sleep` kullanma (zaman aşımı).
-- Hazır salt-okuma komutları (komut yazma, preset ver): ssh_run(alias, preset="k8s_health") = pod/küme durumu,
-  öneri, teşhis için tek anlık görüntü; ssh_run(alias, preset="k8s_resources") = container başına request/limit
-  tablosu. Tek namespace için namespace="<ns>".
-- Restart sayısını Running podlarda da değerlendir (Running ≠ sağlıklı). Birçok podun son restart'ı aynı
-  zamandaysa boot / k3s başlangıç zamanıyla karşılaştır. Ayrıntı gerekirse yalnızca şüpheli pod için
-  `kubectl -n <ns> describe pod <p> | tail -25` veya `kubectl -n <ns> logs <p> --previous --tail=40`.
-- Uzun liste çıktısını EVREN kullanıcının terminaline tam basar; tabloyu yeniden yazma, kısa özet ver."""
 
-# (notes, triggers): attached to the task text when one trigger occurs in it.
+# (file stem in src/domain_notes, triggers): attached when one trigger occurs.
 _DOMAIN_NOTES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (HTTP_ARGO_NOTES, ("argo", "curl", "/api/v1", "http://", "https://", "resource-tree")),
-    (DRONE_NOTES, ("drone",)),
-    (K8S_NOTES, ("kubectl", "k8s", "kubernetes", "pod", "namespace", "deployment")),
+    ("http_argo", ("argo", "curl", "/api/v1", "http://", "https://", "resource-tree")),
+    ("drone", ("drone",)),
+    ("k8s", ("kubectl", "k8s", "kubernetes", "pod", "namespace", "deployment")),
 )
+
+
+def _load_domain_note(stem: str) -> str:
+    try:
+        path = Path(__file__).parent / "domain_notes" / f"{stem}.md"
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 PLANNER_INSTRUCTION = """[EVREN PLANLAYICI] Bu turda yalnızca uygulama planı çıkar; hiçbir dosyayı değiştirme.
@@ -220,6 +197,11 @@ _PLAN_INTENT_RE = re.compile(
 
 def is_listing_task(text: str) -> bool:
     """True for plain "list/show X" requests (no filtering or analysis asked)."""
+    from src.intent import clef_label
+
+    label = clef_label(text, ["listing", "analysis", "other"])
+    if label:
+        return label == "listing"
     return bool(_LISTING_RE.search(text or "")) and not _ANALYSIS_RE.search(text or "")
 
 
@@ -280,13 +262,51 @@ _REPEAT_EXEMPT_TOOLS = frozenset(_REG_REPEAT | {"stop_background"})
 _LOOP_BLOCK_LIMIT = 3
 
 
+_CODE_EXTS = frozenset({".py", ".cs", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt"})
+_TEST_CMD_RE = re.compile(
+    r"(?i)\b(pytest|unittest|dotnet\s+(test|build)|npm\s+(run\s+)?(test|build)|pnpm\s+(run\s+)?test|"
+    r"yarn\s+test|cargo\s+(test|build|check)|go\s+(test|build|vet)|mvn\s+(test|verify)|gradle\w*\s+(test|build)|"
+    r"tsc|compileall|py_compile)\b"
+)
+
+
+def detect_test_command(workspace_root) -> str:
+    """Best-effort project test command, or an empty string."""
+    try:
+        root = Path(workspace_root)
+        if any(root.glob("*.sln")) or any(root.glob("**/*.csproj")):
+            return "dotnet test"
+        pkg = root / "package.json"
+        if pkg.is_file():
+            scripts = (json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {})
+            if "test" in scripts:
+                return "npm test"
+        if (root / "tests").is_dir() and any(root.glob("**/*.py")):
+            return "pytest"
+    except Exception:
+        pass
+    return ""
+
+
+def verification_note(workspace_root) -> str:
+    """Transient reminder asking the model to run tests; empty if no command found."""
+    command = detect_test_command(workspace_root)
+    if not command:
+        return ""
+    return (
+        f"[EVREN] DOĞRULAMA: Kod dosyası değiştirdin ama bundan sonra test/derleme çalıştırmadın. "
+        f"Bitirmeden önce `{command}` komutunu çalıştır; hata varsa düzelt, geçerse kısa özetle bitir."
+    )
+
+
 def domain_hints(text: str) -> str:
     """Returns topic notes relevant to this task text, or an empty string."""
     lowered = (text or "").casefold()
-    return "\n\n".join(
-        notes for notes, triggers in _DOMAIN_NOTES
+    chunks = [
+        _load_domain_note(stem) for stem, triggers in _DOMAIN_NOTES
         if any(trigger in lowered for trigger in triggers)
-    )
+    ]
+    return "\n\n".join(c for c in chunks if c)
 
 
 class AgentSession:
@@ -1048,7 +1068,12 @@ class AgentSession:
         # An explicit "planla / plan yap" asks for planning however short the
         # brief is; size alone sent such multi-file features straight to the
         # executor, which spent 15 of 20 steps exploring.
-        if _PLAN_INTENT_RE.search(text or ""):
+        from src.intent import clef_label
+
+        label = clef_label(text, ["plan", "no_plan"])
+        if label == "plan":
+            return True
+        if label is None and _PLAN_INTENT_RE.search(text or ""):
             return True
         return self.token_manager.estimate_text(text) >= route_min_tokens()
 
@@ -1214,7 +1239,27 @@ class AgentSession:
         text = (result or "").strip()
         if not text or text.startswith(("HATA:", "Hata:", "İPTAL")):
             return None
+        self._plan_to_todos(text)
         return text
+
+    @staticmethod
+    def _plan_to_todos(plan: str) -> None:
+        """Loads the planner's numbered steps into the todo store (plan 3.4)."""
+        try:
+            from src.todos import get_store
+
+            steps = []
+            for line in plan.splitlines():
+                m = re.match(r"^\s*(?:\*\*)?(\d{1,2})[.)]\s+(.+)$", line)
+                if m:
+                    steps.append(m.group(2).strip().strip("*").strip()[:200])
+            if len(steps) < 2:
+                return
+            items = [{"content": t, "status": "pending"} for t in steps[:10] if t]
+            items[0]["status"] = "in_progress"
+            get_store().write(items)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Repeat guard
@@ -1225,6 +1270,11 @@ class AgentSession:
         self._output_seen: dict[tuple[str, int], int] = {}
         self._write_epoch = 0
         self._loop_blocks = 0
+        # Verification gate (plan 3.3): code written, no test/build ran since.
+        self._code_written = False
+        self._verified_since_write = False
+        self._verify_nudged = False
+        self._verify_note = ""
 
     @staticmethod
     def _call_signature(fn_name: str, args: dict) -> str:
@@ -1257,7 +1307,12 @@ class AgentSession:
         """Tracks writes and flags results already seen in this task."""
         if fn_name in ("edit_file", "write_file", "ssh_write_file") and result.startswith("BAŞARILI"):
             self._write_epoch += 1
+            if Path(str(args.get("path", ""))).suffix.lower() in _CODE_EXTS:
+                self._code_written = True
+                self._verified_since_write = False
             return result
+        if fn_name == "run_command" and _TEST_CMD_RE.search(str(args.get("command", ""))):
+            self._verified_since_write = True
         if fn_name in ("run_command", "ssh_run") and command_may_modify_files(str(args.get("command", ""))):
             # git checkout/pull, installs, rm/mv, redirects...: files may differ now.
             self._write_epoch += 1
@@ -1513,6 +1568,9 @@ class AgentSession:
                             "[EVREN] Liste kullanıcının terminalinde tam gösterildi. Araç çağırma; "
                             "tabloyu yeniden yazmadan 1-3 cümlelik kısa özetle bitir."
                         )
+                    if self._verify_note:
+                        step_notes = (step_notes + "\n" if step_notes else "") + self._verify_note
+                        self._verify_note = ""
                     outgoing = list(self.messages)
                     if step_notes:
                         outgoing.append({"role": "user", "content": step_notes})
@@ -1785,6 +1843,18 @@ class AgentSession:
             # No tool calls: model has provided its final response
             final_content = message.content or ""
             self.messages.append({"role": "assistant", "content": final_content})
+            if (
+                effective_mode == AgentMode.NORMAL
+                and self._code_written
+                and not self._verified_since_write
+                and not self._verify_nudged
+                and step_count < max_steps
+            ):
+                self._verify_nudged = True
+                note = verification_note(self.workspace_root)
+                if note:
+                    self._verify_note = note
+                    continue
             # Content was already streamed live; only render markdown if it
             # never arrived as stream deltas (e.g. empty stream).
             if final_content and not stream_state["in_content"]:

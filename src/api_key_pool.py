@@ -119,6 +119,8 @@ class ApiKeyPool:
     ):
         raw_keys = keys if keys is not None else parse_api_keys()
         self._keys: list[PooledKey] = [PooledKey(k) for k in raw_keys if k]
+        # key -> last x-evren-daily-remaining-tokens seen on a response.
+        self.daily_remaining: dict[str, int] = {}
         self._index: int = 0
         # The client defaults to keys[0]; treat it as the "current" key so that
         # a manual /keys next skips it and moves to the following one.
@@ -355,7 +357,20 @@ class ApiKeyPool:
 
         # Pass an explicit httpx client so the SSL verification setting
         # (custom CA bundle or disabled verification) is honoured by the SDK.
-        http_client = httpx.Client(verify=get_ssl_verify(), timeout=REQUEST_TIMEOUT)
+        def _quota_hook(response, _key=key):
+            # Mid-session quota (plan 7.9): remember the daily remaining tokens.
+            try:
+                raw = response.headers.get("x-evren-daily-remaining-tokens")
+                if raw not in (None, ""):
+                    self.daily_remaining[_key] = int(float(raw))
+            except Exception:
+                pass
+
+        http_client = httpx.Client(
+            verify=get_ssl_verify(),
+            timeout=REQUEST_TIMEOUT,
+            event_hooks={"response": [_quota_hook]},
+        )
 
         client = OpenAI(
             base_url=self.base_url,

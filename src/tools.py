@@ -86,6 +86,14 @@ TOOLS_SCHEMA = [
                         "description": "true: tüm eşleşmeler",
                         "default": False,
                     },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Satır aralığı kipi: değiştirilecek ilk satır (1 tabanlı); target_snippet gerekmez, replacement_snippet bu satırların yerine geçer",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Satır aralığı kipi: son satır (dahil)",
+                    },
                     "edits": {
                         "type": "array",
                         "description": "Çoklu düzenleme; verilirse target/replacement_snippet yok sayılır",
@@ -594,6 +602,8 @@ def tool_edit_file(
     auto_approve: bool = False,
     all: bool = False,
     edits: list[dict] | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
 ) -> str:
     root = workspace_root or get_workspace_dir()
 
@@ -611,7 +621,29 @@ def tool_edit_file(
             )
         return f"HATA: Dosya okunamadı: {err}"
 
-    probes = [
+    use_range = start_line not in (None, "") and not edits
+    if use_range:
+        try:
+            first = int(start_line)
+            last = int(end_line) if end_line not in (None, "") else first
+        except (TypeError, ValueError):
+            return "HATA: start_line/end_line tam sayı olmalı."
+        lines = old_content.splitlines(keepends=True)
+        if first < 1 or last < first or first > len(lines):
+            return f"HATA: Geçersiz satır aralığı {first}-{last} (dosya {len(lines)} satır)."
+        last = min(last, len(lines))
+        eol = "\r\n" if "\r\n" in old_content else "\n"
+        block = replacement_snippet.replace("\r\n", "\n").replace("\n", eol)
+        if block and not block.endswith(("\n", "\r")) and lines[last - 1].endswith(("\n", "\r")):
+            block += eol
+        new_content = "".join(lines[: first - 1]) + block + "".join(lines[last:])
+        if new_content == old_content:
+            return f"BİLGİ: '{path}' {first}-{last}. satırlar zaten bu içerikte."
+        edit_list = [None]
+        probes = []
+    else:
+        probes = None
+    probes = probes if probes is not None else [
         (e.get("target_snippet") if isinstance(e, dict) else "") for e in (edits or [])
     ] or [target_snippet]
     if any(_is_probe_target(t) for t in probes):
@@ -623,16 +655,18 @@ def tool_edit_file(
         )
 
     # Build the edit list: either the multi-edit list or a single edit.
-    if edits:
-        edit_list = edits
+    if use_range:
+        success, rep_err = True, ""
     else:
-        edit_list = [{
-            "target_snippet": target_snippet,
-            "replacement_snippet": replacement_snippet,
-            "all": all,
-        }]
-
-    new_content, success, rep_err = apply_edits(old_content, edit_list)
+        if edits:
+            edit_list = edits
+        else:
+            edit_list = [{
+                "target_snippet": target_snippet,
+                "replacement_snippet": replacement_snippet,
+                "all": all,
+            }]
+        new_content, success, rep_err = apply_edits(old_content, edit_list)
     if not success:
         from src.diff_viewer import ALREADY_APPLIED
 
@@ -1225,6 +1259,8 @@ def execute_tool_call(
             auto_approve=auto_approve,
             all=arguments.get("all", False),
             edits=arguments.get("edits"),
+            start_line=arguments.get("start_line"),
+            end_line=arguments.get("end_line"),
         )
         if result.startswith("BAŞARILI"):
             result += _syntax_report(arguments.get("path", ""), root)
