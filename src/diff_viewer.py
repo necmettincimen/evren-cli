@@ -107,6 +107,45 @@ def _contextual_not_found_error(original_text: str, target_snippet: str) -> str:
     )
 
 
+def _leading_ws(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def _indent_tolerant_replace(text: str, target: str, replacement: str) -> str | None:
+    """Matches `target` ignoring indentation/trailing spaces; re-indents the replacement.
+
+    Models often copy a block with a different base indent (8 vs 4 spaces in a
+    JSON list), then fail twice and fall back to line ranges. Only a single,
+    unambiguous match is accepted.
+    """
+    t_lines = [ln for ln in target.split("\n")]
+    while t_lines and not t_lines[-1].strip():
+        t_lines.pop()
+    while t_lines and not t_lines[0].strip():
+        t_lines.pop(0)
+    if not t_lines:
+        return None
+    key = [ln.strip() for ln in t_lines]
+    lines = text.split("\n")
+    hits = [
+        i for i in range(len(lines) - len(key) + 1)
+        if all(lines[i + j].strip() == key[j] for j in range(len(key)))
+    ]
+    if len(hits) != 1:
+        return None
+    start = hits[0]
+    file_base = _leading_ws(lines[start])
+    target_base = _leading_ws(t_lines[0])
+    out = []
+    for ln in replacement.split("\n"):
+        if ln.strip() and ln.startswith(target_base):
+            ln = file_base + ln[len(target_base):]
+        elif ln.strip() and not target_base:
+            ln = file_base + ln
+        out.append(ln)
+    return "\n".join(lines[:start] + out + lines[start + len(key):])
+
+
 def apply_replacement(
     original_text: str,
     target_snippet: str,
@@ -157,6 +196,10 @@ def apply_replacement(
         if "\r\n" in original_text:
             return new_norm.replace("\n", "\r\n"), True, ""
         return new_norm, True, ""
+
+    fuzzy = _indent_tolerant_replace(normalized_orig, normalized_target, normalized_replace)
+    if fuzzy is not None:
+        return (fuzzy.replace("\n", "\r\n") if "\r\n" in original_text else fuzzy), True, ""
 
     if _already_applied(original_text, target_snippet, replacement_snippet):
         return original_text, False, (
