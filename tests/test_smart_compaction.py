@@ -79,7 +79,7 @@ class SmartCompactionTest(unittest.TestCase):
         self.assertEqual(context_window_for("mimo-v2.6-pro"), 1_000_000)
         self.assertEqual(context_window_for("bilinmeyen"), 128_000)
         with patch.dict(os.environ, {"EVREN_CONTEXT_BUDGET": "abc"}):
-            self.assertEqual(context_budget(), 32_000)
+            self.assertEqual(context_budget(), 64_000)
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"EVREN_AUTO_DOCS": "false"}):
             (Path(tmp) / "a.py").write_text("print(1)\n", encoding="utf-8")
             s = AgentSession(MagicMock(default_model="qwen3.8-flash-next"), workspace_root=Path(tmp))

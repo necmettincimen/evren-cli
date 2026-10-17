@@ -227,7 +227,7 @@ def compaction_ratio() -> float:
 # faturalar ama önbellek bayt-aynı önek ister; bu yüzden sıkıştırma nadir ve
 # derin olmalı: tahmin bütçeyi aşınca bütçenin `compact_target_ratio()` kadarına
 # inilir, sonraki adımlar sabit bir öneke eklenir.
-DEFAULT_CONTEXT_BUDGET = 32_000
+DEFAULT_CONTEXT_BUDGET = 64_000
 
 
 def context_budget() -> int:
