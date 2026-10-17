@@ -36,6 +36,22 @@ def _parse_settings(path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_EVREN_FILES = ("agent.md", "changelog.md", "evren-changelog.md")
+
+
+def _is_evren_file(path: str) -> bool:
+    p = path.strip('"').replace("\\", "/")
+    return p.startswith(".evren/") or p in _EVREN_FILES
+
+
+def _status_lines(workspace) -> list[str]:
+    try:
+        _, status = _git(workspace, "status", "--short", "--untracked-files=all")
+    except Exception:
+        return []
+    return [ln for ln in status.splitlines() if ln.strip()]
+
+
 def load_settings(workspace_root) -> dict[str, Any]:
     import copy
 
@@ -555,6 +571,7 @@ def run_headless(args) -> int:
     import contextlib
 
     quiet = contextlib.redirect_stdout(sys.stderr) if getattr(args, "output", "text") == "json" else contextlib.nullcontext()
+    before = _status_lines(workspace)
     try:
         with quiet:
             result = session.run_step(text, max_steps=getattr(args, "max_steps", None), compact=True) or ""
@@ -563,8 +580,11 @@ def run_headless(args) -> int:
     except Exception as e:
         result, code = f"HATA: {e}", 1
     if getattr(args, "output", "text") == "json":
-        _, status = _git(workspace, "status", "--short")
-        changed = [ln[3:].strip() for ln in status.splitlines() if ln.strip()]
+        # Only what this run changed, without EVREN's own bookkeeping files.
+        changed = [
+            ln[3:].strip() for ln in _status_lines(workspace)
+            if ln not in before and not _is_evren_file(ln[3:].strip())
+        ]
         try:
             tokens = session.token_report().get("session_usage")
         except Exception:
