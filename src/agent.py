@@ -141,7 +141,7 @@ DOSYA VE KOMUTLAR:
   (yalnızca kodu yaz); elle powershell -Command / python -c sarmalama.
 - CHANGELOG'da yayımlanmış sürüm notları geçmiştir, değiştirme; yeni notu [Unreleased]'a yaz.
 - Commit: önce `git log -5` ile mesaj biçimine uy; başlık en fazla ~72 karakter ve NE değiştiğini anlatsın,
-  ayrıntı gövdeye (`git commit -m "<başlık>" -m "- madde"`). ASCII'ye çevirme. İstenmedikçe push yapma.
+  ayrıntı gövdeye (`git commit -m "<başlık>" -m "- madde"`). ASCII'ye çevirme. İstenmedikçe push yapma. `git stash` kullanma (çalışma ağacındaki işi geri alır).
 
 YEREL / UZAK HEDEF:
 - Varsayılan hedef yerel makinedir ("bu host", "bu hosts", "bu makine", "burada", "localhost", "127.0.0.1", "::1" = yerel): run_command/view_file/edit_file
@@ -1327,6 +1327,10 @@ class AgentSession:
         self._verified_since_write = False
         self._verify_nudged = False
         self._verify_note = ""
+        # Progress guard: steps since the last file change while a todo list
+        # still has open items (a planned change task that only explores).
+        self._idle_steps = 0
+        self._idle_epoch = 0
 
     @staticmethod
     def _call_signature(fn_name: str, args: dict) -> str:
@@ -1598,7 +1602,36 @@ class AgentSession:
         if self._verify_note:
             step_notes = (step_notes + "\n" if step_notes else "") + self._verify_note
             self._verify_note = ""
+        idle = self._idle_note()
+        if idle:
+            step_notes = (step_notes + "\n" if step_notes else "") + idle
         return step_notes
+
+    def _idle_note(self) -> str:
+        """Nudges a planned change task that keeps reading/testing without editing.
+
+        A real run spent 10+ steps re-running the same test suite with small
+        flag changes; the repeat guard only catches identical calls.
+        """
+        if getattr(self, "_write_epoch", 0) != getattr(self, "_idle_epoch", 0):
+            self._idle_epoch = self._write_epoch
+            self._idle_steps = 0
+            return ""
+        self._idle_steps = getattr(self, "_idle_steps", 0) + 1
+        try:
+            from src.todos import get_store
+
+            open_items = [t for t in get_store().snapshot() if t["status"] != "completed"]
+        except Exception:
+            open_items = []
+        if not open_items or self._idle_steps not in (6, 10, 14):
+            return ""
+        nxt = next((t["content"] for t in open_items if t["status"] == "in_progress"), open_items[0]["content"])
+        return (
+            f"[EVREN] İLERLEME YOK: {self._idle_steps} adımdır hiçbir dosya değişmedi. Keşfi ve aynı "
+            f"testi yeniden koşmayı bırak. Şimdi şu maddeyi uygula (edit_file/write_file): {nxt[:160]}. "
+            "Uygulayamıyorsan engeli tek cümleyle bildir."
+        )
 
     def _stream_model(
         self,
