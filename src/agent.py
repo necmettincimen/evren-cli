@@ -1138,13 +1138,19 @@ class AgentSession:
         if not route:
             if self._exec_profile is not None:
                 self.model, self._thinking = self._exec_profile
-            elif mode is AgentMode.NORMAL and not executor_thinking():
+            elif mode in (AgentMode.NORMAL, AgentMode.ASK) and not executor_thinking():
                 self._thinking = False
             return
         self._exec_profile = None
         if mode is AgentMode.PLAN:
             if auto_route_enabled():
                 self.model = planner_model()
+            return
+        if mode is AgentMode.ASK:
+            # Read-only answers come from tool output, not hidden reasoning; on
+            # deepseek a thinking turn took 24-78 s for a few hundred tokens.
+            if not executor_thinking():
+                self._thinking = False
             return
         if mode is not AgentMode.NORMAL:
             return
