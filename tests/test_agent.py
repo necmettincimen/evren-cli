@@ -72,8 +72,10 @@ class TestAgentLoop(unittest.TestCase):
                 # A fresh session per case: recovery counters are per task.
                 client = MagicMock(default_model="test-model")
                 session = AgentSession(client, workspace_root=Path(self.tmp.name))
-                # side_effect list: each call raises the NetworkError instance.
-                client.chat_stream_assembled.side_effect = reply
+                if isinstance(reply, Exception):
+                    client.chat_stream_assembled.side_effect = reply
+                else:
+                    client.chat_stream_assembled.return_value = reply
                 result = session.run_step("uygula")
                 self.assertTrue(result.startswith(prefix))
                 self.assertEqual(client.chat_stream_assembled.call_count, 4)
