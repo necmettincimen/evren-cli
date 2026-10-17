@@ -160,6 +160,44 @@ def safe_read_file(target_path: Path | str, workspace_root: Path | None = None, 
     return text, err
 
 
+# 5.2: per-task journal of changed files: abs path -> original text (None = created).
+TASK_CHANGES: dict[str, str | None] = {}
+
+
+def reset_task_changes() -> None:
+    TASK_CHANGES.clear()
+
+
+def _record_original(resolved: Path) -> None:
+    key = str(resolved)
+    if key in TASK_CHANGES:
+        return
+    try:
+        TASK_CHANGES[key] = (
+            resolved.read_bytes().decode("utf-8", errors="surrogateescape") if resolved.exists() else None
+        )
+    except OSError:
+        pass
+
+
+def atomic_write_text(path: Path, data: str) -> None:
+    """Writes via temp file + os.replace so a crash never leaves a half-written file."""
+    import os
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".evren-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def safe_write_file(
     target_path: Path | str,
     content: str,

@@ -468,8 +468,20 @@ TOOLS_SCHEMA = [
 
 # Derived once from TOOLS_SCHEMA: {tool: {param: declared json type}} and
 # {tool: [required params]}. Used to normalize lenient model arguments.
-TOOL_ARGUMENT_TYPES = schema_type_map(TOOLS_SCHEMA)
-TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA)
+SEARCH_CODE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "search_code",
+        "description": "Anlamsal kod arama (salt-okuma): doğal dil sorgusuyla depoda ilgili kod parçalarını path:satır aralığıyla döndürür. 'X nerede/nasıl kullanılıyor' soruları için.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Aranan şeyin doğal dil tarifi"}},
+            "required": ["query"],
+        },
+    },
+}
+TOOL_ARGUMENT_TYPES = schema_type_map(TOOLS_SCHEMA + [SEARCH_CODE_SCHEMA])
+TOOL_ARGUMENT_REQUIRED = schema_required_map(TOOLS_SCHEMA + [SEARCH_CODE_SCHEMA])
 
 # Tools that are useless outside `normal` mode: they are always denied by the
 # gateway, so sending their schemas only wastes prompt tokens on every step.
@@ -491,6 +503,13 @@ def tools_for_mode(mode, include_ssh: bool = True) -> list[dict]:
     tokens from every step of a read-only session. `tool_gateway` stays the
     authority: this only avoids paying for schemas that can never be used.
     """
+    tools = _tools_for_mode_base(mode, include_ssh)
+    from src.vision_search import semantic_search_enabled
+
+    return tools + [SEARCH_CODE_SCHEMA] if semantic_search_enabled() else tools
+
+
+def _tools_for_mode_base(mode, include_ssh: bool = True) -> list[dict]:
     from src.modes import AgentMode
 
     if mode == AgentMode.ASK:
@@ -515,6 +534,16 @@ VIEW_MAX_CHARS = 24000
 
 def tool_view_file(path: str, start_line: int | None = None, end_line: int | None = None, workspace_root: Path | None = None) -> str:
     root = workspace_root or get_workspace_dir()
+    if Path(path).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        from src.vision_search import describe_image
+
+        try:
+            img = resolve_workspace_path(path, root)
+        except Exception as e:
+            return f"HATA: {e}"
+        if not img.is_file():
+            return f"HATA: Görsel bulunamadı: {path}"
+        return describe_image(img, path)
     content, err = safe_read_file(path, root)
     if err:
         return f"HATA: {err}"
@@ -1243,6 +1272,10 @@ def execute_tool_call(
     except ToolArgumentError as exc:
         return f"HATA: '{name}' için geçersiz araç argümanları: {exc}"
 
+    if name == "search_code":
+        from src.vision_search import search_code
+
+        return search_code(str(arguments.get("query", "")), root)
     if name == "view_file":
         return tool_view_file(
             path=arguments.get("path", ""),

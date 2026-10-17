@@ -8,7 +8,6 @@ import math
 import json
 import httpx
 from typing import Generator, Any
-from openai import OpenAI
 
 from src.config import (
     EVREN_API_KEY,
@@ -600,7 +599,7 @@ class EvrenClient:
             try:
                 current_key, client = self._acquire_client()
             except Exception as e:
-                yield {"type": "error", "content": f"API Hatası: {e}"}
+                yield {"type": "error", "content": f"API Hatası ({type(e).__name__}): {e}"}
                 return
 
             try:
@@ -619,19 +618,19 @@ class EvrenClient:
                     self.key_pool.report_disabled(current_key, reason="quota_exhausted")
                     if attempt < max_attempts and self.key_pool.has_available():
                         continue
-                    yield {"type": "error", "content": f"API Hatası: {e}"}
+                    yield {"type": "error", "content": f"API Hatası ({type(e).__name__}): {e}"}
                     return
                 if typed.failover:
                     self.key_pool.report_disabled(current_key, reason="auth_error")
                     if attempt < max_attempts and self.key_pool.has_available():
                         continue
-                    yield {"type": "error", "content": f"API Hatası: {e}"}
+                    yield {"type": "error", "content": f"API Hatası ({type(e).__name__}): {e}"}
                     return
                 if _can_retry_transient(typed, False, transient_tries):
                     transient_tries += 1
                     time.sleep(_transient_backoff(typed, transient_tries))
                     continue
-                yield {"type": "error", "content": f"API Hatası: {e}"}
+                yield {"type": "error", "content": f"API Hatası ({type(e).__name__}): {e}"}
                 return
 
         try:
@@ -668,7 +667,7 @@ class EvrenClient:
             else:
                 # NOTE: no retry/failover once streaming has started — a partial
                 # response must not be duplicated. The caller decides what to do.
-                yield {"type": "error", "content": f"API Hatası: {e}"}
+                yield {"type": "error", "content": f"API Hatası ({type(e).__name__}): {e}"}
 
     def chat_stream_assembled(
         self,
@@ -723,11 +722,15 @@ class EvrenClient:
         max_attempts = max(1, len(self.key_pool))
         attempt = 0
         transient_tries = 0
+        resume_prefix = ""  # partial text kept after a mid-stream drop (5.3)
+        resumed = False
+        base_messages = kwargs["messages"]
         while True:
             attempt += 1
             current_key, client = self._acquire_client()
 
             message = _StreamedMessage()
+            message.content = resume_prefix
             usage: Any = None
             finish_reason: str | None = None
             # Tool calls arrive as deltas keyed by index; accumulate them in order.
@@ -791,6 +794,21 @@ class EvrenClient:
                 if not streamed_any and self._drop_rejected_param(kwargs, e):
                     continue
                 typed = map_sdk_exception(e, failed_key=current_key)
+                if not str(typed).strip():
+                    typed.args = (f"{type(e).__name__} (ayrıntı yok)",)
+                # 5.3: stream dropped mid-text (no tool calls): retry once, continuing.
+                if (
+                    streamed_any and not resumed and not tool_calls_by_index
+                    and message.content.strip()
+                    and isinstance(e, (httpx.TransportError, httpx.TimeoutException, ConnectionError, OSError))
+                ):
+                    resumed = True
+                    resume_prefix = message.content
+                    kwargs["messages"] = base_messages + [
+                        {"role": "assistant", "content": resume_prefix},
+                        {"role": "user", "content": "Yanıt yarıda kesildi; tam kaldığın yerden devam et, tekrar etme."},
+                    ]
+                    continue
                 if isinstance(typed, TermsNotAcceptedError):
                     ensure_terms_accepted(interactive=True, api_key=current_key)
                     raise typed from e

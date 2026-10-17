@@ -145,6 +145,9 @@ def expand_mentions(text: str, workspace_root) -> tuple[str, list[str]]:
             path.relative_to(root.resolve())
         except (OSError, ValueError):
             continue
+        if path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif") and path.is_file():
+            blocks.append(f"[@{rel}] görsel dosya: içeriği için view_file aracını kullan.")
+            continue
         if not path.is_file():
             # Plain words such as "@kullanici" are not file mentions; warn only for path-like ones.
             if "." in rel or "/" in rel or "\\" in rel:
@@ -363,7 +366,29 @@ def handle_compact(arg: str, session) -> None:
 def handle_rewind(session) -> None:
     from src.file_ops import resolve_workspace_path, rollback_last_backup
 
+    from src.file_ops import TASK_CHANGES
+
     root = Path(session.workspace_root)
+    if TASK_CHANGES:
+        names = [Path(k).name for k in TASK_CHANGES]
+        print_info("Son görevde değişen dosyalar: " + ", ".join(names))
+        if not prompt_confirm("Dosyalar özgün haline döndürülsün mü?", default=False):
+            return
+        for key, orig in list(TASK_CHANGES.items()):
+            fp = Path(key)
+            try:
+                if orig is None:
+                    if fp.exists() and prompt_confirm(f"{fp.name} bu görevde oluşturuldu; silinsin mi?", default=False):
+                        fp.unlink()
+                        print_success(f"{fp.name}: silindi.")
+                else:
+                    from src.file_ops import atomic_write_text
+                    atomic_write_text(fp, orig.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace"))
+                    print_success(f"{fp.name}: özgün haline döndürüldü.")
+            except OSError as e:
+                print_error(f"{fp.name}: geri alınamadı ({type(e).__name__}: {e})")
+        TASK_CHANGES.clear()
+        return
     files: list[str] = []
     for rec in session.tool_trace:
         path = rec.get("path")

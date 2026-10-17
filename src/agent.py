@@ -1025,6 +1025,8 @@ class AgentSession:
 
         session_model = self.model
         self._trace_task_begin(cleaned_input, effective_mode)
+        from src.file_ops import reset_task_changes
+        reset_task_changes()
         outcome: str | None = None  # stays None when an exception escapes
         try:
             # Size is judged on what the user wrote (plus attached files), not on
@@ -1466,6 +1468,38 @@ class AgentSession:
         except Exception:
             pass
 
+    _PARALLEL_SAFE = {"view_file", "find_files", "list_directory", "web_fetch", "ssh_read_file", "search_code"}
+
+    def _prefetch_readonly(self, tool_calls) -> dict:
+        """4.1: runs a turn's calls in parallel when ALL are read-only (max 4 workers)."""
+        if len(tool_calls) < 2 or any(tc.function.name not in self._PARALLEL_SAFE for tc in tool_calls):
+            return {}
+        from concurrent.futures import ThreadPoolExecutor
+
+        jobs = []
+        for tc in tool_calls:
+            raw = tc.function.arguments
+            try:
+                args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+            except (json.JSONDecodeError, TypeError):
+                return {}
+            if not isinstance(args, dict):
+                return {}
+            jobs.append((tc.id, tc.function.name, args))
+
+        def _one(job):
+            _id, name, args = job
+            try:
+                return _id, execute_tool_call(
+                    name=name, arguments=args, workspace_root=self.workspace_root,
+                    auto_approve=self.auto_approve,
+                )
+            except Exception as e:  # fall back to the sequential path
+                return _id, None
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            return {i: r for i, r in pool.map(_one, jobs) if r is not None}
+
     def _run_steps(
         self,
         max_steps: int,
@@ -1706,6 +1740,8 @@ class AgentSession:
                 if message.content and not stream_state["in_content"]:
                     print_markdown(message.content)
 
+                prefetched = self._prefetch_readonly(tool_calls)
+
                 # Execute each tool call
                 for tc in tool_calls:
                     fn_name = tc.function.name
@@ -1799,12 +1835,14 @@ class AgentSession:
                         continue
 
                     # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
-                    result = execute_tool_call(
-                        name=fn_name,
-                        arguments=args,
-                        workspace_root=self.workspace_root,
-                        auto_approve=self.auto_approve,
-                    )
+                    result = prefetched.get(tc.id)
+                    if result is None:
+                        result = execute_tool_call(
+                            name=fn_name,
+                            arguments=args,
+                            workspace_root=self.workspace_root,
+                            auto_approve=self.auto_approve,
+                        )
 
                     # ask_user with a positive confirm in plan mode -> switch to normal.
                     if fn_name == "ask_user" and effective_mode == AgentMode.PLAN:

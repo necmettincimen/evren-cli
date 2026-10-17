@@ -743,42 +743,43 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
 
     client = EvrenClient(default_model=initial_model)
 
-    # Initial check: terms status & quota (active key summary for the banner)
-    with status_spinner("EVREN API bağlantısı ve kota doğrulanıyor..."):
-        quota_data = None
-        if len(client.key_pool) > 1:
-            # Start on the key with the most daily quota left instead of the
-            # first one in the list (keys can belong to different accounts).
-            try:
-                quota_data = client.select_best_key()
-            except Exception:
-                quota_data = None
-        if quota_data is None:
-            quota_data = client.get_quota()
-    if len(client.key_pool) > 1 and quota_data.get("masked") is None:
-        from src.api_key_pool import mask_key
+    # 4.2: quota + terms check runs in the background so the prompt appears at once.
+    def _startup_checks() -> None:
+        try:
+            quota_data = None
+            if len(client.key_pool) > 1:
+                try:
+                    quota_data = client.select_best_key()
+                except Exception:
+                    quota_data = None
+            if quota_data is None:
+                quota_data = client.get_quota()
+            if len(client.key_pool) > 1 and quota_data.get("masked") is None:
+                from src.api_key_pool import mask_key
 
-        quota_data["masked"] = mask_key(client.api_key)
-    remaining = quota_data.get("remaining", quota_data.get("remaining_daily_tokens", "Bilinmiyor"))
-    limit = quota_data.get("limit")
-    if isinstance(remaining, int) and isinstance(limit, int):
-        quota_str = f"{remaining:,} / {limit:,}"
-    elif isinstance(remaining, int):
-        quota_str = f"{remaining:,}"
-    else:
-        quota_str = str(remaining)
-    if quota_data.get("masked"):
-        quota_str += f" (anahtar {quota_data['masked']})"
+                quota_data["masked"] = mask_key(client.api_key)
+            remaining = quota_data.get("remaining", quota_data.get("remaining_daily_tokens", "Bilinmiyor"))
+            limit = quota_data.get("limit")
+            if isinstance(remaining, int) and isinstance(limit, int):
+                qs = f"{remaining:,} / {limit:,}"
+            elif isinstance(remaining, int):
+                qs = f"{remaining:,}"
+            else:
+                qs = str(remaining)
+            if quota_data.get("masked"):
+                qs += f" (anahtar {quota_data['masked']})"
+            print_info(f"Kota: {qs}")
+        except Exception as e:
+            print_warning(f"Kota okunamadı: {type(e).__name__}: {e}")
+        try:
+            ensure_terms_accepted(interactive=False, api_key=client.api_key, silent_ok=True)
+        except Exception as e:
+            print_warning(f"Kullanım şartları uyarısı ({type(e).__name__}): {e}")
 
-    # Ensure terms accepted for the active key (quiet when already OK).
-    try:
-        ensure_terms_accepted(
-            interactive=True,
-            api_key=client.api_key,
-            silent_ok=True,
-        )
-    except Exception as e:
-        print_warning(f"Kullanım şartları uyarısı: {e}")
+    import threading
+
+    threading.Thread(target=_startup_checks, daemon=True).start()
+    quota_str = "kontrol ediliyor..."
 
     session = AgentSession(client=client, workspace_root=workspace_root, model=initial_model)
 
@@ -1426,6 +1427,21 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     print_warning(unknown_command_message(cmd))
                 continue
 
+            # 7.7: a pasted existing image path becomes an @-mention
+            _raw = user_input.strip().strip('"').strip("'")
+            if _raw and len(_raw) < 260 and Path(_raw).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+                try:
+                    _ip = Path(_raw).expanduser()
+                    if not _ip.is_absolute():
+                        _ip = Path(workspace_root) / _ip
+                    if _ip.is_file():
+                        try:
+                            _rel = _ip.resolve().relative_to(Path(workspace_root).resolve()).as_posix()
+                        except ValueError:
+                            _rel = str(_ip.resolve())
+                        user_input = f"@{_rel} bu görseli incele ve içindeki metni/hatayı açıkla."
+                except OSError:
+                    pass
             mention = re.match(r"@([A-Za-z0-9][\w-]*)\s+(\S.*)", user_input, re.S)
             if mention:
                 from src.agent_library import get_agent, run_with_agent
