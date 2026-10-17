@@ -64,4 +64,15 @@ def build_preset(name: str, namespace: str | None = None) -> str:
     scope, fields = (f"-n {ns}", {"ready": 2, "status": 3, "restarts": 4}) if ns else (
         "-A", {"ready": 3, "status": 4, "restarts": 5}
     )
-    return PRESETS[name][1].format(scope=scope, **fields)
+    return _API_GUARD + PRESETS[name][1].format(scope=scope, **fields)
+
+
+# With the API server down every section printed the same "connection refused"
+# error (bursa3-k8s: 6 sections, ~40 noisy lines); stop early with the cause.
+_API_GUARD = (
+    'kubectl get --raw /readyz >/dev/null 2>&1 || { '
+    'echo "== API SUNUCUSU YANIT VERMIYOR"; kubectl get --raw /readyz 2>&1 | tail -1 | cut -c1-200; '
+    'echo "k3s: $(systemctl is-active k3s 2>/dev/null) | '
+    'son baslangic: $(systemctl show k3s -p ActiveEnterTimestamp --value 2>/dev/null)"; '
+    'journalctl -u k3s -n 6 --no-pager 2>/dev/null | cut -c1-200; exit 0; }; '
+)

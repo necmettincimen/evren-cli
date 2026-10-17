@@ -22,7 +22,8 @@ class BuildPresetTest(unittest.TestCase):
 
     def test_resources_table(self):
         cmd = build_preset("k8s_resources")
-        self.assertTrue(cmd.startswith("kubectl get pods -A -o go-template='{{range .items}}"))
+        self.assertTrue(cmd.startswith("kubectl get --raw /readyz"))  # API guard first
+        self.assertIn("kubectl get pods -A -o go-template='{{range .items}}", cmd)
         self.assertIn("| column -t", cmd)
         self.assertNotIn("\n", cmd)
 
