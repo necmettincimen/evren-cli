@@ -146,6 +146,9 @@ def is_command_input(text: str) -> bool:
     Pasted paths, build output and any multi-line text starting with "/" are
     task text.
     """
+    first, _, rest = (text or "").strip().partition(" ")
+    if first.lower() in ("/ask", "/plan") and rest.strip():
+        return False  # one-shot mode prefix: the agent parses it (src/modes.py)
     return is_command(text) or is_unknown_command(text)
 
 

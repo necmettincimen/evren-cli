@@ -116,7 +116,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Dosya oluşturur veya tamamen yeniden yazar (yedek alınır).",
+            "description": "Dosya oluşturur, tamamen yeniden yazar ya da append=true ile sonuna ekler.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -126,7 +126,11 @@ TOOLS_SCHEMA = [
                     },
                     "content": {
                         "type": "string",
-                        "description": "Tam içerik",
+                        "description": "Tam içerik (append=true ise eklenecek metin)",
+                    },
+                    "append": {
+                        "type": "boolean",
+                        "description": "true: içeriği dosyanın sonuna ekle",
                     },
                 },
                 "required": ["path", "content"],
@@ -732,9 +736,20 @@ def tool_write_file(
     content: str,
     workspace_root: Path | None = None,
     auto_approve: bool = False,
+    append: bool = False,
 ) -> str:
     root = workspace_root or get_workspace_dir()
     resolved = resolve_workspace_path(path, root)
+    if append and resolved.exists():
+        # Appending through PowerShell Add-Content rewrote README's line endings
+        # and encoding, so the whole file showed as changed and the model looped.
+        old, _ = safe_read_file(path, root)
+        eol = "\r\n" if "\r\n" in old else "\n"
+        if old and not old.endswith("\n"):
+            old += eol
+        if eol == "\r\n":
+            content = content.replace("\r\n", "\n").replace("\n", "\r\n")
+        content = old + content
 
     if resolved.exists():
         old_content, _ = safe_read_file(path, root)
@@ -1318,6 +1333,7 @@ def execute_tool_call(
             content=arguments.get("content", ""),
             workspace_root=root,
             auto_approve=auto_approve,
+            append=bool(arguments.get("append")),
         )
         if result.startswith("BAŞARILI"):
             result += _syntax_report(arguments.get("path", ""), root)

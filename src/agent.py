@@ -130,7 +130,7 @@ SYSTEM_PROMPT = """Sen EVREN LLM API destekli, kullanıcının yerel proje çal�
 - Öneri/teşhis isteğinde önce TEK komutla geniş salt-okuma anlık görüntü al, gerekirse 1-2 hedefli komut ekle. Her
   öneriyi gözlenen kanıta dayandır, bakmadığın konuda "kontrol edilmedi" de; düzeltmeyi yalnızca öner.
 - Sorgu/salt-okuma işinde çalışma alanına dosya yazma; veriyi tek komutta süz. Deneme komutu (`echo test`) veya eşleşmeyecek deneme edit_file gönderme; betik gerekirse .evren/tmp/ altına yaz.
-- Kodda çağıracağın fonksiyonun var olduğunu önce doğrula (find_files "def ad"); API uydurma.
+- Fonksiyonun varlığını önce doğrula. Dosyayı kabukla (Add-Content, >>) değiştirme; write_file(append) var.
 - Kullanıcı onayı araç izinlerini, salt-okuma kipini ve komut onayını geçersiz kılmaz.
 
 DOSYA VE KOMUTLAR:

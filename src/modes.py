@@ -29,6 +29,9 @@ class AgentMode(str, Enum):
 MODE_PREFIXES = {
     "ask:": AgentMode.ASK,
     "plan:": AgentMode.PLAN,
+    # "/ask ..." and "/plan ..." with a task: what users actually type.
+    "/ask ": AgentMode.ASK,
+    "/plan ": AgentMode.PLAN,
 }
 
 
