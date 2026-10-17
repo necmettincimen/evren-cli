@@ -1125,8 +1125,6 @@ class AgentSession:
 
         if _PLAN_INTENT_RE.search(text or ""):
             return True
-        if clef_label(text, ["plan", "no_plan"]) == "plan":
-            return True
         return self.token_manager.estimate_text(text) >= route_min_tokens()
 
     def _prepare_phase(
@@ -1169,7 +1167,10 @@ class AgentSession:
         # history (and /continue) without a separate turn.
         self.messages[-1] = {
             **self.messages[-1],
-            "content": f"{self.messages[-1]['content']}\n\n{execution_brief(plan, planner)}",
+            "content": f"{self.messages[-1]['content']}\n\n{execution_brief(plan, planner)}" + (
+                "\n\nPLANLAYICININ OKUDUĞU DOSYALAR (güncel; yeniden okuma, doğrudan düzenle):\n"
+                + self._planner_reads if getattr(self, "_planner_reads", "") else ""
+            ),
         }
         print_info(f"Plan hazır; uygulama için {executor} modeline geçiliyor.")
 
@@ -1276,6 +1277,7 @@ class AgentSession:
 
     def _plan_phase(self, task_text: str, planner: str) -> str | None:
         """Runs a short read-only loop on the planner model; returns the plan text."""
+        self._planner_reads = ""
         saved_messages, saved_model, saved_thinking = self.messages, self.model, self._thinking
         self.messages = [
             {"role": "system", "content": self.system_prompt},
@@ -1283,6 +1285,7 @@ class AgentSession:
         ]
         self.model = planner
         self._thinking = None
+        planner_messages = self.messages
         try:
             result = self._run_steps(planner_max_steps(), AgentMode.ASK, 0, 0, 0)
         finally:
@@ -1292,7 +1295,32 @@ class AgentSession:
         if not text or text.startswith(("HATA:", "Hata:", "İPTAL")):
             return None
         self._plan_to_todos(text)
+        self._planner_reads = self._collect_planner_reads(planner_messages)
         return text
+
+    @staticmethod
+    def _collect_planner_reads(messages: list[dict], budget: int = 40_000) -> str:
+        """view_file outputs the planner already saw, for the executor.
+
+        A real run: the planner read four test files (140 s), then the executor
+        spent its first 7 steps reading the same files again before editing.
+        """
+        names = {}
+        for m in messages:
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {} if isinstance(tc, dict) else {}
+                if fn.get("name") == "view_file":
+                    names[tc.get("id")] = True
+        parts, used = [], 0
+        for m in messages:
+            if m.get("role") != "tool" or m.get("tool_call_id") not in names:
+                continue
+            content = str(m.get("content") or "")
+            if not content or content.startswith(("HATA", "BİLGİ")) or used + len(content) > budget:
+                continue
+            parts.append(content)
+            used += len(content)
+        return "\n\n".join(parts)
 
     @staticmethod
     def _plan_to_todos(plan: str) -> None:
@@ -1624,7 +1652,7 @@ class AgentSession:
             open_items = [t for t in get_store().snapshot() if t["status"] != "completed"]
         except Exception:
             open_items = []
-        if not open_items or self._idle_steps not in (6, 10, 14):
+        if not open_items or self._idle_steps not in (4, 7, 10):
             return ""
         nxt = next((t["content"] for t in open_items if t["status"] == "in_progress"), open_items[0]["content"])
         return (
