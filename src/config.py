@@ -381,8 +381,8 @@ def executor_model(session_model: str) -> str:
 
 
 def clef_intent_enabled() -> bool:
-    """EVREN_CLEF_INTENT (varsayılan kapalı): niyet sınıflandırmada clef modelini dene."""
-    return _env_flag("EVREN_CLEF_INTENT", False)
+    """EVREN_CLEF_INTENT (varsayılan açık): niyet sınıflandırmada clef modelini dene."""
+    return _env_flag("EVREN_CLEF_INTENT", True)
 
 
 def route_min_tokens() -> int:

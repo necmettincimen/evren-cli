@@ -86,7 +86,7 @@ def classify(text: str, labels: list[str], client=None) -> str | None:
 
 
 def clef_label(text: str, labels: list[str]) -> str | None:
-    """`classify` gated by EVREN_CLEF_INTENT (default off)."""
-    if (os.getenv("EVREN_CLEF_INTENT") or "").strip().lower() not in ("1", "true", "yes", "on"):
+    """`classify` gated by EVREN_CLEF_INTENT (default on)."""
+    if (os.getenv("EVREN_CLEF_INTENT") or "true").strip().lower() not in ("1", "true", "yes", "on"):
         return None
     return classify(text, labels)
