@@ -397,7 +397,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "todo_write",
-            "description": "Çok adımlı işte yapılacaklar listesini tutar; her güncellemede TÜM listeyi gönder (content + status). Aynı anda tek in_progress.",
+            "description": "Çok adımlı işte yapılacaklar listesini tutar; her güncellemede TÜM listeyi gönder (content + status). Aynı anda tek in_progress. Her madde için değil, birkaç madde bitince toplu güncelle.",
             "parameters": {
                 "type": "object",
                 "properties": {

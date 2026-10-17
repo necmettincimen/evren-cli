@@ -504,7 +504,9 @@ def execution_context_block(workspace_root: Path) -> str:
         "run_command, EVREN CLI sürecinin çalıştığı makinede çalışır; SSH bağlantısı kurmaz.\n"
         "Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver; "
         "aksi halde komutu bu kabuğun sözdizimiyle yaz.\n"
-        "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir."
+        "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir.\n"
+        # A "kısa liste ver" request was answered with ~1,300 tokens (60 s).
+        "Son yanıt: istenmedikçe en fazla ~12 satır; 'kısa' veya madde sayısı verildiyse ona uy."
     )
 
 
