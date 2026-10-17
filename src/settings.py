@@ -37,12 +37,21 @@ def _home_file() -> Path:
     return Path.home() / ".evren" / "settings.json"
 
 
-def _read(path: Path) -> dict:
+def _parse(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read(path: Path) -> dict:
+    # Read on every request and tool call: cached until the file changes.
+    import copy
+
+    from src.file_cache import cached
+
+    return copy.deepcopy(cached("settings", path, _parse))
 
 
 def _merge(a: dict, b: dict) -> dict:

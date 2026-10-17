@@ -98,9 +98,27 @@ def agent_dirs(workspace_root) -> list[tuple[str, Path]]:
     return dirs
 
 
+_AGENTS_CACHE: dict[str, tuple[tuple, dict]] = {}
+
+
 def load_agents(workspace_root=None) -> dict[str, AgentDef]:
+    """All agent definitions; re-parsed only when an agents/*.md file changes."""
+    from src.file_cache import dir_stamp
+
+    dirs = agent_dirs(workspace_root)
+    stamp = tuple((str(d), dir_stamp(d)) for _, d in dirs)
+    key = str(workspace_root)
+    hit = _AGENTS_CACHE.get(key)
+    if hit and hit[0] == stamp:
+        return dict(hit[1])
+    agents = _load_agents_uncached(dirs)
+    _AGENTS_CACHE[key] = (stamp, agents)
+    return dict(agents)
+
+
+def _load_agents_uncached(dirs) -> dict[str, AgentDef]:
     agents: dict[str, AgentDef] = {}
-    for source, directory in agent_dirs(workspace_root):
+    for source, directory in dirs:
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.md")):
