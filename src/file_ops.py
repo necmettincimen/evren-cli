@@ -5,6 +5,7 @@ and protects critical files.
 """
 
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -64,10 +65,19 @@ def is_safe_path(target: Path | str, workspace_root: Path | None = None, *,
     return True, ""
 
 
+def msys_to_windows(path_str: str) -> str:
+    """Git Bash style "/d/Github/x" -> "D:/Github/x" on Windows (else unchanged)."""
+    if os.name == "nt":
+        m = re.match(r"^/([a-zA-Z])(/.*)?$", path_str or "")
+        if m:
+            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+    return path_str
+
+
 def resolve_workspace_path(path_str: str, workspace_root: Path | None = None) -> Path:
     """Resolves a string path safely within the workspace."""
     root = (workspace_root or get_workspace_dir()).resolve()
-    p = Path(path_str)
+    p = Path(msys_to_windows(path_str))
     if not p.is_absolute():
         return (root / p).resolve()
     return p.resolve()
