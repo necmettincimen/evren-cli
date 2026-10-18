@@ -1990,12 +1990,17 @@ class AgentSession:
         # Execute tool call cleanly without spinner wrap (prevents terminal input freeze & diff distortion)
         result = prefetched.get(tc.id)
         if result is None:
-            result = execute_tool_call(
-                name=fn_name,
-                arguments=args,
-                workspace_root=self.workspace_root,
-                auto_approve=self.auto_approve or perm_allow,
-            )
+            try:
+                result = execute_tool_call(
+                    name=fn_name,
+                    arguments=args,
+                    workspace_root=self.workspace_root,
+                    auto_approve=self.auto_approve or perm_allow,
+                )
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:  # a tool bug must not end the whole task
+                result = f"HATA: {fn_name} beklenmeyen hata: {type(e).__name__}: {e}"
         _settings.set_current(None)
         _settings.run_post_tool(fn_name, args, self.workspace_root)
 
