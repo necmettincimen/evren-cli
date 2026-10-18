@@ -795,7 +795,7 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
         # Skip forbidden parts
         if any(p in (".git", ".venv", "node_modules", "__pycache__", ".evren") for p in item.parts):
             continue
-        rel = item.relative_to(root).as_posix()
+        rel = item.relative_to(root).as_posix() if item.is_relative_to(root) else item.as_posix()
         kind = "📁 DIR " if item.is_dir() else "📄 FILE"
         entries.append(f"{kind}  {rel}")
 
