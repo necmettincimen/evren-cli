@@ -154,7 +154,8 @@ Bu turun başındaki kontrol sonuçları:
 
 Görevin: kodu ve ilgili dosyaları okuyarak hedefe ulaşmak için SIRADAKİ en değerli işleri seç.
 Kurallar: önce kırık kontrolleri (derleme/analiz/test hatası) düzelten maddeler; sonra hedefteki
-eksik özellikler, yapısal hatalar. Her madde tek görevde bitirilebilecek boyutta, somut dosya/ekran adıyla.
+eksik özellikler, yapısal hatalar. Her madde KÜÇÜK olsun (tek ekran/tek dosya grubu, ~30 araç adımında biter),
+somut dosya/ekran adıyla; 'kısmi' kalmış maddeleri daha küçük parçalara bölerek sürdür.
 En fazla {limit} madde. Hiçbir dosyayı değiştirme.
 Son yanıtın YALNIZCA şu JSON olsun (başka metin yok):
 {{"done": false, "items": [{{"title": "...", "detail": "neyi, hangi dosyada, kabul ölçütü"}}]}}
@@ -325,7 +326,7 @@ class IterationRunner:
             completed = sum(1 for i in items if i.status == "tamam")
             issues_before = sum(r.issues + (0 if r.ok else 1) for r in before)
             issues_after = sum(r.issues + (0 if r.ok else 1) for r in after)
-            progressed = completed > 0 or issues_after < issues_before
+            progressed = issues_after < issues_before or (completed > 0 and issues_after <= issues_before)
             self.state.stalled_rounds = 0 if progressed else self.state.stalled_rounds + 1
             minutes = round((time.monotonic() - started) / 60, 1)
             summary = {
