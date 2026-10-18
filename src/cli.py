@@ -302,6 +302,15 @@ def cmd_docs(args):
     print(f"  • Token bütçesi : {status['token_budget']}")
 
 
+def cmd_setup_terminal(args):
+    """Adds the 'EVREN (Git Bash)' Windows Terminal profile (or removes it)."""
+    from src.terminal_setup import remove, setup
+
+    lines = remove() if args.remove else setup(args.dir, shortcut=args.shortcut)
+    for line in lines:
+        (print_error if line.startswith("HATA") else print_info)(line)
+
+
 def cmd_debug(args):
     """Debug helpers; `debug last` prints the step table of the last agent task."""
     from src.trace import print_last_task
@@ -604,6 +613,15 @@ def main():
         help="Sondan N. görevi göster (varsayılan: 1 = son görev)",
     )
     p_debug.set_defaults(func=cmd_debug, debug_action="last", task=1)
+
+    # setup-terminal: Windows Terminal profile that opens EVREN in Git Bash
+    p_term = subparsers.add_parser(
+        "setup-terminal", help="Windows Terminal'e 'EVREN (Git Bash)' profili ekler",
+    )
+    p_term.add_argument("--dir", help="Başlangıç klasörü (varsayılan: kullanıcı klasörü)")
+    p_term.add_argument("--shortcut", action="store_true", help="Masaüstüne kısayol da oluştur")
+    p_term.add_argument("--remove", action="store_true", help="Profili ve kısayolu kaldır")
+    p_term.set_defaults(func=cmd_setup_terminal)
 
     # ssh command
     p_ssh = subparsers.add_parser("ssh", help="Kayıtlı SSH host'larını yönet ve kullan")

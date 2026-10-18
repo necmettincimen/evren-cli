@@ -327,8 +327,8 @@ def collect_guided_prompt_frame(
         return "/continue"
     if is_execution_followup(brief):
         return "/execute " + brief
-    if is_command_input(brief):
-        return brief
+    if is_command_input(brief) or brief.startswith("!"):
+        return brief  # slash command or `!shell` line: not a task brief
     if not brief and previous:
         frame = PromptFrame(**vars(previous))
     else:
