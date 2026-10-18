@@ -311,6 +311,40 @@ def cmd_setup_terminal(args):
         (print_error if line.startswith("HATA") else print_info)(line)
 
 
+def cmd_iterate(args):
+    """Iterative development: checks -> plan -> fix -> verify -> HANDOFF, round after round."""
+    from src.api_client import EvrenClient
+    from src.agent import AgentSession
+    from src.iteration import IterationRunner, status_text
+    from src.terms import ensure_terms_accepted
+
+    workspace = get_workspace_dir(args.workspace)
+    if args.status:
+        print(status_text(Path(workspace)))
+        return
+    if not ensure_terms_accepted(interactive=True, silent_ok=True):
+        return
+    client = EvrenClient(default_model=args.model)
+    _pin_best_key(client)
+    session = AgentSession(client=client, workspace_root=workspace, model=args.model)
+    try:
+        runner = IterationRunner(session, Path(workspace), " ".join(args.goal or []),
+                                 checks=args.check or None, max_rounds=args.rounds,
+                                 item_steps=args.item_steps, resume=args.resume)
+    except ValueError as e:
+        print_error(str(e))
+        return
+    print_info(f"İterasyon: {runner.state.goal} • kontroller: {', '.join(runner.state.checks) or '(yok)'}")
+    try:
+        runner.run()
+    finally:
+        try:
+            from src.background import get_manager
+            get_manager().cleanup_all()
+        except Exception:
+            pass
+
+
 def cmd_debug(args):
     """Debug helpers; `debug last` prints the step table of the last agent task."""
     from src.trace import print_last_task
@@ -613,6 +647,18 @@ def main():
         help="Sondan N. görevi göster (varsayılan: 1 = son görev)",
     )
     p_debug.set_defaults(func=cmd_debug, debug_action="last", task=1)
+
+    # iterate: iterative development loop
+    p_iter = subparsers.add_parser("iterate", help="Hedefe tur tur ilerle: kontrol → plan → düzelt → doğrula → HANDOFF")
+    p_iter.add_argument("goal", nargs="*", help="İterasyon hedefi")
+    p_iter.add_argument("--rounds", type=int, default=10, help="En fazla tur (varsayılan 10)")
+    p_iter.add_argument("--check", action="append", help="Kontrol komutu (tekrarlanabilir; varsayılan otomatik)")
+    p_iter.add_argument("--item-steps", type=int, default=40, help="Madde başına en fazla ajan adımı")
+    p_iter.add_argument("--resume", action="store_true", help="Son iterasyona kaldığı yerden devam et")
+    p_iter.add_argument("--status", action="store_true", help="Son iterasyonun durumunu göster")
+    p_iter.add_argument("--model", "-m", default=None)
+    p_iter.add_argument("--workspace", "-w", default=None)
+    p_iter.set_defaults(func=cmd_iterate)
 
     # setup-terminal: Windows Terminal profile that opens EVREN in Git Bash
     p_term = subparsers.add_parser(

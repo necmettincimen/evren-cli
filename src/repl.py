@@ -1495,6 +1495,24 @@ def _cmd_team(ctx, arg):
     handle_team(arg, ctx.session, _run_agent)
 
 
+def _cmd_iterate(ctx, arg):
+    from src.iteration import IterationRunner, status_text
+    arg = (arg or "").strip()
+    if arg in ("", "durum", "status"):
+        print_info(status_text(ctx.workspace_root) if arg else "Kullanım: /iterate <hedef> | /iterate devam | /iterate durum")
+        return
+    resume = arg in ("devam", "resume")
+    try:
+        runner = IterationRunner(ctx.session, ctx.workspace_root, "" if resume else arg, resume=resume)
+        runner.run()
+    except ValueError as e:
+        print_warning(str(e))
+    except KeyboardInterrupt:
+        print_warning("İterasyon durduruldu; '/iterate devam' ile sürdürebilirsiniz.")
+    finally:
+        ctx.session.clear_history()
+
+
 def _cmd_clear(ctx, arg):
     from src.workflow_state import clear_checkpoint
     clear_checkpoint(ctx.workspace_root)
@@ -1553,6 +1571,8 @@ _COMMAND_TABLE = {
     "/agent": _cmd_agent,
     "/agents": _cmd_agents,
     "/team": _cmd_team,
+    "/iterate": _cmd_iterate,
+    "/iterasyon": _cmd_iterate,
     "/clear": _cmd_clear,
 }
 
