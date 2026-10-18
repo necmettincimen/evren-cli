@@ -253,7 +253,7 @@ class IterationRunner:
         previous = self.session.mode
         self.session.set_mode(AgentMode.ASK)
         try:
-            answer = self.session.run_step(prompt, max_steps=15, route=False) or ""
+            answer = self.session.run_step(prompt, max_steps=25, route=False) or ""
         finally:
             self.session.set_mode(previous)
         return self._parse_plan(answer)
