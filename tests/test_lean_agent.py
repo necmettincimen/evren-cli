@@ -60,8 +60,19 @@ class MultilineCommandTest(unittest.TestCase):
     def test_other_multiline_cmd_is_rejected_clearly(self):
         from src.tools import MultilineShellCommand
 
-        with self.assertRaises(MultilineShellCommand):
+        with patch.dict("os.environ", {"EVREN_SHELL": "cmd"}), self.assertRaises(MultilineShellCommand):
             _command_argv("echo a\necho b", False)
+
+    def test_git_bash_runs_posix_and_multiline_commands(self):
+        import os
+
+        if os.name != "nt":
+            self.skipTest("Windows only")
+        with patch.dict("os.environ", {"EVREN_SHELL": "auto"}), \
+             patch("src.config.git_bash_path", return_value=r"C:\Git\bin\bash.exe"):
+            argv, shell = _command_argv("echo a\necho b | tail -1", False)
+        self.assertEqual(argv, [r"C:\Git\bin\bash.exe", "-c", "echo a\necho b | tail -1"])
+        self.assertFalse(shell)
 
 
 

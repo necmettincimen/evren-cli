@@ -23,8 +23,68 @@ import time
 from typing import Any, Generator
 
 
+# pid -> Windows job handle. `taskkill /T` misses MSYS (Git Bash) children: a
+# timed-out `bash -c "sleep 40"` left sleep.exe running, and its open stdout
+# pipe made the kill path wait another 5 s. Every process started in the job
+# (grandchildren included) dies with TerminateJobObject.
+_JOBS: dict[int, int] = {}
+
+
+def attach_job(proc) -> None:
+    """Puts a freshly started Windows process into its own job object."""
+    if sys.platform != "win32" or proc is None:
+        return
+    try:
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = ctypes.c_void_p
+        k32.OpenProcess.restype = ctypes.c_void_p
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        handle = k32.OpenProcess(0x0101, False, proc.pid)  # TERMINATE | SET_QUOTA
+        ok = bool(handle) and k32.AssignProcessToJobObject(ctypes.c_void_p(job), ctypes.c_void_p(handle))
+        if handle:
+            k32.CloseHandle(ctypes.c_void_p(handle))
+        if ok:
+            _JOBS[proc.pid] = job
+        else:
+            k32.CloseHandle(ctypes.c_void_p(job))
+    except Exception:
+        pass
+
+
+def release_job(pid: int) -> None:
+    """Closes the job handle of a finished process (its children keep running)."""
+    job = _JOBS.pop(pid, None)
+    if job:
+        try:
+            import ctypes
+
+            ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(job))
+        except Exception:
+            pass
+
+
+def _terminate_job(pid: int) -> bool:
+    job = _JOBS.pop(pid, None)
+    if not job:
+        return False
+    try:
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32")
+        k32.TerminateJobObject(ctypes.c_void_p(job), 1)
+        k32.CloseHandle(ctypes.c_void_p(job))
+        return True
+    except Exception:
+        return False
+
+
 def _kill_tree_windows(pid: int) -> None:
     """Force-kills a process and all its descendants on Windows."""
+    _terminate_job(pid)
     try:
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -109,8 +169,10 @@ def run_with_tree_kill(
     kwargs.update(_popen_kwargs_for_group())
 
     proc = subprocess.Popen(command, **kwargs)
+    attach_job(proc)
     try:
         out, err = proc.communicate(timeout=timeout)
+        release_job(proc.pid)
         return proc.returncode, out or "", err or "", False
     except KeyboardInterrupt:
         kill_process_tree(proc.pid)
@@ -186,6 +248,7 @@ def stream_with_tree_kill(
     kwargs.update(_popen_kwargs_for_group())
 
     proc = subprocess.Popen(command, **kwargs)
+    attach_job(proc)
 
     sink: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
     threads = [

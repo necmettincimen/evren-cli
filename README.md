@@ -66,6 +66,11 @@ EVREN_DEFAULT_MODEL=deepseek-v4.1-flash
 EVREN_DEFAULT_MAX_TOKENS=4096
 ```
 
+**Kabuk:** Windows'ta Git for Windows kuruluysa ajanın `run_command` komutları **Git Bash** ile
+çalışır (POSIX: `grep`, `sed`, `find`, `head`, `tail`, çok satırlı betik). Bulunamazsa `cmd.exe`
+kullanılır. Elle seçmek için `EVREN_SHELL=bash|cmd|powershell`, bash yolunu vermek için
+`EVREN_GIT_BASH=C:\Program Files\Git\bin\bash.exe`. EVREN'i Git Bash terminalinden çalıştırmak önerilir.
+
 ### 3. Asistanı Başlatın
 
 ```powershell

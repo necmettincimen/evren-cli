@@ -337,6 +337,7 @@ class TestExecutionContext(unittest.TestCase):
             ):
                 with self.subTest(system=system):
                     with patch("src.config.platform.system", return_value=system), \
+                         patch("src.config.windows_shell", return_value="cmd"), \
                          patch("src.config.os", SimpleNamespace(
                              name=os_name, environ={"COMSPEC": r"C:\Windows\System32\cmd.exe"},
                          )):
@@ -374,6 +375,7 @@ class TestExecutionContext(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch("src.tools.stream_with_tree_kill", side_effect=stream) as execute, \
+                 patch.dict("os.environ", {"EVREN_SHELL": "cmd"}), \
                  patch("src.tools.print_warning"), patch("src.tools.print_command_output"):
                 result = tool_run_command("echo local", workspace_root=root, auto_approve=True)
             self.assertIn("Çıkış Kodu: 0", result)
