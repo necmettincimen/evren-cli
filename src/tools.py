@@ -779,7 +779,7 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
     root = workspace_root or get_workspace_dir()
     resolved = resolve_workspace_path(path, root)
 
-    safe, reason = is_safe_path(resolved, root)
+    safe, reason = is_safe_path(resolved, root, read_only=True)
     if not safe:
         return f"HATA: {reason}"
 

@@ -30,7 +30,14 @@ def backup_enabled() -> bool:
     return BACKUP_ENABLED
 
 
-def is_safe_path(target: Path | str, workspace_root: Path | None = None) -> tuple[bool, str]:
+def read_roots() -> list[Path]:
+    """Extra read-only roots (EVREN_READ_ROOTS, os.pathsep separated), e.g. a reference project."""
+    raw = os.environ.get("EVREN_READ_ROOTS", "")
+    return [Path(p).resolve() for p in raw.split(os.pathsep) if p.strip()]
+
+
+def is_safe_path(target: Path | str, workspace_root: Path | None = None, *,
+                 read_only: bool = False) -> tuple[bool, str]:
     """
     Checks if a target path is safe to access/write within the workspace.
     Returns (is_safe, error_reason).
@@ -45,9 +52,8 @@ def is_safe_path(target: Path | str, workspace_root: Path | None = None) -> tupl
         resolved = target_path.resolve()
 
     # Boundary check: must be strictly inside workspace root
-    try:
-        resolved.relative_to(root)
-    except ValueError:
+    allowed = [root] + (read_roots() if read_only else [])
+    if not any(resolved == base or base in resolved.parents for base in allowed):
         return False, f"Güvenlik İhlali: Hedef yol ({resolved}) çalışma dizini ({root}) dışında."
 
     # Check forbidden directories
@@ -119,7 +125,7 @@ def read_file_with_meta(target_path: Path | str, workspace_root: Path | None = N
     root = (workspace_root or get_workspace_dir()).resolve()
     resolved = resolve_workspace_path(str(target_path), root)
 
-    safe, reason = is_safe_path(resolved, root)
+    safe, reason = is_safe_path(resolved, root, read_only=True)
     if not safe:
         return "", {}, reason
 

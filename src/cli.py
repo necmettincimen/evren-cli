@@ -319,6 +319,10 @@ def cmd_iterate(args):
     from src.terms import ensure_terms_accepted
 
     workspace = get_workspace_dir(args.workspace)
+    if args.read_root:
+        import os
+        roots = [str(Path(r).resolve()) for r in args.read_root]
+        os.environ["EVREN_READ_ROOTS"] = os.pathsep.join(filter(None, [os.environ.get("EVREN_READ_ROOTS", ""), *roots]))
     if args.status:
         print(status_text(Path(workspace)))
         return
@@ -655,6 +659,7 @@ def main():
     p_iter.add_argument("--check", action="append", help="Kontrol komutu (tekrarlanabilir; varsayılan otomatik)")
     p_iter.add_argument("--item-steps", type=int, default=40, help="Madde başına en fazla ajan adımı")
     p_iter.add_argument("--resume", action="store_true", help="Son iterasyona kaldığı yerden devam et")
+    p_iter.add_argument("--read-root", action="append", help="Salt-okunur referans klasör (ör. web projesi)")
     p_iter.add_argument("--status", action="store_true", help="Son iterasyonun durumunu göster")
     p_iter.add_argument("--model", "-m", default=None)
     p_iter.add_argument("--workspace", "-w", default=None)
