@@ -487,11 +487,74 @@ def get_evren_dir(workspace_root: Path | None = None) -> Path:
     return evren_dir
 
 
+_GIT_BASH_CACHE: list[str | None] = []
+
+
+def git_bash_path() -> str | None:
+    """Git for Windows' bash.exe, or None. Never the WSL launcher in System32."""
+    if _GIT_BASH_CACHE:
+        return _GIT_BASH_CACHE[0]
+    import shutil
+
+    found: str | None = None
+    candidates: list[Path] = []
+    override = (os.getenv("EVREN_GIT_BASH") or "").strip()
+    if override:
+        candidates.append(Path(override))
+    git = shutil.which("git")
+    if git:
+        # ...\Git\cmd\git.exe or ...\Git\mingw64\bin\git.exe
+        for parent in Path(git).resolve().parents[:3]:
+            candidates += [parent / "bin" / "bash.exe", parent / "usr" / "bin" / "bash.exe"]
+    for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if base:
+            sub = Path(base) / ("Programs/Git" if env == "LOCALAPPDATA" else "Git")
+            candidates += [sub / "bin" / "bash.exe", sub / "usr" / "bin" / "bash.exe"]
+    which_bash = shutil.which("bash")
+    if which_bash:
+        candidates.append(Path(which_bash))
+    for cand in candidates:
+        low = str(cand).lower().replace("/", "\\")
+        if "\\windows\\system32\\" in low or "windowsapps" in low:
+            continue  # WSL launcher: a different machine, not this workspace
+        if cand.is_file():
+            found = str(cand)
+            break
+    _GIT_BASH_CACHE.append(found)
+    return found
+
+
+def windows_shell() -> str:
+    """Shell for run_command on Windows: bash (Git Bash) | cmd | powershell.
+
+    EVREN_SHELL=auto (default) picks Git Bash when installed: models write POSIX
+    commands (`| tail -5`, `grep`, multi-line scripts) and cmd.exe broke them,
+    e.g. `find /c` resolved to GNU find and scanned the whole C: drive.
+    """
+    choice = (os.getenv("EVREN_SHELL") or "auto").strip().lower()
+    if choice in ("cmd", "powershell"):
+        return choice
+    if choice in ("bash", "auto", "git-bash", "gitbash"):
+        if git_bash_path():
+            return "bash"
+    return "cmd"
+
+
+def shell_label() -> str:
+    if os.name != "nt":
+        return "/bin/sh"
+    return {
+        "bash": "Git Bash (POSIX: grep, sed, find, head, tail, wc, çok satırlı betik olur)",
+        "powershell": "PowerShell",
+    }.get(windows_shell(), os.environ.get("COMSPEC", "cmd.exe"))
+
+
 def execution_context_block(workspace_root: Path) -> str:
     """Describes the actual local command environment, without probing hosts."""
     from datetime import date
 
-    shell = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
+    shell = shell_label()
     # Date only (no time): the block is part of the system message, which must
     # stay identical between steps for the prompt cache. The model used to run
     # `date /t` just to date a changelog entry.
@@ -503,7 +566,7 @@ def execution_context_block(workspace_root: Path) -> str:
         f"run_command kabuğu: {shell}\n"
         "run_command, EVREN CLI sürecinin çalıştığı makinede çalışır; SSH bağlantısı kurmaz.\n"
         "Windows'ta PowerShell sözdizimi gerekiyorsa run_command'a use_powershell=true ver; "
-        "aksi halde komutu bu kabuğun sözdizimiyle yaz.\n"
+        "aksi halde komutu bu kabuğun sözdizimiyle yaz (Git Bash'te Unix yolları: /d/proje veya göreli yol).\n"
         "CLI bir sunucunun terminalinde çalışıyorsa o sunucu yerel makinedir.\n"
         # A "kısa liste ver" request was answered with ~1,300 tokens (60 s).
         "Son yanıt: istenmedikçe en fazla ~12 satır; 'kısa' veya madde sayısı verildiyse ona uy."

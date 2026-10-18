@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.proc_utils import kill_process_tree, _popen_kwargs_for_group
+from src.proc_utils import attach_job, kill_process_tree, _popen_kwargs_for_group
 
 # Hard cap on retained output per background process (characters). When the
 # reader thread exceeds this, the oldest half is dropped with a marker.
@@ -134,6 +134,7 @@ class BackgroundManager:
         kwargs.update(_popen_kwargs_for_group())
 
         proc = subprocess.Popen(argv if argv is not None else command, **kwargs)
+        attach_job(proc)
         record = BackgroundProcess(id=bg_id, command=command, proc=proc)
         record._reader = threading.Thread(
             target=self._drain, args=(record,), daemon=True, name=f"bg-reader-{bg_id}"

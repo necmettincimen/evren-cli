@@ -188,7 +188,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "YEREL makinede, çalışma alanında komut çalıştırır (test, derleme, sistem kontrolü). Windows varsayılan kabuğu cmd.exe: PowerShell için use_powershell=true, Python kodu için use_python=true. Çok satırlı cmd yok. Çıktı uzunsa özetlenir; hedefli komut kullan.",
+            "description": "YEREL makinede, çalışma alanında komut çalıştırır (test, derleme, sistem kontrolü). Kabuk bağlam bloğunda yazar (Windows'ta Git Bash varsa o: POSIX komutları, çok satır olur; yoksa cmd.exe). PowerShell için use_powershell=true, Python kodu için use_python=true. Çıktı uzunsa özetlenir; hedefli komut kullan.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1019,6 +1019,16 @@ def _command_argv(
 
     if use_python:
         return [sys.executable, "-c", command], False
+    if not use_powershell and os.name == "nt":
+        from src.config import git_bash_path, windows_shell
+
+        shell = windows_shell()
+        if shell == "bash":
+            # POSIX semantics, multi-line scripts and the GNU tools the model
+            # expects; no cmd quoting or `find /c` pitfalls.
+            return [git_bash_path(), "-c", command], False
+        if shell == "powershell":
+            use_powershell = True
     if not use_powershell:
         if os.name == "nt" and "\n" in command.strip():
             match = _INLINE_PYTHON_RE.match(command)
