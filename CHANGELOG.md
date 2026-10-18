@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.1.0] - 2026-10-18
+
+### Değişti
+- Windows'ta run_command varsayılan kabuğu Git Bash (EVREN_SHELL=auto|bash|cmd|powershell); WSL bash'i kullanılmaz
+- REPL'de !komut: ajanla aynı kabukta çalışır, çıktı sonraki göreve bağlam olur
+- evren setup-terminal: Windows Terminal'e 'EVREN (Git Bash)' profili ve isteğe bağlı masaüstü kısayolu
+- Zaman aşımında Windows Job Object ile tam süreç ağacı sonlandırma; akış kesilince komut geride kalmaz
+- k8s hazır komutları önce API sunucusunu kontrol eder; uzak sudo parola beklemez (sudo -n)
+- Plan kipi 8 adım ve create_plan hatırlatması; /context ve durum satırı bütçeye göre; son yanıt uzunluk sınırı
+- Komut önerisi harf yer değiştirmesini tercih eder (/modle -> /model); düşünme kapalıyken akış zaman aşımı 90 sn
+
 ## [3.0.0] - 2026-10-17
 
 2.2.0 sonrası kararlılık, yetenek ve ajan kütüphanesi çalışmaları; major sürüm.
