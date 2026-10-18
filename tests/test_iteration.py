@@ -1,0 +1,59 @@
+"""Iteration mode: plan parsing, check detection, round loop with a fake session."""
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from src.iteration import CheckResult, IterationRunner, IterationState, detect_checks, slugify
+
+
+class FakeSession:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.mode = "normal"
+
+    def clear_history(self):
+        pass
+
+    def set_mode(self, mode):
+        self.mode = mode
+
+    def run_step(self, prompt, max_steps=None, route=True):
+        return self.answers.pop(0) if self.answers else '{"done": true, "items": []}'
+
+
+class IterationTest(unittest.TestCase):
+    def test_plan_parsing_json_and_fallback(self):
+        done, items = IterationRunner._parse_plan('Plan:\n{"done": false, "items": [{"title": "A", "detail": "d"}]}')
+        self.assertFalse(done)
+        self.assertEqual([i.title for i in items], ["A"])
+        _, items = IterationRunner._parse_plan("1. Birinci\n2) İkinci")
+        self.assertEqual(len(items), 2)
+
+    def test_detect_flutter_and_slug(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "pubspec.yaml").write_text("name: x", encoding="utf-8")
+            self.assertIn("flutter test", detect_checks(Path(d)))
+        self.assertEqual(slugify("Brief akışı: ajans & marka"), "brief-akisi-ajans-marka")
+
+    def test_round_records_handoff_and_resumes(self):
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}',
+                   "yaptım\nSONUÇ: tamam — düzeltildi",
+                   '{"done": true, "items": []}']
+        ok = CheckResult("chk", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(FakeSession(answers), Path(d), "hedef", checks=["chk"], max_rounds=5)
+            state = runner.run()
+            self.assertTrue(state.done)
+            self.assertEqual(state.items[0].status, "tamam")
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("[tamam] Düzelt", handoff)
+            resumed = IterationRunner(FakeSession([]), Path(d), resume=True)
+            self.assertIsInstance(resumed.state, IterationState)
+            self.assertEqual(resumed.state.round, 2)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

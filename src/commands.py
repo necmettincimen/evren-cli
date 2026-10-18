@@ -74,6 +74,7 @@ COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "/agent": (),
     "/agents": (),
     "/team": (),
+    "/iterate": ("/iterasyon",),
 }
 
 # Legacy (Foreman-era) commands: still working, listed only under "/help legacy".
