@@ -479,6 +479,7 @@ HELP_TEXT = """
   [green]/quota[/green]                Tüm API anahtarlarının kalan/limit/reset kotasını gösterir
   [green]/tokens[/green]               Bağlam/token bütçesi raporunu gösterir
   [green]/debug [N][/green]            Son görevin adım tablosunu gösterir (istek, araç, süre; N = sondan N. görev)
+  [green]!komut[/green]                Komutu ajanla aynı kabukta (Git Bash) çalıştırır; çıktı bir sonraki göreve bağlam olur
   [green]/docs [alt komut][/green]      agent.md/changelog.md durumu; refresh|unmark|path
   [green]/keys[/green]                 API anahtar havuzunu listeler (maskeli) ve yönetir
   [green]/keys add/remove[/green]      Anahtar ekler/çıkarır (~/.evren-cli/config.json)
@@ -762,6 +763,7 @@ EVREN CLI Komutları:
   /quota        - Kalan token kotası
   /tokens       - Bağlam/token bütçesi raporu
   /debug [N]    - Son görevin adım tablosu (sondan N. görev)
+  !komut        - Kabuk komutu çalıştır (Git Bash); çıktı ajana bağlam olur
   /steps [n]    - Adım tavanını göster veya ayarla (tasarruf: düşük tut)
   /keys         - API anahtar havuzunu yönet
   /keys next    - Sıradaki API anahtarına geç
@@ -1600,6 +1602,13 @@ def _repl_loop(session: AgentSession, client: EvrenClient, workspace_root, pt_se
                     user_input = _read_line(pt_session, "İstek > ")
                     if not user_input:
                         continue
+
+            # `!komut`: the user runs a command in the agent's shell (Git Bash).
+            from src.shell_mode import is_shell_input, run_user_shell
+
+            if is_shell_input(user_input):
+                run_user_shell(user_input, session)
+                continue
 
             # Check slash commands
             if user_input.strip().casefold() in ("devam", "/continue") or (

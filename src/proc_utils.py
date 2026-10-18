@@ -328,6 +328,12 @@ def stream_with_tree_kill(
             pass
         raise
     finally:
+        # Caller abandoned the generator (Ctrl+C while printing, gen.close()):
+        # never leave the command running in the background.
+        if proc.poll() is None:
+            kill_process_tree(proc.pid)
+        else:
+            release_job(proc.pid)
         for t in threads:
             t.join(timeout=1)
 
