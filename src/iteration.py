@@ -114,6 +114,9 @@ def _count_issues(command: str, output: str) -> int:
     found = re.search(r"(\d+) issues? found", output)
     if found:
         return int(found.group(1))
+    flutter = re.findall(r"\+\d+(?: ~\d+)? -(\d+): Some tests failed", output)
+    if flutter:
+        return int(flutter[-1])
     failed = re.search(r"(\d+) failed", output)
     if failed:
         return int(failed.group(1))
@@ -184,6 +187,7 @@ class IterationRunner:
             if not state_file or not state_file.exists():
                 raise ValueError("Devam edilecek iterasyon bulunamadı.")
             self.state = IterationState.from_json(state_file.read_text(encoding="utf-8"))
+            self.state.stalled_rounds = 0  # an explicit resume gets a fresh no-progress budget
             if checks:
                 self.state.checks = checks
         else:
