@@ -5,6 +5,18 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.2.0] - 2026-10-19
+
+### Eklendi
+- İterasyon modu: `evren iterate "<hedef>"` ve REPL'de `/iterate` (kontrol → plan → madde madde düzelt → doğrula → `.evren/iterations/<slug>/HANDOFF.md`); `--rounds`, `--check`, `--item-steps`, `--resume`, `--status`
+- `--read-root` / `EVREN_READ_ROOTS`: salt-okunur referans klasör (ör. web projesini okuyup Flutter'a taşımak)
+- Kontrol otomatik algılama: flutter (gerekirse `pub get`), pytest, npm lint/test, dotnet build; flutter analyze/test sorun sayımı
+
+### Düzeltildi
+- Çalışma alanı dışındaki klasörde list_directory çökmesi; araç istisnası artık görevi bitirmez
+- Git Bash biçimli `/d/...` yolları Windows yoluna çevrilir
+- Sorun sayısı artan tur ilerleme sayılmaz; `--resume` ilerlemesizlik sayacını sıfırlar
+
 ## [3.1.0] - 2026-10-18
 
 ### Değişti
