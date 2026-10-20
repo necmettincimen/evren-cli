@@ -469,11 +469,20 @@ class IterationRunner:
             lines.append("- (bu turda henüz madde işlenmedi)")
         return "\n".join(lines)
 
+    def _round_summarised(self) -> bool:
+        """True when the current round already has a HANDOFF heading (normal or partial summary)."""
+        if any(h.get("round") == self.state.round for h in self.state.history):
+            return True  # the round was recorded normally
+        if self.state.round <= 0 or not self.handoff_path.exists():
+            return False
+        handoff = self.handoff_path.read_text(encoding="utf-8")
+        return bool(re.search(rf"(?m)^## Tur {self.state.round}\b", handoff))
+
     def _flush_on_exit(self) -> None:
         """atexit hook: a process that dies mid-round (SIGTERM, crash) still leaves a summary."""
         try:
-            if any(h.get("round") == self.state.round for h in self.state.history):
-                return  # the round was recorded normally
+            if self._round_summarised():
+                return  # already summarised (recorded round or the Ctrl+C branch of run())
             self.state.stopped = "kesildi"
             self._mark_unprocessed_partial()
             self._save()  # persist item statuses before the summary is written
