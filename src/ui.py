@@ -553,6 +553,10 @@ def prompt_confirm(prompt_msg: str, default: bool = False) -> bool:
                 print(f"Kural eklendi (.evren/settings.local.json): {rule}")
             return True
         return ans in ("y", "yes", "evet", "e")
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
+        # Girdi kaynağı yok (boru/NUL): takılmadan varsayılanla devam et, "iptal" gürültüsü yapma.
+        print(f"(girdi yok, varsayılan: {'evet' if default else 'hayır'})")
+        return default
+    except KeyboardInterrupt:
         print("\nİşlem iptal edildi.")
         return False

@@ -383,7 +383,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "memory_save",
-            "description": "Gelecek oturumlar için kalıcı not kaydeder. Yalnızca kullanıcı 'hatırla/not et' dediğinde ya da kalıcı bir tercih/kural belirttiğinde kullan; sır/parola yazma.",
+            "description": "Gelecek oturumlar için kalıcı not kaydeder. Kullanıcı 'not ekle', 'not al', 'not et', 'hatırla', 'aklında tut', 'unutma' gibi bir şey dediğinde ya da kalıcı bir tercih/kural belirttiğinde HEMEN çağır (/memory komutunu bekleme). Kapsam belirtilmediyse: tüm projeleri ilgilendiren tercih/kişisel not = global, projeye özgü = project. Sır/parola yazma.",
             "parameters": {
                 "type": "object",
                 "properties": {
