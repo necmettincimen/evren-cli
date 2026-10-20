@@ -227,11 +227,28 @@ class IterationTest(unittest.TestCase):
             handoff = resumed.handoff_path.read_text(encoding="utf-8")
             for number in range(1, resumed.state.round + 1):
                 self.assertGreaterEqual(handoff.count(f"## Tur {number}"), 1, f"tur {number} başlığı yok")
-            self.assertIn("KESİLDİ (devam ediliyor)", handoff)
+            self.assertIn("KESİLDİ", handoff)  # partial summary already covers the round
             self.assertIn("[kısmi] Düzelt", handoff)
             # a second resume must not duplicate the heading
             again = IterationRunner(FakeSession([]), Path(d), resume=True)
-            self.assertEqual(again.handoff_path.read_text(encoding="utf-8").count("KESİLDİ (devam ediliyor)"), 1)
+            self.assertEqual(again.handoff_path.read_text(encoding="utf-8").count("## Tur 1"), 1)
+
+    def test_resume_skips_round_already_summarised_in_handoff(self):
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(FakeSession([]), Path(d), "hedef", checks=["python -V"], max_rounds=1)
+            runner.state.round = 1
+            runner.state.stopped = "kesildi"
+            runner._save()
+            # HANDOFF already carries the round heading, but history has no record of it
+            runner._append_handoff("## Tur 1 — KESİLDİ\n- [kısmi] Düzelt")
+            self.assertEqual(runner.state.history, [])
+            resumed = IterationRunner(FakeSession([]), Path(d), resume=True)
+            self.assertEqual(resumed.state.stopped, "")
+            handoff = resumed.handoff_path.read_text(encoding="utf-8")
+            self.assertEqual(handoff.count("## Tur 1"), 1)
+            self.assertNotIn("KESİLDİ (devam ediliyor)", handoff)
 
     def test_missing_check_tool_reports_clear_error_and_stops(self):
         with tempfile.TemporaryDirectory() as d, \
