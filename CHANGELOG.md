@@ -5,6 +5,16 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.3.1] - 2026-10-20
+
+EVREN'in kendi yük testi iterasyonunun (3. tur) ürettiği düzeltmeler:
+
+### Değişti
+- Plan kipi: keşif 2 adımla sınırlı, plan tek çağrıda yazılır
+- edit_file yanıtı diff özeti ve "doğrulama gerekmez" notu taşır (düzenleme sonrası gereksiz view_file/test turları azalır)
+- Zaman aşımında çıkış kodu 124 ve net mesaj
+- HTTP notu: çoklu curl denemesi tek döngüde, 3 ardışık 404'te tarama biter
+
 ## [3.3.0] - 2026-10-20
 
 ### Eklendi
