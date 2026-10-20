@@ -377,6 +377,8 @@ class IterationRunner:
                                                  else "Commit atma, push etme."))
         try:
             answer = self.session.run_step(prompt, max_steps=self.item_steps, route=False) or ""
+        except KeyboardInterrupt:  # Ctrl+C must reach run() so it can write a partial summary
+            raise
         except Exception as e:  # never let one item end the night
             answer = f"SONUÇ: engel — {type(e).__name__}: {e}"
         found = re.search(r"SONUÇ:\s*(tamam|kısmi|kismi|engel)\s*[—–-]?\s*(.*)", answer, re.I)
@@ -389,7 +391,29 @@ class IterationRunner:
             item.status, item.note = "kısmi", (answer.strip().splitlines() or [""])[-1][:300]
 
     # ------------------------------------------------------------------ loop
+    def _interrupt_summary(self) -> str:
+        """Partial round summary written when the run is cut short (Ctrl+C)."""
+        items = [i for i in self.state.items if i.round == self.state.round]
+        lines = [f"## Tur {self.state.round} — KESİLDİ (Ctrl+C)"]
+        if items:
+            lines += [f"- [{i.status}] {i.title}" + (f" — {i.note}" if i.note else "") for i in items]
+        else:
+            lines.append("- (bu turda henüz madde işlenmedi)")
+        return "\n".join(lines)
+
     def run(self) -> IterationState:
+        from src.ui import print_info, print_success, print_warning
+
+        try:
+            return self._run_rounds()
+        except KeyboardInterrupt:
+            print_warning("[iterasyon] Kesildi (Ctrl+C); kısmi tur özeti HANDOFF'a yazıldı.")
+            self._append_handoff(self._interrupt_summary())
+            self.state.stopped = "kesildi"
+            self._save()
+            return self.state
+
+    def _run_rounds(self) -> IterationState:
         from src.ui import print_info, print_success, print_warning
 
         self.state.checks, notes = resolve_missing_tools(self.state.checks)
