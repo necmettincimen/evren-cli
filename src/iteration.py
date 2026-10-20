@@ -56,7 +56,6 @@ class Item:
 @dataclass
 class IterationState:
     goal: str
-    stopped: str = ""   # non-empty when the loop ended early (missing tool, blocked, stalled)
     slug: str
     checks: list[str]
     round: int = 0
@@ -65,6 +64,7 @@ class IterationState:
     stalled_rounds: int = 0
     done: bool = False
     started_at: str = ""
+    stopped: str = ""   # non-empty when the loop ended early (missing tool, blocked, stalled)
 
     def to_json(self) -> str:
         data = asdict(self)
