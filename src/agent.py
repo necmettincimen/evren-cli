@@ -284,10 +284,15 @@ _LOOP_BLOCK_LIMIT = 3
 # change ("düzelt", "ekle"); negated forms ("yazma", "değiştirme") do not count.
 _ASKS_APPROVAL_RE = re.compile(
     r"(?i)(ister\s+mis(in|iniz)|uygulayay[ıi]m\s+m[ıi]|yapay[ıi]m\s+m[ıi]|onay[ıi]n[ıi]?z?\s+(al[ıi]yorum|bekliyorum)"
-    r"|onay\s+bekliyorum|onayl[ıi]yor\s+musun)"
+    r"|onay\s+bekliyorum|onayl[ıi]yor\s+musun"
+    # 2026-10-20: gerçek koşularda plan yazıp "Onaylarsan uygularım" / "Tek somut sonraki adım" ile bırakıldı.
+    r"|onaylarsan|onay\s+verirsen|onay\s+verir\s+misin|devam\s+edeyim\s+mi|ba[şs]lay[ae]y[ıi]m\s+m[ıi]"
+    r"|ba[şs]lat[ae]y[ıi]m\s+m[ıi]|uygulamam[ıi]\s+ister|s[ıi]radaki\s+(tek\s+)?(somut\s+)?ad[ıi]m"
+    r"|yap[ıi]lacak(lar)?\s*[:\n]|sonraki\s+ad[ıi]m(lar)?\s*[:\n])"
 )
 _IMPERATIVE_RE = re.compile(
-    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz)(?!me\b|ma\b|meyin|mayın|madan|meden)\w*"
+    r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz|düzenle|yap|tamamla|dönüştür|kopyala|taşı|çevir"
+    r"|geliştir|bağla|doğrudan)(?!me\b|ma\b|meyin|mayın|madan|meden)\w*"
 )
 # Same command family (pytest, dotnet test...) runs allowed between writes.
 _FAMILY_RUN_LIMIT = 4
@@ -2180,7 +2185,7 @@ class AgentSession:
                     continue
             if (
                 effective_mode == AgentMode.NORMAL
-                and not getattr(self, "_approval_nudged", False)
+                and getattr(self, "_approval_nudges", 0) < 3
                 and self._write_epoch == 0
                 and step_count < max_steps
                 and _ASKS_APPROVAL_RE.search(final_content[-500:])
@@ -2188,7 +2193,7 @@ class AgentSession:
             ):
                 # "çalışmıyorsa düzelt" was answered twice with "uygulamamı ister
                 # misin?": the instruction already is the approval.
-                self._approval_nudged = True
+                self._approval_nudges = getattr(self, "_approval_nudges", 0) + 1
                 self._verify_note = (
                     "[EVREN] Kullanıcı görevde zaten düzelt/ekle/uygula dedi; onay bekleme. "
                     "Önerdiğin değişikliği şimdi uygula ve doğrula."
