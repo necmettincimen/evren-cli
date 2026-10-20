@@ -4,6 +4,7 @@ Provides OpenAI-compatible function schemas and execution logic for
 file reading, writing, surgical editing, directory inspection, and command running.
 """
 
+import difflib
 import os
 import re
 import subprocess
@@ -744,7 +745,38 @@ def tool_edit_file(
     backup_info = f" (Yedek: {backup_path.name})" if backup_path else ""
     edit_count = len(edit_list)
     count_info = f" ({edit_count} düzenleme)" if edit_count > 1 else ""
-    return f"BAŞARILI: '{path}' dosyası başarıyla güncellendi{count_info}{backup_info}."
+    # The diff was already shown above and the write is span-based, so the model
+    # does not need a follow-up view_file/read to confirm the edit landed. The
+    # summary also states that the rest of the file (large files included) is
+    # untouched, which used to cost 2-3 extra verification steps per edit.
+    summary = _diff_summary(old_content, new_content)
+    return (
+        f"BAŞARILI: '{path}' dosyası başarıyla güncellendi{count_info}{backup_info}.\n"
+        f"Diff özeti: {summary}\n"
+        "Doğrulama gerekmez: değişiklik diske yazıldı, dosyanın geri kalanı korundu; "
+        "dosyayı yeniden okumana/view_file ile kontrol etmene gerek yok. "
+        "Yalnızca davranışı etkileyen bir değişiklikse ilgili testi çalıştır."
+    )
+
+
+def _diff_summary(old_content: str, new_content: str) -> str:
+    """One-line summary of an applied edit: added/removed lines and size delta."""
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+    added = removed = 0
+    for line in difflib.unified_diff(old_lines, new_lines, n=0, lineterm=""):
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    delta = len(new_content) - len(old_content)
+    sign = "+" if delta >= 0 else ""
+    return (
+        f"+{added}/-{removed} satır, {sign}{delta} karakter; "
+        f"dosya {len(old_lines)} → {len(new_lines)} satır, geri kalanı değişmedi."
+    )
 
 
 def tool_write_file(
