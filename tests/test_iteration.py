@@ -66,6 +66,17 @@ class IterationTest(unittest.TestCase):
             self.assertIn("1. kısım:", "\n".join(IterationRunner._split_partial(Item(title="X", detail="tek parça"))))
             self.assertEqual(len(IterationRunner._split_partial(Item(title="X", detail="tek parça"))), 2)
 
+    def test_default_item_steps_is_40(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = IterationRunner(FakeSession([]), Path(d), "hedef")
+            self.assertEqual(runner.item_steps, 40)
+
+    def test_cli_item_steps_default_is_40(self):
+        from src.cli import build_parser
+
+        args = build_parser().parse_args(["iterate", "hedef"])
+        self.assertEqual(args.item_steps, 40)
+
     def test_detect_flutter_and_slug(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "pubspec.yaml").write_text("name: x", encoding="utf-8")
