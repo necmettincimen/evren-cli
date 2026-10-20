@@ -148,7 +148,8 @@ DOSYA VE KOMUTLAR:
 YEREL / UZAK HEDEF:
 - Varsayılan hedef yerel makinedir ("bu host", "bu hosts", "bu makine", "burada", "localhost", "127.0.0.1", "::1" = yerel): run_command/view_file/edit_file
   kullan. SSH'ı yalnızca kullanıcı açıkça uzak sunucu/kayıtlı alias isterse kullan; alias verildiyse doğrudan
-  'ssh_run'/'ssh_read_file' çağır, hedef belirsizse 'ssh_list_hosts'. Rastgele host/IP kullanma. 'ssh_write_file' yalnızca allow_write=true host'ta ve onayla çalışır.
+  'ssh_run'/'ssh_read_file' çağır. Kayıtlı olmayan hedef için alias yerine kullanıcının verdiği 'user@host[:port]' yaz (salt-okuma geçici host;
+  yazma yok). 'ssh_list_hosts' son çare: yalnızca hedef hiç belli değilse. Rastgele host/IP uydurma. 'ssh_write_file' yalnızca allow_write=true host'ta ve onayla çalışır.
 
 KİPLER: normal: tüm araçlar. ask: salt-okuma. plan: yalnızca 'create_plan' ile plans/<ad>/plan.md yazılır.
 "REDDEDİLDİ: ..." kip kısıtıdır; tekrarlama, kullanıcıdan normal moda geçmesini iste.
@@ -992,17 +993,9 @@ class AgentSession:
         return compact
 
     def _include_ssh_tools(self) -> bool:
-        """SSH tools are sent only when hosts are registered; decided once per session."""
-        cached = getattr(self, "_ssh_tools_cached", None)
-        if cached is None:
-            try:
-                from src.ssh_hosts import load_hosts
-
-                cached = bool(load_hosts(self.workspace_root))
-            except Exception:
-                cached = True
-            self._ssh_tools_cached = cached
-        return cached
+        """SSH tools are always sent (unregistered user@host targets work too)."""
+        # Kayıtsız user@host hedefleri de çalıştığı için araçlar her zaman gönderilir.
+        return True
 
     def run_step(
         self, user_input: str, max_steps: int | None = None, *, route: bool = True,

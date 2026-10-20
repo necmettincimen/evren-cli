@@ -1193,27 +1193,31 @@ def _cmd_template(ctx, arg):
 def _cmd_memory(ctx, arg):
     from src.memory import load_memory, set_profile, add_note
     session, workspace_root = ctx.session, ctx.workspace_root
+    scope = "project"
+    if "--global" in arg.split():
+        scope = "global"
+        arg = " ".join(w for w in arg.split() if w != "--global")
     parts = arg.split(maxsplit=2)
     sub = parts[0].lower() if parts else ""
     if sub == "set":
         if len(parts) < 3:
             print_warning("Kullanım: /memory set <anahtar> <değer>")
         else:
-            set_profile(parts[1], parts[2], workspace_root)
+            set_profile(parts[1], parts[2], workspace_root, scope)
             print_success(f"Hafıza güncellendi: {parts[1]} = {parts[2]}")
             session.refresh_context()
     elif sub == "note":
         if len(parts) < 2:
             print_warning("Kullanım: /memory note <metin>")
         else:
-            add_note(parts[1], workspace_root)
+            add_note(arg.split(maxsplit=1)[1], workspace_root, scope)
             print_success("Not hafızaya eklendi.")
             session.refresh_context()
     else:
-        state = load_memory(workspace_root)
+        state = load_memory(workspace_root, scope)
         profile = state.get("profile", {})
         notes = state.get("notes", [])
-        print_info("Proje Hafızası:")
+        print_info("Genel Hafıza:" if scope == "global" else "Proje Hafızası:")
         if profile:
             for k, v in profile.items():
                 print(f"  • {k}: {v}")
@@ -1223,7 +1227,7 @@ def _cmd_memory(ctx, arg):
             print("  Notlar:")
             for n in notes[-10:]:
                 print(f"    - {n.get('text', '')}")
-        print("\nKomutlar: /memory set <k> <v> | /memory note <metin>")
+        print("\nKomutlar: /memory set <k> <v> | /memory note <metin>  (--global: tüm projeler)")
 
 
 def _cmd_track(ctx, arg):

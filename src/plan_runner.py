@@ -114,7 +114,8 @@ def _op_agent(step, root, dry):
     if step.get("model"):
         cmd += ["-m", step["model"]]
     cmd += ["-p", step["prompt"] + directive]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=int(step.get("timeout", 1800)))
+    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                       timeout=int(step.get("timeout", 1800)))
     if r.returncode != 0:
         raise RuntimeError((r.stdout + r.stderr).strip()[-400:])
     return (r.stdout.strip().splitlines() or ["tamam"])[-1][:200]
