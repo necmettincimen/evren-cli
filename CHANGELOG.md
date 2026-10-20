@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.4.1] - 2026-10-20
+
+### Düzeltildi
+- İterasyon: HANDOFF başlığı ve state.json daha ilk turdan önce yazılır; süreç sert öldürülse (SIGKILL/görev durdurma) bile kayıt kalır (atexit o durumda çalışmıyordu)
+
 ## [3.4.0] - 2026-10-20
 
 EVREN'in kendi iterasyonunun (16 commit) ürettiği iterasyon-modu iyileştirmeleri + düzeltme:
