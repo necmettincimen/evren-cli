@@ -135,6 +135,26 @@ class TestTools(unittest.TestCase):
         self.assertNotIn("karakterde kesildi", content)
         self.assertEqual(target.stat().st_size, before + len("EVREN_SHELL_LABEL = 'x'\n"))
 
+    def test_edit_file_reports_diff_summary_and_skips_verification(self):
+        # The edit result must carry a diff summary and say no verification is
+        # needed, so the model does not spend extra steps re-reading the file.
+        target = self.workspace / "summary.py"
+        target.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+
+        res = tool_edit_file(
+            "summary.py",
+            target_snippet="b = 2\n",
+            replacement_snippet="b = 20\nd = 4\n",
+            workspace_root=self.workspace,
+            auto_approve=True,
+        )
+        self.assertIn("BAŞARILI", res)
+        self.assertIn("Diff özeti:", res)
+        self.assertIn("+2/-1 satır", res)
+        self.assertIn("doğrulama gerekmez", res.lower())
+        self.assertIn("geri kalanı değişmedi", res)
+        self.assertEqual(target.read_text(encoding="utf-8"), "a = 1\nb = 20\nd = 4\nc = 3\n")
+
     def test_edit_file_writes_only_changed_span(self):
         # The unchanged head/tail must not be re-emitted: only the span is written.
         from src.file_ops import write_changed_lines
