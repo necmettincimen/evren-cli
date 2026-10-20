@@ -279,6 +279,10 @@ class IterationRunner:
                                         started_at=datetime.now().isoformat(timespec="seconds"))
         self.dir = base / self.state.slug
         self.dir.mkdir(parents=True, exist_ok=True)
+        # A hard kill (SIGKILL, task stop) skips atexit: write the header and the
+        # state right away so even then `--status`/HANDOFF show what was started.
+        self._ensure_header()
+        self._save()
 
     @staticmethod
     def _latest_state(base: Path) -> Path | None:
@@ -336,11 +340,14 @@ class IterationRunner:
     def _save(self) -> None:
         (self.dir / "state.json").write_text(self._redact(self.state.to_json()), encoding="utf-8")
 
-    def _append_handoff(self, text: str) -> None:
+    def _ensure_header(self) -> None:
         if not self.handoff_path.exists():
             self.handoff_path.write_text(self._redact(
                 f"# İterasyon: {self.state.goal}\n\nBaşlangıç: {self.state.started_at}\n"
                 f"Kontroller: {', '.join(self.state.checks) or '(yok)'}\n\n"), encoding="utf-8")
+
+    def _append_handoff(self, text: str) -> None:
+        self._ensure_header()
         with self.handoff_path.open("a", encoding="utf-8") as fh:
             fh.write(self._redact(text.rstrip()) + "\n\n")
 
