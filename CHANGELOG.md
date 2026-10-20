@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.2.3] - 2026-10-20
+
+### Değişti
+- Ajan doğrulamada yalnızca ilgili testi koşar; tam paket istenmedikçe çalıştırılmaz (yük testinde 2 senaryoda 467 test gereksiz koşuyordu)
+- `evren iterate` erken durduğunda (kontrol aracı eksik, engel, ilerleme yok) çıkış kodu 1 döner
+
 ## [3.2.2] - 2026-10-20
 
 ### Düzeltildi

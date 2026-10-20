@@ -137,7 +137,7 @@ DOSYA VE KOMUTLAR:
 - Değiştirmeden önce oku. Kod aramak için find_files(query="a|b") kullan (girintili satır döner, tek satırlık
   değişiklikte doğrudan edit_file hedefi olur), sonra view_file'ı yalnızca ilgili aralıkla çağır. "SÖZDİZİMİ HATASI" sonucunu önce düzelt.
 - 'edit_file' ile cerrahi değişiklik yap; yorum, stil ve girintiyi koru.
-- Kod değişikliğinden sonra ilgili testi/sözdizimi kontrolünü 'run_command' ile çalıştır; başarıyı yalnızca doğrulanmış sonuca göre bildir.
+- Kod değişikliğinden sonra YALNIZCA ilgili testi/sözdizimi kontrolünü çalıştır (tam test paketi istenmedikçe koşma); başarıyı doğrulanmış sonuca göre bildir.
 - Windows'ta PowerShell sözdizimi için run_command use_powershell=true, Python kodu için use_python=true ver
   (yalnızca kodu yaz); elle powershell -Command / python -c sarmalama.
 - CHANGELOG'da yayımlanmış sürüm notları geçmiştir, değiştirme; yeni notu [Unreleased]'a yaz.
