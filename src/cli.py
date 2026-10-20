@@ -340,13 +340,15 @@ def cmd_iterate(args):
         return
     print_info(f"İterasyon: {runner.state.goal} • kontroller: {', '.join(runner.state.checks) or '(yok)'}")
     try:
-        runner.run()
+        state = runner.run()
     finally:
         try:
             from src.background import get_manager
             get_manager().cleanup_all()
         except Exception:
             pass
+    if state.stopped:  # scripts/CI must not read an early stop as success
+        sys.exit(1)
 
 
 def cmd_debug(args):

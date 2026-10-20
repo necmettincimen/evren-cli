@@ -56,6 +56,7 @@ class Item:
 @dataclass
 class IterationState:
     goal: str
+    stopped: str = ""   # non-empty when the loop ended early (missing tool, blocked, stalled)
     slug: str
     checks: list[str]
     round: int = 0
@@ -372,6 +373,7 @@ class IterationRunner:
             print_warning(f"[iterasyon] {note}")
         if notes:
             self._append_handoff("**Durdu (kontrol aracı eksik):** " + " | ".join(notes))
+            self.state.stopped = "kontrol aracı eksik"
             self._save()
             return self.state
         while not self.state.done and self.state.round < self.max_rounds:
@@ -382,12 +384,14 @@ class IterationRunner:
             if missing:
                 print_warning(f"[iterasyon] Kontrol komutu bulunamadı (çıkış 127): {missing[0].command}; duruyorum.")
                 self._append_handoff(f"**Durdu:** kontrol komutu bulunamadı: `{missing[0].command}`.")
+                self.state.stopped = "kontrol komutu bulunamadı"
                 break
             done, items = self._plan(before)
             if done and items and items[0].status == "engel" and not all(r.ok for r in before):
                 self._append_handoff(f"## Tur {self.state.round} — DURDU\n{items[0].title}")
                 self._save()
                 print_warning(f"[iterasyon] {items[0].title}")
+                self.state.stopped = "engel"
                 break
             if done and items and items[0].status == "engel":
                 items = []  # checks pass: the reason is just the closing note
@@ -440,6 +444,7 @@ class IterationRunner:
             if self.state.stalled_rounds >= 2:
                 print_warning("[iterasyon] İki tur üst üste ilerleme yok; duruyorum. HANDOFF'a bakın.")
                 self._append_handoff("**Durdu:** iki tur üst üste ilerleme yok.")
+                self.state.stopped = "ilerleme yok"
                 break
         self._save()
         print_info(f"[iterasyon] Özet: {self.handoff_path}")
