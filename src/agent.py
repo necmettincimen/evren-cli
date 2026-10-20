@@ -1161,11 +1161,6 @@ class AgentSession:
         if mode is AgentMode.PLAN:
             if auto_route_enabled():
                 self.model = planner_model()
-            # A plan is written from tool output, not hidden reasoning: the
-            # r21/plan run spent 67 s on 4 steps because every step was a
-            # thinking turn. Same reasoning as ASK below.
-            if not executor_thinking():
-                self._thinking = False
             return
         if mode is AgentMode.ASK:
             # Read-only answers come from tool output, not hidden reasoning; on
