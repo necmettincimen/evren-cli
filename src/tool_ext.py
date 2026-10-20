@@ -60,6 +60,10 @@ def dispatch(name: str, arguments: dict, root, auto_approve: bool):
         from src.apply_patch import tool_apply_patch
 
         return tool_apply_patch(arguments.get("patch", ""), root, auto_approve)
+    if name == "clone_tree":
+        from src.clone_tree import tool_clone_tree
+
+        return tool_clone_tree(arguments, root)
     if name == "web_search":
         return web_search(arguments.get("query", ""), root)
     if name.startswith("mcp__"):

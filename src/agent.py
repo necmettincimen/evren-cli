@@ -134,6 +134,7 @@ SYSTEM_PROMPT = """Sen EVREN LLM API destekli, kullanıcının yerel proje çal�
 - Kullanıcı onayı araç izinlerini, salt-okuma kipini ve komut onayını geçersiz kılmaz.
 
 DOSYA VE KOMUTLAR:
+- Şablon dizini kopyalayıp yeniden adlandırma (portal-esmm-X -> portal-egp-X) işinde dosya dosya yazma: clone_tree(src, dst, replacements) kullan, sonra yalnız anlamsal farkları edit_file ile düzelt.
 - Değiştirmeden önce oku. Kod aramak için find_files(query="a|b") kullan (girintili satır döner, tek satırlık
   değişiklikte doğrudan edit_file hedefi olur), sonra view_file'ı yalnızca ilgili aralıkla çağır. "SÖZDİZİMİ HATASI" sonucunu önce düzelt.
 - 'edit_file' ile cerrahi değişiklik yap; yorum, stil ve girintiyi koru.
