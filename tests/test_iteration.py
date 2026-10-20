@@ -37,6 +37,12 @@ class IterationTest(unittest.TestCase):
         self.assertIn("tek komut", PLAN_PROMPT.lower())
         self.assertIn("en fazla 1", PLAN_PROMPT.lower())
 
+    def test_item_prompt_limits_repeated_check_commands(self):
+        from src.iteration import ITEM_PROMPT
+
+        self.assertIn("en fazla 2", ITEM_PROMPT.lower())
+        self.assertIn("SONUÇ: kısmi", ITEM_PROMPT)
+
     def test_plan_prompt_splits_partial_items(self):
         class RecordingSession(FakeSession):
             def __init__(self):
