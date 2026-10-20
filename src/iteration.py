@@ -286,14 +286,15 @@ class IterationRunner:
         return states[0] if states else None
 
     def _close_interrupted_round(self) -> None:
-        """Resume: a round without a history record was cut short — give it a HANDOFF heading."""
+        """Resume: a round without a HANDOFF heading was cut short — give it one (never twice)."""
         if self.state.round <= 0:
             return
         if any(h.get("round") == self.state.round for h in self.state.history):
             return
         heading = f"## Tur {self.state.round} — KESİLDİ (devam ediliyor)"
-        if self.handoff_path.exists() and heading in self.handoff_path.read_text(encoding="utf-8"):
-            self.state.stopped = ""  # already summarised by an earlier resume
+        handoff = self.handoff_path.read_text(encoding="utf-8") if self.handoff_path.exists() else ""
+        if re.search(rf"(?m)^## Tur {self.state.round}\b", handoff):
+            self.state.stopped = ""  # already summarised (earlier resume or a partial summary)
             self._save()
             return
         items = [i for i in self.state.items if i.round == self.state.round]
