@@ -326,6 +326,8 @@ class TestExecutionContext(unittest.TestCase):
         self.assertIn("for i in $(seq 1 50); do", HTTP_ARGO_NOTES)
         self.assertIn("break", HTTP_ARGO_NOTES)
         self.assertIn("tekrar denemez", HTTP_ARGO_NOTES)
+        # 50 sequential curls took ~60 s; stop after 3 identical 404s.
+        self.assertIn('"$i" -ge 3', HTTP_ARGO_NOTES)
         self.assertEqual(domain_hints("README yazım hatasını düzelt"), "")
         self.assertIn(HTTP_ARGO_NOTES, domain_hints("Argo CD pod durumunu getir"))
         hints = domain_hints("koyu3-k8s üzerindeki podların resource ve limit değerlerini listele")
