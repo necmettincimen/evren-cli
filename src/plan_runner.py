@@ -11,6 +11,7 @@ Plan dosyası (JSON):
     {"op": "run", "cmd": "dotnet build -c Release", "cwd": "portal-egp-sign", "ok_exit": [0]},
     {"op": "commit", "repo": "portal-egp-sign", "message": "..."},
     {"op": "push", "repo": "portal-egp-sign"},                      # yalnız --allow-push ile
+    {"op": "ssh" | "scp" | "http" | "wait", ...},                    # bkz. plan_ops_remote.py
     {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80}
   ]}
 """
@@ -22,6 +23,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+from src.plan_ops_remote import REMOTE_OPS, expand
 
 _AI_SIGNATURE = re.compile(r"co-authored-by|generated with|claude", re.I)
 
@@ -123,14 +126,18 @@ OPS = {"clone_tree": _op_clone_tree, "replace": _op_replace, "write": _op_write,
 
 def run_plan(plan_path: str, workspace: str, dry_run: bool = False, allow_push: bool = False, start: int = 1) -> int:
     root = Path(workspace).resolve()
-    steps = json.loads(Path(plan_path).read_text(encoding="utf-8"))["steps"]
+    steps = json.loads(Path(plan_path).read_text(encoding="utf-8-sig"))["steps"]
+    ctx: dict = {}
     for i, step in enumerate(steps, 1):
         if i < start:
             continue
         op = step.get("op")
         try:
+            step = expand(step, ctx)
             if op == "push":
                 out = _op_push(step, root, dry_run, allow_push)
+            elif op in REMOTE_OPS:
+                out = REMOTE_OPS[op](step, root, dry_run, ctx)
             elif op in OPS:
                 out = OPS[op](step, root, dry_run)
             else:
