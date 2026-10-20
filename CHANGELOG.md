@@ -5,6 +5,15 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.2.1] - 2026-10-20
+
+### Düzeltildi
+- İterasyon: `flutter` PATH'te yoksa tam yol çözülür (D:/flutter vb.); kontrol aracı bulunamazsa (çıkış 127) tur tur boşa dönmek yerine hemen durur
+- İterasyon: HANDOFF/state dosyaları ve hedef metni gizli anahtar maskesinden geçer (Bearer token düz metin yazılmıyor)
+- İterasyon: planlayıcı 'tamam' olmuş maddeyi yeniden planlayamaz; yerelde doğrulanamayan hedefte `done+reason` ile durur; engel ağırlıklı tur ilerleme sayılmaz
+- İterasyon: madde içinde yalnızca ilgili test koşulur, tam kontrol tur sonunda (süre ~%40 azalır)
+- Komut-ailesi koruması `for/while` döngüsü, `cd &&`, `export;` öneklerini ve `curl <host>` tekrarını tanır (404 uçlarını kaba kuvvetle deneme engellenir)
+
 ## [3.2.0] - 2026-10-19
 
 ### Eklendi
