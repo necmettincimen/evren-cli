@@ -79,6 +79,15 @@ class RoutingTest(unittest.TestCase):
         # The session model is restored after the task.
         self.assertEqual(self.session.model, "exec-m")
 
+    def test_plan_mode_runs_without_thinking(self):
+        # r21/plan: 4 steps took 67 s because every plan-mode step was a
+        # thinking turn. A plan is written from tool output, like ASK.
+        self._script([response("plan yazıldı")])
+        self.session.mode = AgentMode.PLAN
+        self.session.run_step("src/iteration.py için plan yaz")
+        self.assertEqual(len(self.calls), 1)
+        self.assertIs(self.calls[0]["thinking"], False)
+
     def test_small_brief_goes_straight_to_the_session_model(self):
         self._script([response("tamam")])
         self.session.run_step("README yazım hatasını düzelt")
