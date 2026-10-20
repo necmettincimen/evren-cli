@@ -142,6 +142,72 @@ class IterationTest(unittest.TestCase):
             handoff = runner.handoff_path.read_text(encoding="utf-8")
             self.assertIn("- [kısmi] Düzelt", handoff)
 
+    def test_atexit_flush_writes_partial_summary(self):
+        import atexit
+
+        registered = []
+        real_register, real_unregister = atexit.register, atexit.unregister
+
+        def fake_register(func, *args, **kwargs):
+            registered.append(func)
+            return func
+
+        def fake_unregister(func):
+            if func in registered:
+                registered.remove(func)
+
+        class StopSession(FakeSession):
+            def run_step(self, prompt, max_steps=None, route=True):
+                if "SONUÇ:" in prompt:  # item prompt → simulate the process dying mid-item
+                    for func in list(registered):
+                        func()  # what atexit would run on SIGTERM
+                    raise SystemExit(1)
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("atexit.register", side_effect=fake_register), \
+                patch("atexit.unregister", side_effect=fake_unregister), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(StopSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            with self.assertRaises(SystemExit):
+                runner.run()
+            self.assertEqual(registered, [])  # unregistered on the way out
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("KESİLDİ", handoff)
+            self.assertIn("Düzelt", handoff)
+            saved = (runner.dir / "state.json").read_text(encoding="utf-8")
+            self.assertIn("kesildi", saved)
+
+    def test_atexit_flush_skips_recorded_round(self):
+        import atexit
+
+        registered = []
+
+        def fake_register(func, *args, **kwargs):
+            registered.append(func)
+            return func
+
+        def fake_unregister(func):
+            if func in registered:
+                registered.remove(func)
+
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}',
+                   "yaptım\nSONUÇ: tamam — düzeltildi",
+                   '{"done": true, "items": []}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("atexit.register", side_effect=fake_register), \
+                patch("atexit.unregister", side_effect=fake_unregister), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(FakeSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            state = runner.run()
+            self.assertTrue(state.done)
+            self.assertEqual(registered, [])  # normal finish unregisters the hook
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertNotIn("KESİLDİ", handoff)
+
     def test_resume_writes_heading_for_interrupted_round(self):
         class InterruptSession(FakeSession):
             def run_step(self, prompt, max_steps=None, route=True):
