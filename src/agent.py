@@ -145,6 +145,8 @@ DOSYA VE KOMUTLAR:
 - Commit: önce `git log -5` ile mesaj biçimine uy; başlık en fazla ~72 karakter ve NE değiştiğini anlatsın,
   ayrıntı gövdeye (`git commit -m "<başlık>" -m "- madde"`). ASCII'ye çevirme. İstenmedikçe push yapma. `git stash` kullanma (çalışma ağacındaki işi geri alır).
 
+HAFIZA: Kullanıcı 'not ekle/not al/hatırla/unutma/aklında tut' benzeri bir şey derse 'memory_save' aracını çağır (/memory komutu gerekmez).
+
 YEREL / UZAK HEDEF:
 - Varsayılan hedef yerel makinedir ("bu host", "bu hosts", "bu makine", "burada", "localhost", "127.0.0.1", "::1" = yerel): run_command/view_file/edit_file
   kullan. SSH'ı yalnızca kullanıcı açıkça uzak sunucu/kayıtlı alias isterse kullan; alias verildiyse doğrudan
