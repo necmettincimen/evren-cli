@@ -40,7 +40,9 @@ class IterationTest(unittest.TestCase):
     def test_item_prompt_limits_repeated_check_commands(self):
         from src.iteration import ITEM_PROMPT
 
-        self.assertIn("en fazla 2", ITEM_PROMPT.lower())
+        normalized = " ".join(ITEM_PROMPT.split())
+        self.assertIn("Aynı kontrol/doğrulama komutunu madde içinde en fazla 2 kez çalıştır", normalized)
+        self.assertIn("en fazla 2 kez", normalized.lower())
         self.assertIn("SONUÇ: kısmi", ITEM_PROMPT)
 
     def test_plan_prompt_splits_partial_items(self):
