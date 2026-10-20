@@ -1503,7 +1503,8 @@ def _cmd_iterate(ctx, arg):
         return
     resume = arg in ("devam", "resume")
     try:
-        runner = IterationRunner(ctx.session, ctx.workspace_root, "" if resume else arg, resume=resume)
+        runner = IterationRunner(ctx.session, ctx.workspace_root, "" if resume else arg,
+                                 item_steps=40, resume=resume)
         runner.run()
     except ValueError as e:
         print_warning(str(e))

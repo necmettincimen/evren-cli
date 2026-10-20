@@ -87,6 +87,27 @@ class IterationTest(unittest.TestCase):
         args = build_parser().parse_args(["iterate", "hedef"])
         self.assertEqual(args.item_steps, 40)
 
+    def test_repl_iterate_uses_item_steps_40(self):
+        from types import SimpleNamespace
+
+        from src import repl
+
+        captured = {}
+
+        class FakeRunner:
+            def __init__(self, session, root, goal, **kwargs):
+                captured.update(kwargs)
+                captured["goal"] = goal
+
+            def run(self):
+                captured["ran"] = True
+
+        ctx = SimpleNamespace(session=FakeSession([]), workspace_root=Path("."))
+        with patch("src.iteration.IterationRunner", FakeRunner), patch("src.ui.print_warning"):
+            repl._cmd_iterate(ctx, "hedef")
+        self.assertEqual(captured.get("item_steps"), 40)
+        self.assertTrue(captured.get("ran"))
+
     def test_detect_flutter_and_slug(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "pubspec.yaml").write_text("name: x", encoding="utf-8")
