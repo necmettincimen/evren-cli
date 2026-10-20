@@ -452,9 +452,23 @@ class IterationRunner:
             lines.append("- (bu turda henüz madde işlenmedi)")
         return "\n".join(lines)
 
+    def _flush_on_exit(self) -> None:
+        """atexit hook: a process that dies mid-round (SIGTERM, crash) still leaves a summary."""
+        try:
+            if any(h.get("round") == self.state.round for h in self.state.history):
+                return  # the round was recorded normally
+            self.state.stopped = "kesildi"
+            self._save()  # persist item statuses before the summary is written
+            self._append_handoff(self._interrupt_summary())
+        except Exception:  # never raise from an exit hook
+            pass
+
     def run(self) -> IterationState:
+        import atexit
+
         from src.ui import print_info, print_success, print_warning
 
+        atexit.register(self._flush_on_exit)
         try:
             return self._run_rounds()
         except KeyboardInterrupt:
@@ -463,6 +477,8 @@ class IterationRunner:
             self._save()  # persist item statuses before the summary is written
             self._append_handoff(self._interrupt_summary())
             return self.state
+        finally:
+            atexit.unregister(self._flush_on_exit)
 
     def _run_rounds(self) -> IterationState:
         from src.ui import print_info, print_success, print_warning
