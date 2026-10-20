@@ -359,12 +359,17 @@ class IterationRunner:
 
     @staticmethod
     def _split_partial(item: Item) -> list[str]:
-        """Two sub-item suggestions for a 'kısmi' item, derived from its detail."""
-        detail = (item.detail or item.note or item.title).strip()
+        """Two sub-item suggestions for a 'kısmi' item: detail → note → title fallback."""
+        title = (item.title or "").strip() or "madde"
+        detail = (item.detail or "").strip() or (item.note or "").strip() or title
         parts = [p.strip(" .") for p in re.split(r"\s*;\s*|\s+ve\s+", detail) if p.strip(" .")]
         if len(parts) >= 2:
-            return [f"{item.title} — {parts[0]}", f"{item.title} — {' ve '.join(parts[1:])}"]
-        return [f"1. kısım: {detail}", f"2. kısım: {detail}"]
+            first, second = parts[0], " ve ".join(parts[1:])
+        else:
+            first, second = f"1. kısım: {detail}", f"2. kısım: {detail}"
+        if not first.strip() or not second.strip() or first == second:
+            first, second = f"{title} — 1. kısım", f"{title} — 2. kısım"
+        return [first, second]
 
     def _split_block(self) -> str:
         """Prompt block asking the planner to break 'kısmi' items into two sub-items."""
