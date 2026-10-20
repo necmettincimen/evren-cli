@@ -448,8 +448,19 @@ class IterationRunner:
             item.status, item.note = "kısmi", (answer.strip().splitlines() or [""])[-1][:300]
 
     # ------------------------------------------------------------------ loop
+    def _mark_unprocessed_partial(self) -> None:
+        """Items still 'bekliyor' (never processed) become 'kısmi' so the next round splits them."""
+        for item in self.state.items:
+            if item.round == self.state.round and item.status == "bekliyor":
+                item.status, item.note = "kısmi", "tur kesildi, işlenmedi"
+
     def _interrupt_summary(self) -> str:
-        """Partial round summary written when the run is cut short (Ctrl+C)."""
+        """Partial round summary written when the run is cut short (Ctrl+C).
+
+        Unprocessed items are marked 'kısmi' first so the next round's _split_block
+        breaks them into two sub-items instead of dropping them.
+        """
+        self._mark_unprocessed_partial()
         items = [i for i in self.state.items if i.round == self.state.round]
         lines = [f"## Tur {self.state.round} — KESİLDİ (Ctrl+C)"]
         if items:
@@ -464,6 +475,7 @@ class IterationRunner:
             if any(h.get("round") == self.state.round for h in self.state.history):
                 return  # the round was recorded normally
             self.state.stopped = "kesildi"
+            self._mark_unprocessed_partial()
             self._save()  # persist item statuses before the summary is written
             self._append_handoff(self._interrupt_summary())
         except Exception:  # never raise from an exit hook
@@ -480,6 +492,7 @@ class IterationRunner:
         except KeyboardInterrupt:
             print_warning("[iterasyon] Kesildi (Ctrl+C); kısmi tur özeti HANDOFF'a yazıldı.")
             self.state.stopped = "kesildi"
+            self._mark_unprocessed_partial()
             self._save()  # persist item statuses before the summary is written
             self._append_handoff(self._interrupt_summary())
             return self.state
