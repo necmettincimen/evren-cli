@@ -5,6 +5,18 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.4.0] - 2026-10-20
+
+EVREN'in kendi iterasyonunun (16 commit) ürettiği iterasyon-modu iyileştirmeleri + düzeltme:
+
+### Eklendi
+- Kesinti dayanıklılığı: Ctrl+C ya da süreç durmasında (atexit) kısmi tur özeti HANDOFF'a yazılır, işlenmemiş maddeler 'kısmi' işaretlenir; --resume sonrası özetsiz tur kalmaz
+- Planlayıcı madde kuralları: tek komutla doğrulanabilir kabul ölçütü, en fazla 1 analiz maddesi; 'kısmi' maddeler sonraki turda 2 alt maddeye bölünür
+- Varsayılan --item-steps 40; madde içinde aynı kontrol en fazla 2 kez
+
+### Düzeltildi
+- Planlayıcı ilk turda hiçbir iş yapmadan `done+reason` ile vazgeçerse HANDOFF artık "HEDEF TAMAM" değil "DURDU (planlayıcı)" yazar ve çıkış kodu 1 döner
+
 ## [3.3.1] - 2026-10-20
 
 EVREN'in kendi yük testi iterasyonunun (3. tur) ürettiği düzeltmeler:

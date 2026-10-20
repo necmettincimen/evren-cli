@@ -554,6 +554,7 @@ class IterationRunner:
                 self.state.stopped = "engel"
                 break
             if done and items and items[0].status == "engel":
+                self.state.items.extend(items)  # keep the planner's reason for the record
                 items = []  # checks pass: the reason is just the closing note
             done_titles = {_norm(i.title) for i in self.state.items if i.status == "tamam"}
             dropped = [i for i in items if _norm(i.title) in done_titles]
@@ -561,8 +562,17 @@ class IterationRunner:
             for i in dropped:
                 print_warning(f"[iterasyon] tekrar eden madde atlandı: {i.title}")
             if done and all(r.ok for r in before):
+                reason = next((i.title for i in reversed(self.state.items) if i.title.startswith("(planlayıcı)")), "")
+                if reason and not any(i.status == "tamam" for i in self.state.items):
+                    # Nothing was ever done: the planner gave up, the goal is not met.
+                    self.state.stopped = "planlayıcı durdu"
+                    self._append_handoff(f"## Tur {self.state.round} — DURDU (planlayıcı)\n{reason}")
+                    self._save()
+                    print_warning(f"[iterasyon] Planlayıcı durdu: {reason[:200]}")
+                    break
                 self.state.done = True
-                self._append_handoff(f"## Tur {self.state.round} — HEDEF TAMAM\nPlanlayıcı hedefi karşılanmış saydı; kontroller geçiyor.")
+                self._append_handoff(f"## Tur {self.state.round} — HEDEF TAMAM\nPlanlayıcı hedefi karşılanmış saydı; kontroller geçiyor."
+                                     + (f"\n{reason}" if reason else ""))
                 self._save()
                 print_success("[iterasyon] Hedef karşılandı.")
                 break
