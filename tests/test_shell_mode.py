@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.commands import is_shell_input as commands_is_shell_input
 from src.shell_mode import is_shell_input, run_user_shell
 from src.terminal_setup import PROFILE_NAME, build_profile
 
@@ -16,6 +17,28 @@ class ShellModeTest(unittest.TestCase):
         for text, want in (("!git status", True), ("  !ls", True), ("!", False), ("merhaba !", False)):
             with self.subTest(text=text):
                 self.assertEqual(is_shell_input(text), want)
+
+    def test_classifier_is_reexported_from_commands(self):
+        """One implementation: shell_mode re-exports the commands.py classifier."""
+        self.assertIs(is_shell_input, commands_is_shell_input)
+
+    def test_commands_does_not_import_shell_mode(self):
+        """commands.py is the low-level module; importing it must not pull shell_mode."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys, src.commands; "
+            "print('src.shell_mode' in sys.modules)"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(out.stdout.strip(), "False")
 
     def test_output_is_shown_and_remembered_for_the_agent(self):
         with tempfile.TemporaryDirectory() as d:

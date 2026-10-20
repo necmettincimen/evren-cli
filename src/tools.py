@@ -17,6 +17,7 @@ from src.file_ops import (
     read_file_with_meta,
     resolve_workspace_path,
     is_safe_path,
+    write_changed_lines,
 )
 from src.diff_viewer import generate_unified_diff, apply_replacement, apply_edits
 from src.tool_args import (
@@ -647,8 +648,10 @@ def tool_edit_file(
 ) -> str:
     root = workspace_root or get_workspace_dir()
 
-    # Read with metadata so BOM/CRLF are preserved on write.
-    old_content, meta, err = read_file_with_meta(path, root)
+    # Read with metadata so BOM/CRLF are preserved on write. No truncation: a
+    # clipped read used to be written back as the whole file, silently dropping
+    # everything past the cap on large files.
+    old_content, meta, err = read_file_with_meta(path, root, max_chars=0)
     if err:
         try:
             missing = not resolve_workspace_path(path, root).exists()
@@ -723,8 +726,10 @@ def tool_edit_file(
     if denied:
         return denied
 
-    write_ok, backup_path, write_err = safe_write_file(
-        path, new_content, root, preserve_meta=meta
+    # Diff-based write: only the changed line range is rewritten, so a large
+    # file is never re-emitted in full for a one-line edit.
+    write_ok, backup_path, write_err = write_changed_lines(
+        path, old_content, new_content, root, preserve_meta=meta
     )
     if not write_ok:
         return f"HATA: Dosya kaydedilemedi: {write_err}"

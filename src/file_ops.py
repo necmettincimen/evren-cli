@@ -162,7 +162,9 @@ def read_file_with_meta(target_path: Path | str, workspace_root: Path | None = N
     newline = "\r\n" if "\r\n" in text else "\n"
     meta = {"has_bom": has_bom, "newline": newline}
 
-    if len(text) > max_chars:
+    # max_chars=0 means "no cap": edit_file needs the whole file, otherwise the
+    # clipped text would be written back and the tail of a large file lost.
+    if max_chars and len(text) > max_chars:
         text = text[:max_chars] + f"\n\n... [Dosya çok büyük olduğu için {max_chars} karakterde kesildi]"
 
     return text, meta, ""
@@ -213,6 +215,101 @@ def atomic_write_text(path: Path, data: str) -> None:
         except OSError:
             pass
         raise
+
+
+def _changed_line_span(old: str, new: str) -> tuple[int, int, int, int] | None:
+    """Line span that differs between `old` and `new` (0-based, end exclusive).
+
+    Returns (old_start, old_end, new_start, new_end) or None when the texts are
+    identical. Common prefix/suffix lines are skipped, so a one-line edit in a
+    large file yields a one-line span.
+    """
+    if old == new:
+        return None
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    limit = min(len(old_lines), len(new_lines))
+    start = 0
+    while start < limit and old_lines[start] == new_lines[start]:
+        start += 1
+    tail = 0
+    while (
+        tail < limit - start
+        and old_lines[len(old_lines) - 1 - tail] == new_lines[len(new_lines) - 1 - tail]
+    ):
+        tail += 1
+    return start, len(old_lines) - tail, start, len(new_lines) - tail
+
+
+def write_changed_lines(
+    target_path: Path | str,
+    old_content: str,
+    new_content: str,
+    workspace_root: Path | None = None,
+    preserve_meta: dict | None = None,
+) -> tuple[bool, Path | None, str]:
+    """Writes only the changed line range of `new_content` over the file.
+
+    edit_file used to rewrite the whole file for a surgical edit. Here the
+    unchanged head and tail are left untouched on disk: the file is opened in
+    r+ mode and only the differing span is replaced (truncated when the new
+    span is shorter). Falls back to safe_write_file when the file changed on
+    disk since it was read, or when the span cannot be located.
+    """
+    root = (workspace_root or get_workspace_dir()).resolve()
+    resolved = resolve_workspace_path(str(target_path), root)
+    span = _changed_line_span(old_content, new_content)
+    if span is None:
+        return True, None, ""
+
+    safe, reason = is_safe_path(resolved, root)
+    if not safe:
+        return False, None, reason
+    if resolved.name in PROTECTED_FILES:
+        return False, None, f"'{resolved.name}' kritik ortam dosyası doğrudan üzerine yazılamaz."
+
+    old_start, old_end, new_start, new_end = span
+    old_lines = old_content.splitlines(keepends=True)
+    new_lines = new_content.splitlines(keepends=True)
+    head = "".join(old_lines[:old_start])
+    tail = "".join(old_lines[old_end:])
+    middle = "".join(new_lines[new_start:new_end])
+
+    # Encoding details are restored for the changed span only.
+    if preserve_meta:
+        if preserve_meta.get("newline") == "\r\n":
+            middle = middle.replace("\r\n", "\n").replace("\n", "\r\n")
+        if preserve_meta.get("has_bom"):
+            head = "\ufeff" + head
+
+    backup_path = None
+    if BACKUP_ENABLED:
+        backup_path = backup_file(resolved, root)
+
+    try:
+        raw = resolved.read_bytes()
+        current = raw.decode("utf-8", errors="surrogateescape")
+        head_bytes = head.encode("utf-8", errors="surrogateescape")
+        tail_bytes = tail.encode("utf-8", errors="surrogateescape")
+        if not current.startswith(head) or not current.endswith(tail) or len(current) < len(head) + len(tail):
+            # File changed on disk after it was read: rewrite it in full.
+            return safe_write_file(
+                target_path, new_content, root, create_backup=False, preserve_meta=preserve_meta
+            )
+        middle_bytes = middle.encode("utf-8", errors="surrogateescape")
+        offset = len(head_bytes)
+        # The tail is written back after the new span: truncating at the span
+        # end would drop it (the file is not re-emitted, only the span moves).
+        with open(resolved, "r+b") as fh:
+            fh.seek(offset)
+            fh.write(middle_bytes)
+            fh.write(tail_bytes)
+            fh.truncate(offset + len(middle_bytes) + len(tail_bytes))
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True, backup_path, ""
+    except Exception as e:
+        return False, backup_path, f"Dosya yazma hatası: {e}"
 
 
 def safe_write_file(

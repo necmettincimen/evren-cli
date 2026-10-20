@@ -54,6 +54,18 @@ class IterationTest(unittest.TestCase):
             self.assertIsInstance(resumed.state, IterationState)
             self.assertEqual(resumed.state.round, 2)
 
+    def test_missing_check_tool_reports_clear_error_and_stops(self):
+        with tempfile.TemporaryDirectory() as d, \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(FakeSession([]), Path(d), "hedef",
+                                     checks=["nonexistent_tool --v"], max_rounds=1)
+            state = runner.run()
+            self.assertEqual(state.stopped, "kontrol komutu bulunamadı")
+            self.assertFalse(state.done)
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("check komutu bulunamadı", handoff)
+            self.assertIn("nonexistent_tool", handoff)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
