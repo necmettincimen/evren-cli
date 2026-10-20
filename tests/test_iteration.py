@@ -31,6 +31,12 @@ class IterationTest(unittest.TestCase):
         _, items = IterationRunner._parse_plan("1. Birinci\n2) İkinci")
         self.assertEqual(len(items), 2)
 
+    def test_plan_prompt_has_item_size_rules(self):
+        from src.iteration import PLAN_PROMPT
+
+        self.assertIn("tek komut", PLAN_PROMPT.lower())
+        self.assertIn("en fazla 1", PLAN_PROMPT.lower())
+
     def test_detect_flutter_and_slug(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "pubspec.yaml").write_text("name: x", encoding="utf-8")
