@@ -286,24 +286,39 @@ class IterationRunner:
         return states[0] if states else None
 
     def _close_interrupted_round(self) -> None:
-        """Resume: a round without a HANDOFF heading was cut short — give it one (never twice)."""
+        """Resume: close the interrupted round so no round stays without a summary.
+
+        A round cut short already has a partial HANDOFF heading (Ctrl+C / exit hook); resume
+        marks that heading as closed and records the round in state.history. A round with no
+        heading at all gets one. Both paths run at most once per round.
+        """
         if self.state.round <= 0:
             return
         if any(h.get("round") == self.state.round for h in self.state.history):
             return
-        heading = f"## Tur {self.state.round} — KESİLDİ (devam ediliyor)"
-        handoff = self.handoff_path.read_text(encoding="utf-8") if self.handoff_path.exists() else ""
-        if re.search(rf"(?m)^## Tur {self.state.round}\b", handoff):
-            self.state.stopped = ""  # already summarised (earlier resume or a partial summary)
-            self._save()
-            return
         items = [i for i in self.state.items if i.round == self.state.round]
-        lines = [heading]
-        if items:
-            lines += [f"- [{i.status}] {i.title}" + (f" — {i.note}" if i.note else "") for i in items]
+        handoff = self.handoff_path.read_text(encoding="utf-8") if self.handoff_path.exists() else ""
+        pattern = re.compile(rf"(?m)^## Tur {self.state.round}\b.*$")
+        found = pattern.search(handoff)
+        if found:
+            heading = found.group(0)
+            if "resume ile kapatıldı" not in heading:
+                closed = heading.rstrip() + " (resume ile kapatıldı)"
+                self.handoff_path.write_text(handoff[:found.start()] + closed + handoff[found.end():],
+                                             encoding="utf-8")
         else:
-            lines.append("- (bu turda henüz madde işlenmedi)")
-        self._append_handoff("\n".join(lines))
+            lines = [f"## Tur {self.state.round} — KESİLDİ (resume ile kapatıldı)"]
+            if items:
+                lines += [f"- [{i.status}] {i.title}" + (f" — {i.note}" if i.note else "") for i in items]
+            else:
+                lines.append("- (bu turda henüz madde işlenmedi)")
+            self._append_handoff("\n".join(lines))
+        completed = sum(1 for i in items if i.status == "tamam")
+        self.state.history.append({
+            "round": self.state.round, "minutes": 0, "completed": completed, "items": len(items),
+            "issues_before": None, "issues_after": None, "checks_after": {},
+            "interrupted": True, "closed_by": "resume",
+        })
         self.state.stopped = ""
         self._save()
 

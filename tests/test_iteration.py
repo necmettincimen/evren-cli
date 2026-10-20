@@ -326,6 +326,35 @@ class IterationTest(unittest.TestCase):
             handoff = resumed.handoff_path.read_text(encoding="utf-8")
             self.assertEqual(handoff.count("## Tur 1"), 1)
             self.assertNotIn("KESİLDİ (devam ediliyor)", handoff)
+            self.assertIn("resume ile kapatıldı", handoff)
+            self.assertEqual([h["round"] for h in resumed.state.history], [1])
+
+    def test_resume_closes_interrupted_round_heading_and_records_history(self):
+        class InterruptSession(FakeSession):
+            def run_step(self, prompt, max_steps=None, route=True):
+                if "SONUÇ:" in prompt:
+                    raise KeyboardInterrupt
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(InterruptSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            state = runner.run()
+            self.assertEqual(state.stopped, "kesildi")
+            self.assertEqual(state.history, [])  # the interrupted round has no history record yet
+            resumed = IterationRunner(FakeSession([]), Path(d), resume=True)
+            handoff = resumed.handoff_path.read_text(encoding="utf-8")
+            self.assertIn(f"## Tur {state.round} — KESİLDİ (Ctrl+C) (resume ile kapatıldı)", handoff)
+            self.assertEqual(handoff.count(f"## Tur {state.round}"), 1)
+            self.assertEqual([h["round"] for h in resumed.state.history], [state.round])
+            self.assertTrue(resumed.state.history[0]["interrupted"])
+            self.assertEqual(resumed.state.stopped, "")
+            # a second resume must not close the round again
+            again = IterationRunner(FakeSession([]), Path(d), resume=True)
+            self.assertEqual(len(again.state.history), 1)
+            self.assertEqual(again.handoff_path.read_text(encoding="utf-8").count("resume ile kapatıldı"), 1)
 
     def test_missing_check_tool_reports_clear_error_and_stops(self):
         with tempfile.TemporaryDirectory() as d, \
