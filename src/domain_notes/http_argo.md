@@ -7,4 +7,8 @@ HTTP VE ARGO CD NOTLARI:
 - Tek nesne: `GET /api/v1/applications/{ad}/resource?namespace=&resourceName=&name=&version=&kind=&group=`.
 - Pod logu: `GET /api/v1/applications/{ad}/logs?namespace=&podName=&container=&tailLines=100`. Bu uç metin döner, JSON değildir.
 - Şu yollar yoktur; 404 alınca tekrarlama: `/pods`, `/resource/pods`, `/resource/tree`.
+- Çoklu uç denemesi (1..N aralığı, birden çok aday yol) TEK run_command çağrısında tek satırlık döngüyle
+  yapılır; her uç için ayrı çağrı açma: `for i in $(seq 1 50); do code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/builds/1/logs/$i"); echo "$i $code"; [ "$code" = 200 ] && break; done`
+  Döngü 200'de `break` eder; 404/403/5xx'te aynı ucu tekrar denemez, sıradaki uca geçer. Tüm uçlar aynı
+  taban adreste 404 ise taban yanlıştır: döngüyü tekrarlama, tek satırda "çalışan uç yok" yaz.
 - `sync: OutOfSync` ve `health: Missing` kaynak henüz uygulanmamıştır; pod arama. `exceeded its progress deadline` yeni ReplicaSet'in hazır olmamasıdır; resource-tree içindeki Pod ve ardından logs ucuna bak.
