@@ -321,6 +321,11 @@ class TestExecutionContext(unittest.TestCase):
         self.assertIn("/api/v1/applications/{ad}/resource-tree", HTTP_ARGO_NOTES)
         self.assertIn("/pods", HTTP_ARGO_NOTES)
         self.assertIn("HTTP:%{http_code}", HTTP_ARGO_NOTES)
+        # Multi-endpoint probing must be one loop in one run_command call, and a
+        # 404 must not be retried (r20/curl404 spent 4 steps / 86 s on 50 curls).
+        self.assertIn("for i in $(seq 1 50); do", HTTP_ARGO_NOTES)
+        self.assertIn("break", HTTP_ARGO_NOTES)
+        self.assertIn("tekrar denemez", HTTP_ARGO_NOTES)
         self.assertEqual(domain_hints("README yazım hatasını düzelt"), "")
         self.assertIn(HTTP_ARGO_NOTES, domain_hints("Argo CD pod durumunu getir"))
         hints = domain_hints("koyu3-k8s üzerindeki podların resource ve limit değerlerini listele")
