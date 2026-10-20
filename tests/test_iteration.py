@@ -41,10 +41,10 @@ class IterationTest(unittest.TestCase):
         answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}',
                    "yaptım\nSONUÇ: tamam — düzeltildi",
                    '{"done": true, "items": []}']
-        ok = CheckResult("chk", 0, 0, "", 0.1)
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
         with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
                 patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
-            runner = IterationRunner(FakeSession(answers), Path(d), "hedef", checks=["chk"], max_rounds=5)
+            runner = IterationRunner(FakeSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
             state = runner.run()
             self.assertTrue(state.done)
             self.assertEqual(state.items[0].status, "tamam")

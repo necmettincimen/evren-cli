@@ -1450,10 +1450,20 @@ class AgentSession:
         """
         if fn_name not in ("run_command", "ssh_run"):
             return ""
-        words = [w for w in str(args.get("command") or "").split() if not w.startswith("-")]
+        command = str(args.get("command") or "")
+        # `cd x && cmd`, `export X=1; cmd`, `for p in ...; do curl ...`: judge the real command.
+        parts = [c for c in re.split(r"\b(?:do|&&|;)\s+", command)
+                 if c.strip() and not re.match(r"^\s*(cd|export|set)\b", c)]
+        probe = parts[0] if parts else command
+        if re.match(r"^\s*(for|while)\b", probe) and len(parts) > 1:
+            probe = parts[1]
+        words = [w for w in probe.split() if not w.startswith("-")]
         if not words:
             return ""
         head = words[0].lower()
+        if head in ("curl", "wget", "http", "invoke-webrequest", "irm", "iwr"):
+            host = re.search(r"https?://([^/\s\"']+)", command)
+            return f"{head} {host.group(1)}" if host else head
         if head in ("python", "python3", "py") and len(str(args.get("command")).split()) > 2:
             parts = str(args.get("command")).split()
             if parts[1] == "-m" and len(parts) > 2:

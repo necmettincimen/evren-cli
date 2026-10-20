@@ -76,6 +76,11 @@ class IterationState:
         return cls(**data)
 
 
+def _norm(title: str) -> str:
+    """Loose title key: lowercase letters/digits only, so reworded repeats still match."""
+    return re.sub(r"[^a-z0-9çğıöşü]+", "", title.lower())[:60]
+
+
 def slugify(goal: str) -> str:
     table = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
     slug = re.sub(r"[^a-z0-9]+", "-", goal.translate(table).lower()).strip("-")
@@ -125,6 +130,47 @@ def _count_issues(command: str, output: str) -> int:
     return 0
 
 
+_FLUTTER_DIRS = ("D:/flutter", "C:/flutter", "C:/src/flutter", "C:/tools/flutter", "D:/src/flutter")
+
+
+def find_flutter() -> str | None:
+    """Full path of the flutter launcher when it is not on PATH (common Windows installs, FVM)."""
+    import os
+    import shutil
+
+    if shutil.which("flutter"):
+        return None  # already on PATH, nothing to rewrite
+    cands = [os.environ.get("FLUTTER_ROOT", ""), *_FLUTTER_DIRS,
+             str(Path(os.environ.get("LOCALAPPDATA", "")) / "flutter"), str(Path.home() / "flutter"),
+             str(Path.home() / "fvm" / "default")]
+    for cand in cands:
+        if cand and (Path(cand) / "bin" / "flutter").exists():
+            return (Path(cand) / "bin" / "flutter").as_posix()
+    return None
+
+
+def resolve_missing_tools(checks: list[str]) -> tuple[list[str], list[str]]:
+    """Rewrites `flutter ...` checks to a full path when flutter is not on PATH.
+
+    Returns (checks, notes). A check whose tool cannot be found is reported in
+    notes so the loop stops instead of running ten rounds against exit 127.
+    """
+    import shutil
+
+    out, notes = [], []
+    flutter = find_flutter()
+    for cmd in checks:
+        head = cmd.split()[0] if cmd.split() else ""
+        if head == "flutter" and flutter:
+            out.append(flutter + cmd[len("flutter"):])
+            continue
+        if head and "/" not in head and "\\" not in head and not shutil.which(head):
+            notes.append(f"'{head}' PATH'te bulunamadı ({cmd}); PATH'e ekleyin ya da --check ile tam yol verin.")
+            continue
+        out.append(cmd)
+    return out, notes
+
+
 def run_check(command: str, root: Path) -> CheckResult:
     from src.proc_utils import run_with_tree_kill
     from src.tools import _command_argv
@@ -159,6 +205,9 @@ Görevin: kodu ve ilgili dosyaları okuyarak hedefe ulaşmak için SIRADAKİ en 
 Kurallar: önce kırık kontrolleri (derleme/analiz/test hatası) düzelten maddeler; sonra hedefteki
 eksik özellikler, yapısal hatalar. Her madde KÜÇÜK olsun (tek ekran/tek dosya grubu, ~30 araç adımında biter),
 somut dosya/ekran adıyla; 'kısmi' kalmış maddeleri daha küçük parçalara bölerek sürdür.
+Önceki turlarda 'tamam' olmuş bir maddeyi (aynı iş, farklı sözcüklerle) TEKRAR PLANLAMA; 'engel' olmuş bir
+maddeyi engel ortadan kalkmadıysa tekrar planlama. Hedef yerelde doğrulanamıyorsa (ör. SDK/ortam yok, sonuç
+CI'da bekleniyor) yeni madde üretme: {{"done": true, "items": [], "reason": "neden"}} döndür.
 En fazla {limit} madde. Hiçbir dosyayı değiştirme.
 Son yanıtın YALNIZCA şu JSON olsun (başka metin yok):
 {{"done": false, "items": [{{"title": "...", "detail": "neyi, hangi dosyada, kabul ölçütü"}}]}}
@@ -169,8 +218,10 @@ GENEL HEDEF: {goal}
 BU MADDE: {title}
 AYRINTI / KABUL ÖLÇÜTÜ: {detail}
 
-Yalnızca bu maddeyi yap. Var olan kod stilini koru, gerekiyorsa test ekle/güncelle ve ilgili
-kontrolü çalıştırıp doğrula ({checks}). Commit atma, push etme.
+Yalnızca bu maddeyi yap. Var olan kod stilini koru, gerekiyorsa test ekle/güncelle. Doğrulama için
+yalnızca İLGİLİ test dosyasını/analizi çalıştır (ör. `flutter test test/x_test.dart`); tam kontrol
+({checks}) tur sonunda otomatik çalışır, sen çalıştırma. Dış API'de bir uç 404 dönüyorsa en fazla 3 farklı
+uç dene, sonra 'engel' yaz. Commit atma, push etme.
 Son satırın tam olarak şu biçimde olsun: SONUÇ: tamam|kısmi|engel — kısa açıklama"""
 
 
@@ -193,7 +244,8 @@ class IterationRunner:
         else:
             if not goal.strip():
                 raise ValueError("İterasyon hedefi boş olamaz.")
-            self.state = IterationState(goal=goal.strip(), slug=slugify(goal), checks=checks or detect_checks(self.root),
+            from src.workflow_state import redact_text
+            self.state = IterationState(goal=redact_text(goal.strip()), slug=slugify(goal), checks=checks or detect_checks(self.root),
                                         started_at=datetime.now().isoformat(timespec="seconds"))
         self.dir = base / self.state.slug
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -208,16 +260,22 @@ class IterationRunner:
     def handoff_path(self) -> Path:
         return self.dir / "HANDOFF.md"
 
+    def _redact(self, text: str) -> str:
+        from src.workflow_state import redact_text
+
+        vault = getattr(self.session, "vault", None)
+        return redact_text(vault.mask(text) if vault is not None else text)
+
     def _save(self) -> None:
-        (self.dir / "state.json").write_text(self.state.to_json(), encoding="utf-8")
+        (self.dir / "state.json").write_text(self._redact(self.state.to_json()), encoding="utf-8")
 
     def _append_handoff(self, text: str) -> None:
         if not self.handoff_path.exists():
-            self.handoff_path.write_text(
+            self.handoff_path.write_text(self._redact(
                 f"# İterasyon: {self.state.goal}\n\nBaşlangıç: {self.state.started_at}\n"
-                f"Kontroller: {', '.join(self.state.checks) or '(yok)'}\n\n", encoding="utf-8")
+                f"Kontroller: {', '.join(self.state.checks) or '(yok)'}\n\n"), encoding="utf-8")
         with self.handoff_path.open("a", encoding="utf-8") as fh:
-            fh.write(text.rstrip() + "\n\n")
+            fh.write(self._redact(text.rstrip()) + "\n\n")
 
     def _handoff_excerpt(self, limit: int = 3500) -> str:
         if not self.handoff_path.exists():
@@ -274,7 +332,10 @@ class IterationRunner:
             if isinstance(data, dict) and "items" in data:
                 items = [Item(title=str(x.get("title", "")).strip(), detail=str(x.get("detail", "")).strip())
                          for x in data.get("items") or [] if isinstance(x, dict) and x.get("title")]
-                return bool(data.get("done")), items[:ROUND_ITEM_LIMIT]
+                done = bool(data.get("done"))
+                if done and data.get("reason"):
+                    items = [Item(title="(planlayıcı) " + str(data["reason"])[:200], status="engel")]
+                return done, items[:ROUND_ITEM_LIMIT]
         # Fallback: numbered lines become items.
         items = [Item(title=m.strip()) for m in re.findall(r"(?m)^\s*\d+[.)]\s+(.+)$", answer)]
         return False, items[:ROUND_ITEM_LIMIT]
@@ -306,11 +367,33 @@ class IterationRunner:
     def run(self) -> IterationState:
         from src.ui import print_info, print_success, print_warning
 
+        self.state.checks, notes = resolve_missing_tools(self.state.checks)
+        for note in notes:
+            print_warning(f"[iterasyon] {note}")
+        if notes:
+            self._append_handoff("**Durdu (kontrol aracı eksik):** " + " | ".join(notes))
+            self._save()
+            return self.state
         while not self.state.done and self.state.round < self.max_rounds:
             self.state.round += 1
             started = time.monotonic()
             before = self._run_checks("başlangıç")
+            missing = [r for r in before if r.code == 127]
+            if missing:
+                print_warning(f"[iterasyon] Kontrol komutu bulunamadı (çıkış 127): {missing[0].command}; duruyorum.")
+                self._append_handoff(f"**Durdu:** kontrol komutu bulunamadı: `{missing[0].command}`.")
+                break
             done, items = self._plan(before)
+            if done and items and items[0].status == "engel":
+                self._append_handoff(f"## Tur {self.state.round} — DURDU\n{items[0].title}")
+                self._save()
+                print_warning(f"[iterasyon] {items[0].title}")
+                break
+            done_titles = {_norm(i.title) for i in self.state.items if i.status == "tamam"}
+            dropped = [i for i in items if _norm(i.title) in done_titles]
+            items = [i for i in items if _norm(i.title) not in done_titles]
+            for i in dropped:
+                print_warning(f"[iterasyon] tekrar eden madde atlandı: {i.title}")
             if done and all(r.ok for r in before):
                 self.state.done = True
                 self._append_handoff(f"## Tur {self.state.round} — HEDEF TAMAM\nPlanlayıcı hedefi karşılanmış saydı; kontroller geçiyor.")
@@ -330,7 +413,10 @@ class IterationRunner:
             completed = sum(1 for i in items if i.status == "tamam")
             issues_before = sum(r.issues + (0 if r.ok else 1) for r in before)
             issues_after = sum(r.issues + (0 if r.ok else 1) for r in after)
+            blocked = sum(1 for i in items if i.status == "engel")
             progressed = issues_after < issues_before or (completed > 0 and issues_after <= issues_before)
+            if items and blocked * 2 >= len(items) and completed == 0:
+                progressed = False
             self.state.stalled_rounds = 0 if progressed else self.state.stalled_rounds + 1
             minutes = round((time.monotonic() - started) / 60, 1)
             summary = {
