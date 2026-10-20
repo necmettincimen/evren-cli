@@ -28,6 +28,9 @@ DEFAULT_SSH_TIMEOUT = 60
 MAX_SSH_TIMEOUT = 600
 SSH_OUTPUT_HEAD_CHARS = 6000
 SSH_OUTPUT_TAIL_CHARS = 2000
+# Above this size the head/tail window is replaced by a size-only summary so a
+# huge blob never lands in the model context.
+BIG_OUTPUT_CHARS = 100_000
 
 
 def _truncate_output(text: str) -> str:
@@ -38,6 +41,25 @@ def _truncate_output(text: str) -> str:
     tail = text[-SSH_OUTPUT_TAIL_CHARS:]
     dropped = len(text) - SSH_OUTPUT_HEAD_CHARS - SSH_OUTPUT_TAIL_CHARS
     return f"{head}\n... [{dropped} karakter kırpıldı] ...\n{tail}"
+
+
+def _single_line_summary(text: str) -> str:
+    """One-line digest for output that has no useful head/tail (e.g. 200 KB of
+    one repeated character): the body is not embedded, only its size."""
+    lines = text.count("\n") + 1
+    stripped = text.strip()
+    if not stripped:
+        return f"[EVREN] Çıktı {len(text)} karakter, {lines} satır (boşluk)."
+    first = stripped.splitlines()[0]
+    if len(set(stripped)) <= 2:
+        return (
+            f"[EVREN] Çıktı {len(text)} karakter, {lines} satır; gövde tek karakterin "
+            f"tekrarı ('{first[:1]}'), bağlama gömülmedi."
+        )
+    return (
+        f"[EVREN] Çıktı {len(text)} karakter, {lines} satır; gövde bağlama gömülmedi "
+        f"(ilk satır: {first[:80]!r})."
+    )
 
 
 def spill_long_output(
@@ -87,6 +109,16 @@ def spill_long_output(
     summary = summarize_output(text, command)
     if summary is not None and len(summary) < len(view):
         view = f"[EVREN] Çıktı özetlendi ({lines} satır).\n" + summary
+    elif len(text) > BIG_OUTPUT_CHARS:
+        # A 200 KB blob (e.g. `print('x'*200000)`) has no informative head/tail;
+        # embedding even the truncated window wastes context. Send size only.
+        view = _single_line_summary(text)
+        return (
+            view
+            + f"\n[EVREN] Tam çıktı kullanıcının terminalinde gösterildi{where}. Gövdeyi yanıtında "
+            "yeniden yazma; soru yalnızca boyut/karakter sayısıysa yukarıdaki sayıyı kullan ve hemen bitir."
+            + (" Gerekirse view_file ile dosyadan aralık oku." if saved else "")
+        )
     return (
         view
         + f"\n[EVREN] Tam çıktı ({lines} satır) kullanıcının terminalinde gösterildi{where}. "

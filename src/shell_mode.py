@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# The classifier lives in src.commands (no heavy imports); re-exported here so
+# `from src.shell_mode import is_shell_input` keeps working. commands.py must
+# never import shell_mode: that would close the cycle.
+from src.commands import is_shell_input
+
+__all__ = ["SHELL_NOTE_CHARS", "is_shell_input", "run_user_shell"]
+
 SHELL_NOTE_CHARS = 4000
-
-
-def is_shell_input(text: str) -> bool:
-    stripped = (text or "").lstrip()
-    return stripped.startswith("!") and len(stripped.strip()) > 1
 
 
 def run_user_shell(text: str, session, timeout: int = 600) -> int:

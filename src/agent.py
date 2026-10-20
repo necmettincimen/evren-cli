@@ -295,6 +295,9 @@ _PROBE_NUDGE_AT = 4
 
 
 _CODE_EXTS = frozenset({".py", ".cs", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt"})
+# Noise that differs between otherwise identical tool outputs.
+_OUTPUT_NOISE_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:s|ms|sn|saniye)\b|\d{1,2}:\d{2}(?::\d{2})?|0x[0-9a-fA-F]+|tmp\w+", re.I)
+
 _TEST_CMD_RE = re.compile(
     r"(?i)\b(pytest|unittest|dotnet\s+(test|build)|npm\s+(run\s+)?(test|build)|pnpm\s+(run\s+)?test|"
     r"yarn\s+test|cargo\s+(test|build|check)|go\s+(test|build|vet)|mvn\s+(test|verify)|gradle\w*\s+(test|build)|"
@@ -1492,14 +1495,24 @@ class AgentSession:
             return result
         if fn_name in _REPEAT_EXEMPT_TOOLS or len(result) < 200:
             return result
-        key = (fn_name, hash(result))
+        # Timings, pids and temp names change between otherwise identical runs
+        # (a test that fails the same way 7 times printed "Ran 1 test in 0.145s"
+        # each time and never matched), so they are stripped before hashing.
+        key = (fn_name, hash(_OUTPUT_NOISE_RE.sub("", result)))
         seen = self._output_seen.get(key, 0) + 1
         self._output_seen[key] = seen
+        if seen >= 4 and fn_name == "run_command" and self._code_written:
+            self._loop_blocks += 1
+            return result + (
+                f"\n[EVREN] AYNI HATA {seen}. KEZ: yaptığın düzenlemeler bu hatayı değiştirmiyor. "
+                "Daha fazla deneme yapma: değişikliklerini geri al (git checkout -- <dosya>) ya da "
+                "son çalışan hale getir, sonra bulguyu 'kısmi' olarak bildir."
+            )
         if seen >= 2:
             self._loop_blocks += 1
             return result + (
                 f"\n[EVREN] Bu çıktının aynısı bu görevde {seen}. kez geldi; aynı bilgiyi yeniden arama, "
-                "sıradaki adıma geç."
+                "yaklaşımı değiştir ya da sıradaki adıma geç."
             )
         return result
 

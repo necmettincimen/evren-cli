@@ -111,6 +111,45 @@ class TestTools(unittest.TestCase):
         res = execute_tool_call("web_fetch", {"url": "ftp://example.com/x"})
         self.assertTrue(res.startswith("HATA:"))
 
+    def test_edit_file_large_file_keeps_tail_and_size(self):
+        # A large file must not be rewritten from a truncated read: the tail
+        # survives and only the edited line changes (same byte size here).
+        big = "".join(f"LINE_{i:05d} = {i}\n" for i in range(12000))
+        self.assertGreater(len(big), 150000)
+        target = self.workspace / "big.py"
+        target.write_bytes(big.encode("utf-8"))
+        before = target.stat().st_size
+
+        res = tool_edit_file(
+            "big.py",
+            target_snippet="LINE_00000 = 0\n",
+            replacement_snippet="LINE_00000 = 0\nEVREN_SHELL_LABEL = 'x'\n",
+            workspace_root=self.workspace,
+            auto_approve=True,
+        )
+        self.assertIn("BAŞARILI", res)
+
+        content = target.read_text(encoding="utf-8")
+        self.assertIn("EVREN_SHELL_LABEL = 'x'", content)
+        self.assertIn("LINE_11999 = 11999", content)
+        self.assertNotIn("karakterde kesildi", content)
+        self.assertEqual(target.stat().st_size, before + len("EVREN_SHELL_LABEL = 'x'\n"))
+
+    def test_edit_file_writes_only_changed_span(self):
+        # The unchanged head/tail must not be re-emitted: only the span is written.
+        from src.file_ops import write_changed_lines
+
+        target = self.workspace / "span.txt"
+        old = "a\nb\nc\nd\n"
+        target.write_bytes(old.encode("utf-8"))
+        ok, _backup, err = write_changed_lines("span.txt", old, "a\nB\nc\nd\n", self.workspace)
+        self.assertTrue(ok, err)
+        self.assertEqual(target.read_text(encoding="utf-8"), "a\nB\nc\nd\n")
+
+        ok, _backup, err = write_changed_lines("span.txt", "a\nB\nc\nd\n", "a\nc\nd\n", self.workspace)
+        self.assertTrue(ok, err)
+        self.assertEqual(target.read_text(encoding="utf-8"), "a\nc\nd\n")
+
 
 if __name__ == "__main__":
     unittest.main()

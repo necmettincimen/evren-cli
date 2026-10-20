@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.3.0] - 2026-10-20
+
+### Eklendi
+- Aynı hata koruması: dosya değiştirildiği halde aynı test/komut çıktısı 4. kez gelince ajan geri alıp 'kısmi' bildirmeye yönlendirilir (zaman/pid gürültüsü hash'ten ayıklanır)
+- Komut çıktısı 100 KB'yi aşarsa bağlama yalnızca boyut özeti girer (EVREN'in kendi yük testinde bulundu)
+
+### Düzeltildi
+- edit_file büyük dosyada kırpılmış okumayı tüm dosya olarak geri yazabiliyordu; artık kırpmasız okuma + yalnızca değişen aralık yazılır
+- İterasyon: hedef "commit" istiyorsa madde talimatı commit'e izin verir; senaryo/TSV metinleri iş talebi sayılmaz
+- is_shell_input src.commands'a taşındı (shell_mode yeniden dışa aktarır), eksik --check aracı için açık mesaj, zaman aşımı testi
+
 ## [3.2.3] - 2026-10-20
 
 ### Değişti

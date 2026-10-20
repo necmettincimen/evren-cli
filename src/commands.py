@@ -149,6 +149,17 @@ def is_unknown_command(text: str) -> bool:
     return stripped == token or suggest_command(token, _NEAR_MISS_CUTOFF) is not None
 
 
+def is_shell_input(text: str) -> bool:
+    """True when `text` is a `!komut` line (run it in the agent's shell).
+
+    Lives here, next to the other input classifiers, so the REPL can decide
+    between command / shell / task text without importing `src.shell_mode`
+    (which pulls in the process and UI layers).
+    """
+    stripped = (text or "").lstrip()
+    return stripped.startswith("!") and len(stripped.strip()) > 1
+
+
 def is_command_input(text: str) -> bool:
     """True when `text` must go to the slash-command handler instead of the agent.
 
