@@ -384,11 +384,13 @@ class IterationRunner:
                 self._append_handoff(f"**Durdu:** kontrol komutu bulunamadı: `{missing[0].command}`.")
                 break
             done, items = self._plan(before)
-            if done and items and items[0].status == "engel":
+            if done and items and items[0].status == "engel" and not all(r.ok for r in before):
                 self._append_handoff(f"## Tur {self.state.round} — DURDU\n{items[0].title}")
                 self._save()
                 print_warning(f"[iterasyon] {items[0].title}")
                 break
+            if done and items and items[0].status == "engel":
+                items = []  # checks pass: the reason is just the closing note
             done_titles = {_norm(i.title) for i in self.state.items if i.status == "tamam"}
             dropped = [i for i in items if _norm(i.title) in done_titles]
             items = [i for i in items if _norm(i.title) not in done_titles]
