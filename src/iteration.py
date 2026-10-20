@@ -263,6 +263,9 @@ class IterationRunner:
             self.state.stalled_rounds = 0  # an explicit resume gets a fresh no-progress budget
             if checks:
                 self.state.checks = checks
+            self.dir = base / self.state.slug
+            self.dir.mkdir(parents=True, exist_ok=True)
+            self._close_interrupted_round()
         else:
             if not goal.strip():
                 raise ValueError("İterasyon hedefi boş olamaz.")
@@ -276,6 +279,27 @@ class IterationRunner:
     def _latest_state(base: Path) -> Path | None:
         states = sorted(base.glob("*/state.json"), key=lambda p: p.stat().st_mtime, reverse=True) if base.exists() else []
         return states[0] if states else None
+
+    def _close_interrupted_round(self) -> None:
+        """Resume: a round without a history record was cut short — give it a HANDOFF heading."""
+        if self.state.round <= 0:
+            return
+        if any(h.get("round") == self.state.round for h in self.state.history):
+            return
+        heading = f"## Tur {self.state.round} — KESİLDİ (devam ediliyor)"
+        if self.handoff_path.exists() and heading in self.handoff_path.read_text(encoding="utf-8"):
+            self.state.stopped = ""  # already summarised by an earlier resume
+            self._save()
+            return
+        items = [i for i in self.state.items if i.round == self.state.round]
+        lines = [heading]
+        if items:
+            lines += [f"- [{i.status}] {i.title}" + (f" — {i.note}" if i.note else "") for i in items]
+        else:
+            lines.append("- (bu turda henüz madde işlenmedi)")
+        self._append_handoff("\n".join(lines))
+        self.state.stopped = ""
+        self._save()
 
     # ------------------------------------------------------------------ record
     @property
