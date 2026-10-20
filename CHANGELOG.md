@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.2.2] - 2026-10-20
+
+### Düzeltildi
+- İterasyon: planlayıcı "hedef karşılandı" nedeniyle `done` döndüğünde kontroller geçiyorsa başarı sayılır (engel olarak durmaz)
+
 ## [3.2.1] - 2026-10-20
 
 ### Düzeltildi
