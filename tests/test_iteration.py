@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.iteration import CheckResult, IterationRunner, IterationState, detect_checks, slugify
+from src.iteration import CheckResult, Item, IterationRunner, IterationState, detect_checks, slugify
 
 
 class FakeSession:
@@ -36,6 +36,29 @@ class IterationTest(unittest.TestCase):
 
         self.assertIn("tek komut", PLAN_PROMPT.lower())
         self.assertIn("en fazla 1", PLAN_PROMPT.lower())
+
+    def test_plan_prompt_splits_partial_items(self):
+        class RecordingSession(FakeSession):
+            def __init__(self):
+                super().__init__(['{"done": false, "items": []}'])
+                self.prompts = []
+
+            def run_step(self, prompt, max_steps=None, route=True):
+                self.prompts.append(prompt)
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            session = RecordingSession()
+            runner = IterationRunner(session, Path(d), "hedef", checks=["python -V"], max_rounds=1)
+            runner.state.items = [Item(title="Kısmi iş", detail="a dosyasını düzelt; b testini ekle", status="kısmi")]
+            runner._plan([ok])
+            prompt = session.prompts[0]
+            self.assertIn("alt maddeye böl", prompt)
+            self.assertIn("a dosyasını düzelt; b testini ekle", prompt)
+            self.assertIn("1. kısım:", "\n".join(IterationRunner._split_partial(Item(title="X", detail="tek parça"))))
+            self.assertEqual(len(IterationRunner._split_partial(Item(title="X", detail="tek parça"))), 2)
 
     def test_detect_flutter_and_slug(self):
         with tempfile.TemporaryDirectory() as d:

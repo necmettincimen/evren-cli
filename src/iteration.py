@@ -218,7 +218,7 @@ HEDEF: {goal}
 {handoff}
 
 Açık maddeler (önceki turlardan): {open_items}
-
+{split_block}
 Bu turun başındaki kontrol sonuçları:
 {checks}
 
@@ -355,12 +355,33 @@ class IterationRunner:
             parts.append(f"$ {r.command} → {status}" + ("" if r.ok else f"\n{r.tail[-2500:]}"))
         return "\n".join(parts)
 
+    @staticmethod
+    def _split_partial(item: Item) -> list[str]:
+        """Two sub-item suggestions for a 'kısmi' item, derived from its detail."""
+        detail = (item.detail or item.note or item.title).strip()
+        parts = [p.strip(" .") for p in re.split(r"\s*;\s*|\s+ve\s+", detail) if p.strip(" .")]
+        if len(parts) >= 2:
+            return [f"{item.title} — {parts[0]}", f"{item.title} — {' ve '.join(parts[1:])}"]
+        return [f"1. kısım: {detail}", f"2. kısım: {detail}"]
+
+    def _split_block(self) -> str:
+        """Prompt block asking the planner to break 'kısmi' items into two sub-items."""
+        partial = [i for i in self.state.items if i.status == "kısmi"]
+        if not partial:
+            return ""
+        lines = ["Şu kısmi maddeleri 2 alt maddeye bölerek planla:"]
+        for item in partial[-5:]:
+            lines.append(f"- {item.title} (detail: {item.detail or item.note or '(yok)'})")
+            lines += [f"  {n}) {sub}" for n, sub in enumerate(self._split_partial(item), 1)]
+        return "\n".join(lines) + "\n"
+
     def _plan(self, checks: list[CheckResult]) -> tuple[bool, list[Item]]:
         from src.modes import AgentMode
 
         open_items = [f"{i.title} ({i.status}: {i.note[:80]})" for i in self.state.items if i.status in ("kısmi", "engel", "bekliyor")]
         prompt = PLAN_PROMPT.format(round=self.state.round, goal=self.state.goal, handoff=self._handoff_excerpt(),
                                     open_items="; ".join(open_items[-10:]) or "(yok)",
+                                    split_block=self._split_block(),
                                     checks=self._checks_text(checks), limit=ROUND_ITEM_LIMIT)
         self.session.clear_history()
         previous = self.session.mode
