@@ -43,6 +43,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {s.name: s for s in [
     ToolSpec("apply_patch", "tool_apply_patch", mutates=True, needs_approval=True, modes=_NORMAL),
     ToolSpec("clone_tree", "", mutates=True, needs_approval=True, modes=_NORMAL),
     ToolSpec("todo_write", "tool_todo_write", read_only=True, repeat_exempt=True),
+    ToolSpec("memory_save", "", read_only=True, repeat_exempt=True),
     ToolSpec("ask_user", "tool_ask_user", read_only=True, repeat_exempt=True),
     ToolSpec("delegate", "", modes=_NORMAL, repeat_exempt=True),
 ]}

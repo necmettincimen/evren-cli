@@ -30,7 +30,18 @@ PROFILE_KEYS = (
 )
 
 
-def _memory_path(workspace_root: Path | None = None) -> Path:
+GLOBAL = "global"
+PROJECT = "project"
+
+
+def global_memory_path() -> Path:
+    """Tüm projelerde geçerli hafıza: ~/.evren/memory.json."""
+    return Path.home() / ".evren" / "memory.json"
+
+
+def _memory_path(workspace_root: Path | None = None, scope: str = PROJECT) -> Path:
+    if scope == GLOBAL:
+        return global_memory_path()
     return get_evren_dir(workspace_root) / "memory.json"
 
 
@@ -47,9 +58,9 @@ def _empty_state() -> dict:
     }
 
 
-def load_memory(workspace_root: Path | None = None) -> dict:
+def load_memory(workspace_root: Path | None = None, scope: str = PROJECT) -> dict:
     """Loads the memory store, returning an empty state if missing/invalid."""
-    path = _memory_path(workspace_root)
+    path = _memory_path(workspace_root, scope)
     if not path.exists():
         return _empty_state()
     try:
@@ -67,9 +78,9 @@ def load_memory(workspace_root: Path | None = None) -> dict:
     return state
 
 
-def save_memory(state: dict, workspace_root: Path | None = None) -> Path:
+def save_memory(state: dict, workspace_root: Path | None = None, scope: str = PROJECT) -> Path:
     """Atomically writes the memory store and returns its path."""
-    path = _memory_path(workspace_root)
+    path = _memory_path(workspace_root, scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = dict(state)
     state["schema_version"] = SCHEMA_VERSION
@@ -83,25 +94,27 @@ def save_memory(state: dict, workspace_root: Path | None = None) -> Path:
     return path
 
 
-def set_profile(key: str, value: str, workspace_root: Path | None = None) -> dict:
+def set_profile(key: str, value: str, workspace_root: Path | None = None, scope: str = PROJECT) -> dict:
     """Sets a profile field and persists. Unknown keys are still stored."""
-    state = load_memory(workspace_root)
+    state = load_memory(workspace_root, scope)
     key = (key or "").strip()
     if not key:
         raise ValueError("Profil anahtarı boş olamaz.")
     state["profile"][key] = (value or "").strip()
-    save_memory(state, workspace_root)
+    save_memory(state, workspace_root, scope)
     return state
 
 
-def add_note(text: str, workspace_root: Path | None = None) -> dict:
+def add_note(text: str, workspace_root: Path | None = None, scope: str = PROJECT) -> dict:
     """Appends a timestamped note and persists."""
     text = (text or "").strip()
     if not text:
         raise ValueError("Not boş olamaz.")
-    state = load_memory(workspace_root)
+    state = load_memory(workspace_root, scope)
+    if any(n.get("text") == text for n in state["notes"]):
+        return state
     state["notes"].append({"text": text, "at": _now()})
-    save_memory(state, workspace_root)
+    save_memory(state, workspace_root, scope)
     return state
 
 
@@ -112,18 +125,12 @@ def clear_memory(workspace_root: Path | None = None) -> dict:
     return state
 
 
-def memory_context_block(workspace_root: Path | None = None, max_notes: int = 10) -> str:
-    """Builds a compact context block to inject into the agent system prompt.
-
-    Returns an empty string when there is nothing worth recalling.
-    """
-    state = load_memory(workspace_root)
+def _block(title: str, state: dict, max_notes: int) -> list[str]:
     profile = state.get("profile", {})
     notes = state.get("notes", [])
     if not profile and not notes:
-        return ""
-
-    lines = ["PROJE HAFIZASI (önceki oturumlardan):"]
+        return []
+    lines = [title]
     for key in PROFILE_KEYS:
         if profile.get(key):
             lines.append(f"  {key}: {profile[key]}")
@@ -135,4 +142,14 @@ def memory_context_block(workspace_root: Path | None = None, max_notes: int = 10
         lines.append("  Notlar:")
         for note in notes[-max_notes:]:
             lines.append(f"    - {note.get('text', '')}")
-    return "\n".join(lines)
+    return lines
+
+
+def memory_context_block(workspace_root: Path | None = None, max_notes: int = 10) -> str:
+    """Builds a compact context block to inject into the agent system prompt.
+
+    Genel (tüm projeler) ve proje hafızasını birleştirir; ikisi de boşsa "" döner.
+    """
+    lines = _block("GENEL HAFIZA (tüm projeler):", load_memory(workspace_root, GLOBAL), max_notes)
+    project = _block("PROJE HAFIZASI (önceki oturumlardan):", load_memory(workspace_root), max_notes)
+    return "\n".join(lines + project)

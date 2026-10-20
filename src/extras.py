@@ -562,6 +562,9 @@ def run_headless(args) -> int:
     from src.api_client import EvrenClient
     from src.config import get_workspace_dir
 
+    import os
+
+    os.environ["EVREN_HEADLESS"] = "1"
     workspace = get_workspace_dir(args.workspace)
     client = EvrenClient(default_model=args.model)
     from src import settings as _settings

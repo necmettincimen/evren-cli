@@ -5,6 +5,7 @@ tool execution banners, reasoning stream blocks, and diffs.
 """
 
 import re
+import os
 import sys
 from pathlib import Path
 from src.config import get_ui_theme
@@ -526,6 +527,12 @@ def prompt_confirm(prompt_msg: str, default: bool = False) -> bool:
     active = _ACTIVE_STATUS
     if active:
         active.stop()
+
+    if os.environ.get("EVREN_HEADLESS") == "1" or not sys.stdin or not sys.stdin.isatty():
+        # Başsız/borulu kipte soruyu yanıtlayacak kimse yok: input() takılır. Varsayılan geçerli olur
+        # (dosya yazma/düzenleme: evet, komut/uzak işlem: hayır).
+        print(f"\n{prompt_msg} ->{'evet' if default else 'hayır'} (başsız kip, varsayılan)")
+        return default
 
     choices = "[Y/n]" if default else "[y/N]"
     from src import settings as _settings

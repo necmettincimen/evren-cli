@@ -291,7 +291,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_list_hosts",
-            "description": "Kayıtlı SSH alias'larını listeler. Yalnızca UZAK sunucu işlemi için; bu host/localhost yereldir.",
+            "description": "SON ÇARE: kayıtlı SSH alias'larını listeler; hedef biliniyorsa (alias ya da user@host) çağırma. bu host/localhost yereldir.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -308,7 +308,7 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "SSH alias",
+                        "description": "Kayıtlı alias ya da kayıtsız hedef için user@host[:port]",
                     },
                     "command": {
                         "type": "string",
@@ -343,7 +343,7 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "SSH alias",
+                        "description": "Kayıtlı alias ya da kayıtsız hedef için user@host[:port]",
                     },
                     "remote_path": {
                         "type": "string",
@@ -364,7 +364,7 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "alias": {
                         "type": "string",
-                        "description": "SSH alias",
+                        "description": "Kayıtlı alias ya da kayıtsız hedef için user@host[:port]",
                     },
                     "remote_path": {
                         "type": "string",
@@ -376,6 +376,26 @@ TOOLS_SCHEMA = [
                     },
                 },
                 "required": ["alias", "remote_path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_save",
+            "description": "Gelecek oturumlar için kalıcı not kaydeder. Yalnızca kullanıcı 'hatırla/not et' dediğinde ya da kalıcı bir tercih/kural belirttiğinde kullan; sır/parola yazma.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Kısa, kendi başına anlaşılır not"},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["global", "project"],
+                        "description": "global: tüm projeler (~/.evren/memory.json); project: yalnız bu çalışma alanı",
+                        "default": "project",
+                    },
+                },
+                "required": ["text"],
             },
         },
     },
@@ -1561,6 +1581,15 @@ def execute_tool_call(
         )
     elif name == "todo_write":
         return tool_todo_write(todos=arguments.get("todos"))
+    elif name == "memory_save":
+        from src.memory import add_note
+        from src.secret_vault import active_vault
+
+        text = str(arguments.get("text", "")).strip()
+        if not text:
+            return "HATA: memory_save için 'text' gerekli."
+        add_note(active_vault().mask(text), root, "global" if arguments.get("scope") == "global" else "project")
+        return "BAŞARILI: not hafızaya kaydedildi."
     elif name == "ask_user":
         result, _confirmed = tool_ask_user(
             question=arguments.get("question", ""),

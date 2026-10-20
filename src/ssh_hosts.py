@@ -25,6 +25,7 @@ Each host entry looks like:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -184,9 +185,25 @@ def _read_registry(path: Path) -> dict[str, SshHost]:
     return hosts
 
 
+_ADHOC_RE = re.compile(r"^(?:(?P<user>[\w.\-]+)@)?(?P<host>[A-Za-z0-9][A-Za-z0-9.\-]*|\[[0-9a-fA-F:]+\])(?::(?P<port>\d{1,5}))?$")
+
+
+def adhoc_host(spec: str) -> SshHost | None:
+    """Kayıtlı olmayan `user@host[:port]` hedefi için salt-okuma geçici host (allow_write=False)."""
+    spec = (spec or "").strip()
+    if "@" not in spec and not re.match(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$", spec):
+        return None
+    m = _ADHOC_RE.match(spec)
+    if not m:
+        return None
+    return SshHost(alias=spec, host=m["host"], user=m["user"] or "", port=int(m["port"] or 22),
+                   description="kayıtsız (geçici)")
+
+
 def get_host(alias: str, workspace_root: Path | None = None) -> SshHost | None:
     """Returns the host for the given alias, or None if not registered."""
-    return load_hosts(workspace_root).get(alias)
+    host = load_hosts(workspace_root).get(alias)
+    return host if host is not None else adhoc_host(alias)
 
 
 def save_hosts(
