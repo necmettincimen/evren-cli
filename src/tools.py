@@ -968,6 +968,8 @@ def tool_web_fetch(url: str, timeout: int | None = None, max_chars: int | None =
 
 DEFAULT_COMMAND_TIMEOUT = 180
 MAX_COMMAND_TIMEOUT = 600
+# Conventional exit code for a killed-by-timeout command (coreutils `timeout`).
+TIMEOUT_EXIT_CODE = 124
 # Output truncation: keep head + tail so exit context is preserved.
 OUTPUT_HEAD_CHARS = 6000
 OUTPUT_TAIL_CHARS = 2000
@@ -1121,7 +1123,14 @@ def tool_run_command(
         err = vault.mask(err.strip())
 
         if timed_out:
-            return f"HATA: Komut zaman aşımına uğradı ({timeout} saniye). Süreç ağacı sonlandırıldı."
+            # 124 is the conventional "timed out" exit code (coreutils timeout).
+            # The model used to see only a HATA line with no code, so it could
+            # not tell a timeout from a crash and retried the same command.
+            return (
+                f"Çıkış Kodu: {TIMEOUT_EXIT_CODE}\n"
+                f"HATA: Komut {timeout} sn sonra zaman aşımına uğradı "
+                "(süreç ağacı öldürüldü)."
+            )
 
         result_lines = [f"Çıkış Kodu: {code}"]
         if out:

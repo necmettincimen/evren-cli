@@ -55,6 +55,22 @@ class TestRunCommandTimeout(unittest.TestCase):
         self.assertIn("zaman aşımı", result)
         self.assertLess(elapsed, 20)
 
+    def test_timeout_reports_exit_code_124_and_message(self):
+        """The model must see exit code 124 plus the exact timeout wording."""
+        with mock.patch("src.tools.print_command_output"), \
+             mock.patch("src.tools.request_approval", return_value=None):
+            result = tool_run_command(
+                'python -c "import time; time.sleep(400)"',
+                workspace_root=Path.cwd(),
+                auto_approve=True,
+                timeout_seconds=2,
+            )
+        self.assertTrue(result.startswith("Çıkış Kodu: 124"), result)
+        self.assertIn(
+            "Komut 2 sn sonra zaman aşımına uğradı (süreç ağacı öldürüldü)", result
+        )
+        self.assertNotIn("Çıkış Kodu: -1", result)
+
 
 if __name__ == "__main__":
     unittest.main()
