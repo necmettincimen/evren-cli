@@ -517,7 +517,8 @@ def _add_backup_arg(parser):
     )
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """CLI argüman ayrıştırıcısını kur (testler varsayılanları buradan doğrular)."""
     parser = argparse.ArgumentParser(
         prog="evren",
         description="EVREN CLI: AI Development & Project Assistant",
@@ -699,6 +700,11 @@ def main():
 
     p_ssh.set_defaults(func=cmd_ssh, ssh_action="list")
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.print_prompt and not args.subcommand:
