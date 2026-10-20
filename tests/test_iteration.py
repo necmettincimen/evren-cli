@@ -121,6 +121,27 @@ class IterationTest(unittest.TestCase):
             saved = (runner.dir / "state.json").read_text(encoding="utf-8")
             self.assertIn("kesildi", saved)
 
+    def test_interrupt_marks_running_item_partial(self):
+        class InterruptSession(FakeSession):
+            def run_step(self, prompt, max_steps=None, route=True):
+                if "SONUÇ:" in prompt:  # item prompt → simulate Ctrl+C mid-item
+                    raise KeyboardInterrupt
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(InterruptSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            state = runner.run()  # must not raise
+            self.assertEqual(state.items[0].status, "kısmi")
+            self.assertEqual(state.items[0].note, "Ctrl+C ile kesildi")
+            saved = (runner.dir / "state.json").read_text(encoding="utf-8")
+            self.assertIn("kısmi", saved)
+            self.assertIn("Ctrl+C ile kesildi", saved)
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("- [kısmi] Düzelt", handoff)
+
     def test_resume_writes_heading_for_interrupted_round(self):
         class InterruptSession(FakeSession):
             def run_step(self, prompt, max_steps=None, route=True):
@@ -141,7 +162,7 @@ class IterationTest(unittest.TestCase):
             for number in range(1, resumed.state.round + 1):
                 self.assertGreaterEqual(handoff.count(f"## Tur {number}"), 1, f"tur {number} başlığı yok")
             self.assertIn("KESİLDİ (devam ediliyor)", handoff)
-            self.assertIn("[bekliyor] Düzelt", handoff)
+            self.assertIn("[kısmi] Düzelt", handoff)
             # a second resume must not duplicate the heading
             again = IterationRunner(FakeSession([]), Path(d), resume=True)
             self.assertEqual(again.handoff_path.read_text(encoding="utf-8").count("KESİLDİ (devam ediliyor)"), 1)

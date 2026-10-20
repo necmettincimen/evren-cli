@@ -428,6 +428,7 @@ class IterationRunner:
         try:
             answer = self.session.run_step(prompt, max_steps=self.item_steps, route=False) or ""
         except KeyboardInterrupt:  # Ctrl+C must reach run() so it can write a partial summary
+            item.status, item.note = "kısmi", "Ctrl+C ile kesildi"
             raise
         except Exception as e:  # never let one item end the night
             answer = f"SONUÇ: engel — {type(e).__name__}: {e}"
@@ -458,9 +459,9 @@ class IterationRunner:
             return self._run_rounds()
         except KeyboardInterrupt:
             print_warning("[iterasyon] Kesildi (Ctrl+C); kısmi tur özeti HANDOFF'a yazıldı.")
-            self._append_handoff(self._interrupt_summary())
             self.state.stopped = "kesildi"
-            self._save()
+            self._save()  # persist item statuses before the summary is written
+            self._append_handoff(self._interrupt_summary())
             return self.state
 
     def _run_rounds(self) -> IterationState:
