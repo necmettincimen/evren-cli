@@ -34,8 +34,9 @@ class IterationTest(unittest.TestCase):
     def test_plan_prompt_has_item_size_rules(self):
         from src.iteration import PLAN_PROMPT
 
-        self.assertIn("tek komut", PLAN_PROMPT.lower())
-        self.assertIn("en fazla 1", PLAN_PROMPT.lower())
+        normalized = " ".join(PLAN_PROMPT.split()).lower()
+        self.assertIn("tek komutla doğrulanabilir", normalized)
+        self.assertIn("en fazla 1", normalized)
 
     def test_item_prompt_limits_repeated_check_commands(self):
         from src.iteration import ITEM_PROMPT
