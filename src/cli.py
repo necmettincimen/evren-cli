@@ -351,6 +351,13 @@ def cmd_iterate(args):
         sys.exit(1)
 
 
+def cmd_plan(args):
+    from src.config import get_workspace_dir
+    from src.plan_runner import run_plan
+
+    sys.exit(run_plan(args.plan_file, str(get_workspace_dir(args.workspace)), args.dry_run, args.allow_push, args.start))
+
+
 def cmd_debug(args):
     """Debug helpers; `debug last` prints the step table of the last agent task."""
     from src.trace import print_last_task
@@ -667,6 +674,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_iter.add_argument("--model", "-m", default=None)
     p_iter.add_argument("--workspace", "-w", default=None)
     p_iter.set_defaults(func=cmd_iterate)
+
+    # plan: LLM'siz refleks plan yürütücü (mekanik işler için)
+    p_plan = subparsers.add_parser("plan", help="Planlayıcının JSON adım listesini LLM'siz, refleks hızında çalıştır")
+    p_plan.add_argument("plan_file")
+    p_plan.add_argument("--dry-run", action="store_true")
+    p_plan.add_argument("--allow-push", action="store_true", help="push adımlarına izin ver (kullanıcı onayı)")
+    p_plan.add_argument("--from", dest="start", type=int, default=1, help="N. adımdan devam et")
+    p_plan.add_argument("--workspace", "-w", default=None)
+    p_plan.set_defaults(func=cmd_plan)
 
     # setup-terminal: Windows Terminal profile that opens EVREN in Git Bash
     p_term = subparsers.add_parser(

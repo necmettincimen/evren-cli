@@ -485,6 +485,8 @@ TOOLS_SCHEMA = [
 
 from src.apply_patch import SCHEMA as _APPLY_PATCH_SCHEMA
 TOOLS_SCHEMA.append(_APPLY_PATCH_SCHEMA)
+from src.clone_tree import SCHEMA as _CLONE_TREE_SCHEMA
+TOOLS_SCHEMA.append(_CLONE_TREE_SCHEMA)
 
 # Derived once from TOOLS_SCHEMA: {tool: {param: declared json type}} and
 # {tool: [required params]}. Used to normalize lenient model arguments.

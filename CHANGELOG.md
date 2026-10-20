@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.5.0] - 2026-10-20
+
+### Eklendi
+- `evren plan <plan.json>`: LLM'siz, refleks hızında plan yürütücü. Üst planlayıcının yazdığı JSON adım listesini (clone_tree, replace, write, run, commit, push, agent) deterministik çalıştırır; ilk hatada durur (`--from N` ile devam), `--dry-run`, push yalnız `--allow-push` ile, commit mesajında AI imzası reddedilir.
+- `clone_tree` ajan aracı: dizini kopyalayıp dosya/klasör adlarında ve içerikte toplu yeniden adlandırır (şablon repodan yeni repo); sistem istemine kullanım ipucu eklendi.
+
 ## [3.4.1] - 2026-10-20
 
 ### Düzeltildi
