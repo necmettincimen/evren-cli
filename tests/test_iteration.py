@@ -173,6 +173,33 @@ class IterationTest(unittest.TestCase):
             handoff = runner.handoff_path.read_text(encoding="utf-8")
             self.assertIn("- [kısmi] Düzelt", handoff)
 
+    def test_interrupt_marks_unprocessed_items_partial_for_split(self):
+        class InterruptSession(FakeSession):
+            def run_step(self, prompt, max_steps=None, route=True):
+                if "SONUÇ:" in prompt:  # item prompt → simulate Ctrl+C mid-item
+                    raise KeyboardInterrupt
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        answers = ['{"done": false, "items": [{"title": "Birinci", "detail": "a dosyası"}, '
+                   '{"title": "İkinci", "detail": "b dosyası"}]}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(InterruptSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            state = runner.run()  # must not raise
+            self.assertEqual(state.stopped, "kesildi")
+            second = next(i for i in state.items if i.title == "İkinci")
+            self.assertEqual(second.status, "kısmi")
+            self.assertEqual(second.note, "tur kesildi, işlenmedi")
+            saved = (runner.dir / "state.json").read_text(encoding="utf-8")
+            self.assertIn("tur kesildi, işlenmedi", saved)
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("- [kısmi] İkinci — tur kesildi, işlenmedi", handoff)
+            # the next round's split block now offers both items as sub-item candidates
+            split = runner._split_block()
+            self.assertIn("İkinci", split)
+            self.assertIn("alt maddeye böl", split)
+
     def test_atexit_flush_writes_partial_summary(self):
         import atexit
 
