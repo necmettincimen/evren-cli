@@ -54,6 +54,27 @@ class IterationTest(unittest.TestCase):
             self.assertIsInstance(resumed.state, IterationState)
             self.assertEqual(resumed.state.round, 2)
 
+    def test_keyboard_interrupt_writes_partial_round_summary(self):
+        class InterruptSession(FakeSession):
+            def run_step(self, prompt, max_steps=None, route=True):
+                if "SONUÇ:" in prompt:  # item prompt → simulate Ctrl+C mid-item
+                    raise KeyboardInterrupt
+                return super().run_step(prompt, max_steps=max_steps, route=route)
+
+        answers = ['{"done": false, "items": [{"title": "Düzelt", "detail": "x"}]}']
+        ok = CheckResult("python -V", 0, 0, "", 0.1)
+        with tempfile.TemporaryDirectory() as d, patch("src.iteration.run_check", return_value=ok), \
+                patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
+            runner = IterationRunner(InterruptSession(answers), Path(d), "hedef", checks=["python -V"], max_rounds=5)
+            state = runner.run()  # must not raise
+            self.assertEqual(state.stopped, "kesildi")
+            self.assertFalse(state.done)
+            handoff = runner.handoff_path.read_text(encoding="utf-8")
+            self.assertIn("KESİLDİ", handoff)
+            self.assertIn("Düzelt", handoff)
+            saved = (runner.dir / "state.json").read_text(encoding="utf-8")
+            self.assertIn("kesildi", saved)
+
     def test_missing_check_tool_reports_clear_error_and_stops(self):
         with tempfile.TemporaryDirectory() as d, \
                 patch("src.ui.print_info"), patch("src.ui.print_success"), patch("src.ui.print_warning"):
