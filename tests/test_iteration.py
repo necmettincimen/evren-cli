@@ -66,6 +66,16 @@ class IterationTest(unittest.TestCase):
             self.assertIn("1. kısım:", "\n".join(IterationRunner._split_partial(Item(title="X", detail="tek parça"))))
             self.assertEqual(len(IterationRunner._split_partial(Item(title="X", detail="tek parça"))), 2)
 
+    def test_split_partial_falls_back_to_title(self):
+        subs = IterationRunner._split_partial(Item(title="Kısmi iş", detail="", note=""))
+        self.assertEqual(len(subs), 2)
+        self.assertTrue(all(s.strip() for s in subs))
+        self.assertNotEqual(subs[0], subs[1])
+        self.assertIn("Kısmi iş", subs[0])
+        # note doluysa detail yerine note kullanılır
+        subs = IterationRunner._split_partial(Item(title="X", detail="", note="a; b"))
+        self.assertEqual(subs, ["a", "b"])
+
     def test_default_item_steps_is_40(self):
         with tempfile.TemporaryDirectory() as d:
             runner = IterationRunner(FakeSession([]), Path(d), "hedef")
