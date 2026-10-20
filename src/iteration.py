@@ -226,6 +226,10 @@ Görevin: kodu ve ilgili dosyaları okuyarak hedefe ulaşmak için SIRADAKİ en 
 Kurallar: önce kırık kontrolleri (derleme/analiz/test hatası) düzelten maddeler; sonra hedefteki
 eksik özellikler, yapısal hatalar. Her madde KÜÇÜK olsun (tek ekran/tek dosya grubu, ~30 araç adımında biter),
 somut dosya/ekran adıyla; 'kısmi' kalmış maddeleri daha küçük parçalara bölerek sürdür.
+Madde boyutu kuralları:
+- Her maddenin kabul ölçütü TEK komutla doğrulanabilir olmalı (ör. 'python -m pytest -q tests/test_x.py::test_y');
+  birden çok komut gerekiyorsa maddeyi böl.
+- Kod değişikliği içermeyen salt analiz maddesi tur başına en fazla 1 olabilir; kalan maddeler kod/test değiştirsin.
 Önceki turlarda 'tamam' olmuş bir maddeyi (aynı iş, farklı sözcüklerle) TEKRAR PLANLAMA; 'engel' olmuş bir
 maddeyi engel ortadan kalkmadıysa tekrar planlama. Hedef yerelde doğrulanamıyorsa (ör. SDK/ortam yok, sonuç
 CI'da bekleniyor) yeni madde üretme: {{"done": true, "items": [], "reason": "neden"}} döndür.
