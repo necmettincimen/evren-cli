@@ -262,7 +262,11 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "create_plan",
-            "description": "Plan modunda plans/<ad>/plan.md yazar; kaynak dosyalara dokunmaz.",
+            "description": (
+                "Plan modunda plans/<ad>/plan.md yazar; kaynak dosyalara dokunmaz. "
+                "Planı TEK çağrıda yaz: en fazla 2-3 hedefli okuma yeter, keşfi uzatma. "
+                "Yazdıktan sonra dosyayı doğrulama için yeniden okuma; sonuç mesajı yeterlidir."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -272,7 +276,10 @@ TOOLS_SCHEMA = [
                     },
                     "content": {
                         "type": "string",
-                        "description": "Markdown plan",
+                        "description": (
+                            "Markdown plan: hedef dosyalar, yapılacak değişiklik, doğrulama. "
+                            "Tam metni tek seferde ver."
+                        ),
                     },
                 },
                 "required": ["name", "content"],

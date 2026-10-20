@@ -55,6 +55,18 @@ class ToolsForModeTest(unittest.TestCase):
                     allowed, reason = check_tool_allowed(tool, probes[tool], mode)
                     self.assertTrue(allowed, f"{tool} in {mode}: {reason}")
 
+    def test_create_plan_schema_asks_for_one_call(self):
+        # A plan run spent 6 reads before create_plan (7 steps, 66s). The schema
+        # must tell the model to write the plan in a single call and not to
+        # re-read the file afterwards for verification.
+        spec = next(
+            t["function"] for t in TOOLS_SCHEMA if t["function"]["name"] == "create_plan"
+        )
+        desc = spec["description"]
+        self.assertIn("TEK çağrıda", desc)
+        self.assertIn("yeniden okuma", desc)
+        self.assertIn("hedef dosyalar", spec["parameters"]["properties"]["content"]["description"])
+
 
 
 

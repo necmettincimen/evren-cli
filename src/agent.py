@@ -1842,14 +1842,17 @@ class AgentSession:
                 # keeps hitting. Nothing is sent on an ordinary step.
                 step_notes = self._turn_notes(step_count, max_steps, stalled_steps)
                 if (
-                    effective_mode == AgentMode.PLAN and step_count >= 4
+                    effective_mode == AgentMode.PLAN and step_count >= 2
                     and not any(k.startswith("create_plan:") for k in self._call_epochs)
                 ):
                     # The planner kept saying "let me make the edits" and ran
                     # probe commands for 12 steps; plan mode can only plan.
+                    # The nudge fires at step 2: a plan run that spent 6 reads
+                    # before create_plan took 7 steps and 66s for one file.
                     step_notes = (step_notes + "\n" if step_notes else "") + (
                         "[EVREN] Plan kipindesin: dosya düzenleyemezsin. Keşif yeter; şimdi create_plan ile "
-                        "planı yaz (hedef dosyalar, değişiklik, doğrulama)."
+                        "planı TEK çağrıda yaz (hedef dosyalar, değişiklik, doğrulama); yazdıktan sonra "
+                        "planı doğrulama için yeniden okuma."
                     )
                 outgoing = list(self.messages)
                 if step_notes:
