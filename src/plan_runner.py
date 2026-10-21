@@ -197,7 +197,9 @@ _HEADLESS_DIRECTIVE = (
     "Analiz ya da rapor yazıp bitirme: bulduğun her yeri HEMEN edit_file/write_file ile uygula. "
     "Bağımsız okuma ve aramaları AYNI turda birden çok araç çağrısıyla yap "
     "(view_file + search_code + find_files birlikte); dosyaları tek tek sırayla okuma. "
-    "Bitirmeden önce derlemeyi/çalıştırmayı tek komutla doğrula."
+    "Bitirmeden önce derlemeyi/çalıştırmayı tek komutla doğrula. "
+    "Büyük dosyayı TEK write_file çağrısında yazma (çıktı sınırında kesilir ve iş döngüye girer): "
+    "çağrı başına en çok ~2500 karakter; ilk parça write_file, devamı write_file(append=true)."
 )
 _RETRY_NOTE = (
     "\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. Bu kez analiz yazmadan, "

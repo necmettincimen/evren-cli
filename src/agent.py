@@ -78,6 +78,23 @@ _DELEGATE_INSTRUCTION = (
 )
 
 
+_CHUNKED_WRITE_NOTE = (
+    "[SİSTEM] Son write_file/edit_file çağrısı çıktı token sınırında kesildi ve ÇALIŞMADI. "
+    "Aynı çağrıyı tekrarlama. İçeriği en çok ~2500 karakterlik parçalara böl: ilk parçayı "
+    "write_file ile, sonrakileri write_file(append=true) ile ekle; her parçadan önce düşünmeyi kısa tut. "
+    "Dosya zaten kısmen yazıldıysa baştan yazma; view_file ile sonunu gör ve kaldığın yerden append et."
+)
+
+
+def _cut_tool_call_name(message) -> str:
+    """Kesilmiş (argümanı eksik) ilk araç çağrısının adı; yoksa ''."""
+    for call in getattr(message, "tool_calls", None) or []:
+        function = getattr(call, "function", None)
+        if function is not None and not _tool_arguments_complete([call]):
+            return getattr(function, "name", "") or ""
+    return ""
+
+
 def _stall_token_cap() -> int:
     """Ceiling for the doubled output budget on repeated stalls.
 
@@ -2143,6 +2160,10 @@ class AgentSession:
                     "Yanıt kesildi veya boş kaldı; daha geniş token bütçesiyle "
                     "sıradaki küçük adım için yeniden yönlendiriliyor."
                 )
+                if _cut_tool_call_name(message) in ("write_file", "edit_file"):
+                    # Büyük içerik tek çağrıda token tavanına çarpıyor; model aynı
+                    # çağrıyı baştan deneyip döngüye giriyor. Parçalı yazmaya zorla.
+                    self.messages.append({"role": "user", "content": _CHUNKED_WRITE_NOTE})
                 continue
             stalled_steps = 0
             text_continuations = 0
