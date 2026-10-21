@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.5.6] - 2026-10-21
+
+### Eklendi
+- plan `ssh`/`scp`: `identity` (özel anahtar) ve `ssh` için `sudo_pass_env` (sudo parolası ortam değişkeninden, `sudo -S bash -c` ile; plana sır yazılmaz).
+
 ## [3.5.5] - 2026-10-21
 
 ### Düzeltildi
