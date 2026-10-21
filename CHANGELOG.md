@@ -5,6 +5,14 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.5.4] - 2026-10-21
+
+### Düzeltildi
+- plan: alt süreç çıktısı Windows'ta cp1254 ile çözülürken çöküyordu (agent adımı `NoneType.strip`); tüm alt süreçler utf-8 + errors=replace okur.
+- plan `run`: Git Bash varsa POSIX kabukla çalışır (`tail -1`, `||`, `&&` cmd.exe'de bozuluyordu); `"shell": "cmd"` ile eski davranış.
+- plan `replace`: CRLF dosyalarda `
+` eşleşir, `flags` ("s","i","m") desteği, hiçbir dosyada eşleşme yoksa hata verir (`"required": false` ile atlanır); düz metin `with` içinde ters eğik çizgi artık yorumlanmaz.
+
 ## [3.5.0] - 2026-10-20
 
 ### Eklendi

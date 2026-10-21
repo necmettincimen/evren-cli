@@ -75,7 +75,7 @@ def op_scp(step, root, dry, ctx):
         cmd += ["-J", step["jump"]]
     local = lambda v: v if ":" in v and "@" in v.split(":")[0] else str(_p(root, v))  # noqa: E731
     cmd += [local(step["src"]), local(step["dst"])]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=int(step.get("timeout", 300)))
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=int(step.get("timeout", 300)))
     if r.returncode != 0:
         raise RuntimeError(_tail(r.stdout + r.stderr))
     return "kopyalandı"
