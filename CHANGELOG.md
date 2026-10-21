@@ -11,6 +11,9 @@ sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kura
 - plan `agent`: başsız yönerge güçlendirildi (analizle bitirme, aynı turda çoklu okuma/arama); `repo` git deposuysa ajan dosya değiştirmeden bitirince `retries` (varsayılan 1) kez uyarıyla yeniden dener, yine değişiklik yoksa adım hata verir (`require_changes: false` ile kapatılır).
 - usage.jsonl: her API çağrısına `latency_ms` eklendi (adım süresi ölçümü).
 
+### Düzeltildi
+- plan `push`: sabit `main` yerine deponun geçerli dalına (ya da `branch` alanına) push eder; master dallı depolarda başarısız oluyordu.
+
 ### Değiştirildi
 - view_file varsayılan penceresi 250→400 satır, azami 400→800 satır, 24k→40k karakter: büyük C# dosyaları için tur sayısı azalır.
 
