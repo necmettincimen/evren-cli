@@ -103,8 +103,10 @@ def _op_commit(step, root, dry):
         return f"commit: {msg[:60]}"
     repo = _p(root, step["repo"])
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
-    r = subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", msg], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return "commit atıldı" if r.returncode == 0 else "commit yok: " + (r.stdout + r.stderr).strip()[:120]
+    # Mesaj stdin'den utf-8 verilir: Windows'ta argv üzerinden geçen Türkçe karakterler çift kodlanıyordu (mojibake).
+    r = subprocess.run(["git", "-C", str(repo), "commit", "-q", "-F", "-"], input=msg.encode("utf-8"), capture_output=True)
+    r_out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    return "commit atıldı" if r.returncode == 0 else "commit yok: " + r_out.strip()[:120]
 
 
 def _op_push(step, root, dry, allow_push=False):
