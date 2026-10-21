@@ -114,7 +114,10 @@ def _op_push(step, root, dry, allow_push=False):
         raise PermissionError("push adımı için --allow-push gerekir (kullanıcı onayı)")
     if dry:
         return "push"
-    r = subprocess.run(["git", "-C", str(_p(root, step["repo"])), "push", "origin", "main"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    repo = str(_p(root, step["repo"]))
+    branch = step.get("branch") or subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                                                  text=True, encoding="utf-8", errors="replace").stdout.strip() or "main"
+    r = subprocess.run(["git", "-C", repo, "push", "origin", branch], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[-300:])
     return "push edildi"
