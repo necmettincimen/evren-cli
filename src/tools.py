@@ -118,7 +118,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Dosya oluşturur, tamamen yeniden yazar ya da append=true ile sonuna ekler.",
+            "description": "Dosya oluşturur, tamamen yeniden yazar ya da append=true ile sonuna ekler. Tek çağrıda en çok ~2500 karakter yaz; büyük dosyaları ilk parça write_file, sonrakiler append=true ile parça parça yaz (uzun çağrı token sınırında kesilir).",
             "parameters": {
                 "type": "object",
                 "properties": {
