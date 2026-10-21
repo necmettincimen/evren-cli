@@ -1,6 +1,7 @@
 """plan modu uzak/ağ adımları: ssh, scp, http, wait. LLM'siz, deterministik; sırlar plan dosyasına yazılmaz (${ENV} ile ortamdan).
 
-  {"op": "ssh",  "host": "user@ip", "jump": "user@jumpip", "cmd": "kubectl ...", "stdin_file": "x.yaml",
+  {"op": "ssh",  "host": "user@ip", "jump": "user@jumpip", "identity": "~/.ssh/id_x", "sudo_pass_env": "HOST_SUDO",
+                 "cmd": "kubectl ...", "stdin_file": "x.yaml",   # sudo_pass_env: komut `sudo -S bash -c` ile, parola ortamdan
                  "expect": "substr", "expect_regex": "...", "save": "out.txt", "save_as": "degisken", "timeout": 120}
   {"op": "scp",  "src": "yerel/ya/da/user@ip:yol", "dst": "user@ip:yol/ya/da/yerel", "jump": "user@jumpip"}
   {"op": "http", "method": "POST", "url": "https://...", "headers": {"Authorization": "Bearer ${DRONE_TOKEN}"},
@@ -16,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
 import re
 import ssl
 import subprocess
@@ -49,8 +51,18 @@ def _ssh_run(step: dict, root: Path) -> str:
     cmd = list(_SSH_BASE)
     if step.get("jump"):
         cmd += ["-J", step["jump"]]
-    cmd += [step["host"], step["cmd"]]
+    if step.get("identity"):
+        cmd += ["-i", os.path.expanduser(step["identity"])]
+    remote = step["cmd"]
     stdin = _p(root, step["stdin_file"]).read_bytes() if step.get("stdin_file") else None
+    if step.get("sudo_pass_env"):
+        # Parola plan dosyasına yazılmaz; sudo -S stdin'den okur, komut root kabuğunda çalışır.
+        pw = os.environ.get(step["sudo_pass_env"])
+        if pw is None:
+            raise RuntimeError(f"ortam değişkeni yok: {step['sudo_pass_env']}")
+        remote = "sudo -S -p '' bash -c " + shlex.quote(remote)
+        stdin = pw.encode() + b"\n" + (stdin or b"")
+    cmd += [step["host"], remote]
     r = subprocess.run(cmd, input=stdin, capture_output=True, timeout=int(step.get("timeout", 180)))
     out = (r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace"))
     if r.returncode not in step.get("ok_exit", [0]):
@@ -73,6 +85,8 @@ def op_scp(step, root, dry, ctx):
     cmd = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
     if step.get("jump"):
         cmd += ["-J", step["jump"]]
+    if step.get("identity"):
+        cmd += ["-i", os.path.expanduser(step["identity"])]
     local = lambda v: v if ":" in v and "@" in v.split(":")[0] else str(_p(root, v))  # noqa: E731
     cmd += [local(step["src"]), local(step["dst"])]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=int(step.get("timeout", 300)))
