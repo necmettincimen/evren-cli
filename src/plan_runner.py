@@ -122,11 +122,11 @@ def _op_push(step, root, dry, allow_push=False):
         raise RuntimeError(r.stderr.strip()[-300:])
     msg = "push edildi"
     if step.get("drone", True):
-        msg += "; " + _drone_trigger(repo, branch)
+        msg += "; " + _drone_trigger(repo, branch, step.get("drone_wait", 90))
     return msg
 
 
-def _drone_trigger(repo: str, branch: str) -> str:
+def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
     """Push sonrası Drone build'ini API'den tetikler (GitHub webhook gecikmesine bağımlılık kalmaz).
     DRONE_TOKEN yoksa atlanır; hata push'u düşürmez. Sunucu DRONE_SERVER (varsayılan drone.sentayazilimtest.space).
     Not: API tetiği Drone'da event=custom'dır; .drone.yml'de push pipeline'ı custom'ı da kabul etmelidir."""
@@ -140,14 +140,25 @@ def _drone_trigger(repo: str, branch: str) -> str:
         return "Drone tetiklenmedi (origin GitHub değil)"
     slug = f"{m.group(1)}/{m.group(2)}"
     server = os.environ.get("DRONE_SERVER", "https://drone.sentayazilimtest.space").rstrip("/")
+    sha = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace").stdout.strip()
     try:
         import json as _json
+        import time as _time
         import urllib.request
-        req = urllib.request.Request(f"{server}/api/repos/{slug}/builds?branch={branch}", method="POST",
-                                     headers={"Authorization": f"Bearer {tok}"})
+        hdr = {"Authorization": f"Bearer {tok}"}
+        # Önce webhook'un getirdiği build'i bekle (çift build olmasın); süre dolunca API'den tetikle.
+        deadline = _time.time() + float(wait_s)
+        while _time.time() < deadline:
+            with urllib.request.urlopen(urllib.request.Request(f"{server}/api/repos/{slug}/builds?per_page=5", headers=hdr), timeout=30) as resp:
+                for b in _json.load(resp):
+                    if b.get("after") == sha:
+                        return f"Drone build #{b.get('number')} webhook ile geldi ({slug})"
+            _time.sleep(10)
+        req = urllib.request.Request(f"{server}/api/repos/{slug}/builds?branch={branch}", method="POST", headers=hdr)
         with urllib.request.urlopen(req, timeout=30) as resp:
             n = _json.load(resp).get("number")
-        return f"Drone build #{n} tetiklendi ({slug})"
+        return f"webhook {int(wait_s)} sn içinde gelmedi, Drone build #{n} API ile tetiklendi ({slug})"
     except Exception as e:  # noqa: BLE001
         return f"Drone tetiklenemedi: {str(e)[:120]}"
 
