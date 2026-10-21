@@ -569,9 +569,9 @@ def _tools_for_mode_base(mode, include_ssh: bool = True) -> list[dict]:
 
 # view_file window: lines returned without a range / with an explicit range,
 # and a hard character ceiling for files with very long lines.
-VIEW_DEFAULT_LINES = 250
-VIEW_MAX_LINES = 400
-VIEW_MAX_CHARS = 24000
+VIEW_DEFAULT_LINES = 400
+VIEW_MAX_LINES = 800
+VIEW_MAX_CHARS = 40000
 
 
 def tool_view_file(path: str, start_line: int | None = None, end_line: int | None = None, workspace_root: Path | None = None) -> str:

@@ -773,7 +773,8 @@ class AgentSession:
 
         return summarize_messages(self.client, messages, model, on_response=_record)
 
-    def _record_usage(self, response: Any, *, step: int | None = None, model: str | None = None) -> None:
+    def _record_usage(self, response: Any, *, step: int | None = None, model: str | None = None,
+                      latency_ms: int | None = None) -> None:
         """Stores the last server-reported usage and appends it to the usage log.
 
         Only token counters reach `.evren/logs/usage.jsonl`; message content and
@@ -801,6 +802,7 @@ class AgentSession:
                 step=step,
                 mode=getattr(self.mode, "value", str(self.mode)),
                 workspace_root=self.workspace_root,
+                latency_ms=latency_ms,
             )
         except Exception:
             pass
@@ -1884,7 +1886,8 @@ class AgentSession:
 
             # Calibrate the estimator against server-reported usage.
             self.token_manager.calibrate_from_response(estimated, response)
-            self._record_usage(response, step=step_count)
+            self._record_usage(response, step=step_count,
+                               latency_ms=int((time.perf_counter() - request_started) * 1000))
             self._trace_request(response, request_started)
         except Exception:
             self._trace_request(None, request_started, error=True)
