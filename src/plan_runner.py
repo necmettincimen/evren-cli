@@ -120,7 +120,36 @@ def _op_push(step, root, dry, allow_push=False):
     r = subprocess.run(["git", "-C", repo, "push", "origin", branch], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[-300:])
-    return "push edildi"
+    msg = "push edildi"
+    if step.get("drone", True):
+        msg += "; " + _drone_trigger(repo, branch)
+    return msg
+
+
+def _drone_trigger(repo: str, branch: str) -> str:
+    """Push sonrası Drone build'ini API'den tetikler (GitHub webhook gecikmesine bağımlılık kalmaz).
+    DRONE_TOKEN yoksa atlanır; hata push'u düşürmez. Sunucu DRONE_SERVER (varsayılan drone.sentayazilimtest.space).
+    Not: API tetiği Drone'da event=custom'dır; .drone.yml'de push pipeline'ı custom'ı da kabul etmelidir."""
+    tok = os.environ.get("DRONE_TOKEN")
+    if not tok:
+        return "Drone tetiklenmedi (DRONE_TOKEN yok)"
+    url = subprocess.run(["git", "-C", repo, "remote", "get-url", "origin"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace").stdout.strip()
+    m = re.search(r"github\.com[:/]([^/]+)/([^/\s]+?)(?:\.git)?$", url)
+    if not m:
+        return "Drone tetiklenmedi (origin GitHub değil)"
+    slug = f"{m.group(1)}/{m.group(2)}"
+    server = os.environ.get("DRONE_SERVER", "https://drone.sentayazilimtest.space").rstrip("/")
+    try:
+        import json as _json
+        import urllib.request
+        req = urllib.request.Request(f"{server}/api/repos/{slug}/builds?branch={branch}", method="POST",
+                                     headers={"Authorization": f"Bearer {tok}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            n = _json.load(resp).get("number")
+        return f"Drone build #{n} tetiklendi ({slug})"
+    except Exception as e:  # noqa: BLE001
+        return f"Drone tetiklenemedi: {str(e)[:120]}"
 
 
 def _git_state(path: Path) -> str | None:

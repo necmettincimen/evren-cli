@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.1] - 2026-10-21
+
+### Eklendi
+- plan `push`: push sonrası Drone build'i API'den tetiklenir (`DRONE_TOKEN` ortamdan, sunucu `DRONE_SERVER`); GitHub webhook gecikmesi/kaybı build'i engellemez. `"drone": false` ile kapatılır; hata push'u düşürmez. Not: API tetiği `event=custom`'dır, `.drone.yml` push pipeline'ı `custom`'ı da kabul etmelidir.
+
 ## [3.6.0] - 2026-10-21
 
 ### Eklendi
