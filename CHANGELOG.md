@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.5.5] - 2026-10-21
+
+### Düzeltildi
+- plan `agent` adımı başsız `--yes` ile çalışır; yazma izni istemeden bırakıyordu.
+
 ## [3.5.4] - 2026-10-21
 
 ### Düzeltildi

@@ -121,7 +121,7 @@ def _op_agent(step, root, dry):
     if dry:
         return "agent adımı (kuru çalıştırmada atlandı)"
     directive = "\n\n[BAŞSIZ KİP] Yalnız bu dar görevi uygula; plan sunma, soru sorma."
-    cmd = [sys.executable, "-m", "src.cli", "-w", str(root), "--max-steps", str(step.get("max_steps", 80))]
+    cmd = [sys.executable, "-m", "src.cli", "-w", str(root), "--yes", "--max-steps", str(step.get("max_steps", 80))]
     if step.get("model"):
         cmd += ["-m", step["model"]]
     cmd += ["-p", step["prompt"] + directive]
