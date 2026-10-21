@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.3] - 2026-10-21
+
+### Düzeltildi
+- plan `push` Drone tetiği: API tetiği 401/404/500 ("Bad credentials": repo sahibi Drone kullanıcısının GitHub token'ı geçersiz) verirse repo `chown` ile token sahibine alınır ve bir kez yeniden denenir; tetik artık `commit=<sha>` ile gider.
+
 ## [3.6.2] - 2026-10-21
 
 ### Değiştirildi
