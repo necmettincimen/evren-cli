@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.2] - 2026-10-21
+
+### Değiştirildi
+- plan `push` Drone tetiği: önce webhook'un getirdiği build `drone_wait` (varsayılan 90 sn) beklenir, aynı commit için build görünürse tetiklenmez (çift build yok); süre dolunca API'den tetiklenir.
+
 ## [3.6.1] - 2026-10-21
 
 ### Eklendi
