@@ -19,6 +19,7 @@ Plan dosyası (JSON):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import re
 import subprocess
@@ -136,8 +137,27 @@ OPS = {"clone_tree": _op_clone_tree, "replace": _op_replace, "write": _op_write,
        "commit": _op_commit, "agent": _op_agent}
 
 
+def _load_secrets() -> int:
+    """~/.evren/secrets.env (KEY=VALUE satırları) ortamı doldurur; sırlar plan dosyasına ya da komut satırına yazılmaz.
+    Var olan ortam değişkenleri ezilmez."""
+    path = Path.home() / ".evren" / "secrets.env"
+    if not path.is_file():
+        return 0
+    n = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() and k.strip() not in os.environ:
+            os.environ[k.strip()] = v.strip().strip("'\"")
+            n += 1
+    return n
+
+
 def run_plan(plan_path: str, workspace: str, dry_run: bool = False, allow_push: bool = False, start: int = 1) -> int:
     root = Path(workspace).resolve()
+    _load_secrets()
     steps = json.loads(Path(plan_path).read_text(encoding="utf-8-sig"))["steps"]
     ctx: dict = {}
     for i, step in enumerate(steps, 1):
