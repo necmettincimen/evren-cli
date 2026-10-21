@@ -12,7 +12,7 @@ Plan dosyası (JSON):
     {"op": "commit", "repo": "portal-egp-sign", "message": "..."},
     {"op": "push", "repo": "portal-egp-sign"},                      # yalnız --allow-push ile
     {"op": "ssh" | "scp" | "http" | "wait", ...},                    # bkz. plan_ops_remote.py
-    {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80}
+    {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80, "repo": "x", "retries": 1, "require_changes": true}
   ]}
 """
 
@@ -120,19 +120,56 @@ def _op_push(step, root, dry, allow_push=False):
     return "push edildi"
 
 
+def _git_state(path: Path) -> str | None:
+    """HEAD + çalışma ağacı özeti; git deposu değilse None (değişiklik denetimi atlanır)."""
+    try:
+        st = subprocess.run(["git", "-C", str(path), "status", "--porcelain"], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60)
+        if st.returncode != 0:
+            return None
+        head = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60).stdout.strip()
+        return head + "\n" + st.stdout
+    except Exception:
+        return None
+
+
+_HEADLESS_DIRECTIVE = (
+    "\n\n[BAŞSIZ KİP] Yalnız bu dar görevi uygula; plan sunma, soru sorma. "
+    "Analiz ya da rapor yazıp bitirme: bulduğun her yeri HEMEN edit_file/write_file ile uygula. "
+    "Bağımsız okuma ve aramaları AYNI turda birden çok araç çağrısıyla yap "
+    "(view_file + search_code + find_files birlikte); dosyaları tek tek sırayla okuma. "
+    "Bitirmeden önce derlemeyi/çalıştırmayı tek komutla doğrula."
+)
+_RETRY_NOTE = (
+    "\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. Bu kez analiz yazmadan, "
+    "ilk turda ilgili dosyaları birlikte okuyup ikinci turda edit_file ile değişiklikleri uygula."
+)
+
+
 def _op_agent(step, root, dry):
+    """Dar anlamsal görev. `repo` (varsayılan kök) git deposuysa ajan bir dosya değiştirmeden bitirirse
+    `retries` (varsayılan 1) kez uyarıyla yeniden denenir; yine değişiklik yoksa adım hata verir
+    (`require_changes: false` ile kapatılır; salt rapor/keşif adımları için)."""
     if dry:
         return "agent adımı (kuru çalıştırmada atlandı)"
-    directive = "\n\n[BAŞSIZ KİP] Yalnız bu dar görevi uygula; plan sunma, soru sorma."
-    cmd = [sys.executable, "-m", "src.cli", "-w", str(root), "--yes", "--max-steps", str(step.get("max_steps", 80))]
-    if step.get("model"):
-        cmd += ["-m", step["model"]]
-    cmd += ["-p", step["prompt"] + directive]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
-                       timeout=int(step.get("timeout", 1800)))
-    if r.returncode != 0:
-        raise RuntimeError((r.stdout + r.stderr).strip()[-400:])
-    return (r.stdout.strip().splitlines() or ["tamam"])[-1][:200]
+    repo = _p(root, step.get("repo", "."))
+    before = _git_state(repo) if step.get("require_changes", True) else None
+    attempts = int(step.get("retries", 1)) + 1
+    last = "tamam"
+    for attempt in range(attempts):
+        cmd = [sys.executable, "-m", "src.cli", "-w", str(root), "--yes", "--max-steps", str(step.get("max_steps", 80))]
+        if step.get("model"):
+            cmd += ["-m", step["model"]]
+        cmd += ["-p", step["prompt"] + _HEADLESS_DIRECTIVE + (_RETRY_NOTE if attempt else "")]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                           timeout=int(step.get("timeout", 1800)))
+        if r.returncode != 0:
+            raise RuntimeError((r.stdout + r.stderr).strip()[-400:])
+        last = (r.stdout.strip().splitlines() or ["tamam"])[-1][:200]
+        if before is None or _git_state(repo) != before:
+            return last if not attempt else f"(2. denemede) {last}"
+    raise RuntimeError("ajan hiçbir dosyayı değiştirmedi (require_changes); son çıktı: " + last)
 
 
 OPS = {"clone_tree": _op_clone_tree, "replace": _op_replace, "write": _op_write, "run": _op_run,

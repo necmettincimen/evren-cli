@@ -68,6 +68,7 @@ def build_record(
     step: int | None = None,
     mode: str = "",
     ts: str | None = None,
+    latency_ms: int | None = None,
 ) -> dict[str, Any]:
     """Builds a whitelisted usage record from a raw SDK `usage` object or dict."""
     def field(name: str) -> Any:
@@ -97,6 +98,7 @@ def build_record(
         "cached_tokens": cached,
         "step": _as_int(step),
         "mode": _redact(str(mode))[:16],
+        "latency_ms": _as_int(latency_ms),
     }
 
 
@@ -129,10 +131,11 @@ def log_usage(
     step: int | None = None,
     mode: str = "",
     workspace_root: Path | None = None,
+    latency_ms: int | None = None,
 ) -> dict[str, Any] | None:
     """Appends one usage line. Returns the record, or None when nothing was usable."""
     try:
-        record = build_record(usage, model=model, step=step, mode=mode)
+        record = build_record(usage, model=model, step=step, mode=mode, latency_ms=latency_ms)
         if all(record[name] is None for name in ("prompt_tokens", "completion_tokens", "total_tokens")):
             return None
 

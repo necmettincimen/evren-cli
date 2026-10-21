@@ -5,6 +5,15 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.0] - 2026-10-21
+
+### Eklendi
+- plan `agent`: başsız yönerge güçlendirildi (analizle bitirme, aynı turda çoklu okuma/arama); `repo` git deposuysa ajan dosya değiştirmeden bitirince `retries` (varsayılan 1) kez uyarıyla yeniden dener, yine değişiklik yoksa adım hata verir (`require_changes: false` ile kapatılır).
+- usage.jsonl: her API çağrısına `latency_ms` eklendi (adım süresi ölçümü).
+
+### Değiştirildi
+- view_file varsayılan penceresi 250→400 satır, azami 400→800 satır, 24k→40k karakter: büyük C# dosyaları için tur sayısı azalır.
+
 ## [3.5.8] - 2026-10-21
 
 ### Düzeltildi
