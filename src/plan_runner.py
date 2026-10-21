@@ -19,6 +19,7 @@ Plan dosyası (JSON):
 from __future__ import annotations
 
 import json
+import shutil
 import re
 import subprocess
 import sys
@@ -45,7 +46,13 @@ def _op_clone_tree(step, root, dry):
 
 def _op_replace(step, root, dry):
     find, repl = step["find"], step["with"]
-    pat = re.compile(find if step.get("regex") else re.escape(find))
+    flags = sum({"s": re.S, "i": re.I, "m": re.M}[c] for c in step.get("flags", ""))
+    if step.get("regex"):
+        find = find.replace("\\n", "\\r?\\n")  # CRLF dosyalarda satir sonu da eslesir
+    else:
+        find = "\\r?\\n".join(re.escape(x) for x in find.split(chr(10)))
+    pat = re.compile(find, flags)
+    literal = repl if step.get("regex") else repl.replace("\\", "\\\\")
     files = changed = 0
     for path in sorted(root.glob(step["glob"])):
         if not path.is_file() or any(x in path.parts for x in (".git", "bin", "obj", "node_modules")):
@@ -55,11 +62,13 @@ def _op_replace(step, root, dry):
         except (UnicodeDecodeError, OSError):
             continue
         files += 1
-        new = pat.sub(repl, text)
+        new = pat.sub(literal, text)
         if new != text:
             changed += 1
             if not dry:
                 path.write_text(new, encoding="utf-8", newline="")
+    if step.get("required", True) and not dry and changed == 0:
+        raise RuntimeError(f"replace hicbir dosyada eslesmedi ({files} dosya tarandi); 'required': false ile atlanabilir")
     return f"{files} dosya tarandı, {changed} değişti"
 
 
@@ -74,7 +83,9 @@ def _op_write(step, root, dry):
 def _op_run(step, root, dry):
     if dry:
         return f"çalıştırılacak: {step['cmd']}"
-    r = subprocess.run(step["cmd"], shell=True, cwd=_p(root, step.get("cwd", ".")), capture_output=True, text=True,
+    bash = shutil.which("bash") if step.get("shell", "bash") == "bash" else None
+    cmd = [bash, "-c", step["cmd"]] if bash else step["cmd"]
+    r = subprocess.run(cmd, shell=not bash, cwd=_p(root, step.get("cwd", ".")), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=int(step.get("timeout", 900)))
     ok = r.returncode in step.get("ok_exit", [0])
     tail = (r.stdout + r.stderr).strip().splitlines()[-12:]
@@ -91,7 +102,7 @@ def _op_commit(step, root, dry):
         return f"commit: {msg[:60]}"
     repo = _p(root, step["repo"])
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
-    r = subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", msg], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", msg], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return "commit atıldı" if r.returncode == 0 else "commit yok: " + (r.stdout + r.stderr).strip()[:120]
 
 
@@ -100,7 +111,7 @@ def _op_push(step, root, dry, allow_push=False):
         raise PermissionError("push adımı için --allow-push gerekir (kullanıcı onayı)")
     if dry:
         return "push"
-    r = subprocess.run(["git", "-C", str(_p(root, step["repo"])), "push", "origin", "main"], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(_p(root, step["repo"])), "push", "origin", "main"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[-300:])
     return "push edildi"
@@ -114,7 +125,7 @@ def _op_agent(step, root, dry):
     if step.get("model"):
         cmd += ["-m", step["model"]]
     cmd += ["-p", step["prompt"] + directive]
-    r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
                        timeout=int(step.get("timeout", 1800)))
     if r.returncode != 0:
         raise RuntimeError((r.stdout + r.stderr).strip()[-400:])
