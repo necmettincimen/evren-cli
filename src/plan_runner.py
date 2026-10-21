@@ -145,6 +145,7 @@ def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
     try:
         import json as _json
         import time as _time
+        import urllib.error
         import urllib.request
         hdr = {"Authorization": f"Bearer {tok}"}
         # Önce webhook'un getirdiği build'i bekle (çift build olmasın); süre dolunca API'den tetikle.
@@ -155,10 +156,24 @@ def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
                     if b.get("after") == sha:
                         return f"Drone build #{b.get('number')} webhook ile geldi ({slug})"
             _time.sleep(10)
-        req = urllib.request.Request(f"{server}/api/repos/{slug}/builds?branch={branch}", method="POST", headers=hdr)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            n = _json.load(resp).get("number")
-        return f"webhook {int(wait_s)} sn içinde gelmedi, Drone build #{n} API ile tetiklendi ({slug})"
+        def _post(path):
+            r = urllib.request.Request(f"{server}{path}", method="POST", headers=hdr, data=b"")
+            with urllib.request.urlopen(r, timeout=60) as resp:
+                body = resp.read().decode("utf-8", "replace")
+                return _json.loads(body) if body.startswith("{") else {}
+        trig = f"/api/repos/{slug}/builds?branch={branch}&commit={sha}"
+        try:
+            n = _post(trig).get("number")
+            how = "API ile tetiklendi"
+        except urllib.error.HTTPError as e:
+            # 404 "Bad credentials"/401/500: repo sahibi Drone kullanıcısının GitHub token'ı geçersiz.
+            # Repoyu token sahibine alıp (chown) bir kez daha dene; kalıcı onarım.
+            if e.code not in (401, 404, 500):
+                raise
+            _post(f"/api/repos/{slug}/chown")
+            n = _post(trig).get("number")
+            how = "repo sahipliği (chown) onarılıp API ile tetiklendi"
+        return f"webhook {int(wait_s)} sn içinde gelmedi, Drone build #{n} {how} ({slug})"
     except Exception as e:  # noqa: BLE001
         return f"Drone tetiklenemedi: {str(e)[:120]}"
 
