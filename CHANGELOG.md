@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.7.2] - 2026-10-22
+
+### Düzeltildi
+- `agent` adımında `repo` verilmeden `worktree`/`commit`/`push` istenirse adım artık açık hata verir; önceden çalışma alanı git deposu olmadığı için sözleşme, worktree yalıtımı ve push sessizce devre dışı kalıyordu.
+
 ## [3.7.1] - 2026-10-22
 
 ### Eklendi

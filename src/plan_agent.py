@@ -142,6 +142,8 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
     label = _slug(step.get("_label", "agent"))
     repo = resolve(root, step.get("repo", "."))
     is_git = _is_git(repo)
+    if (step.get("worktree") or step.get("commit") or step.get("push")) and not is_git:
+        raise ValueError("worktree/commit/push için `repo` (git deposu) belirtilmeli; belirtilmezse sözleşme sessizce devre dışı kalıyordu")
     need_changes = bool(step.get("require_changes", True)) and is_git
     need_commit = bool(step.get("commit", False)) and is_git
     report = step.get("report")
