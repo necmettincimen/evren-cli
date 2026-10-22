@@ -320,6 +320,17 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             elif report and outcome is None and want_outcome:
                 missing.append("rapor sonuç satırı yok")
                 notes = notes + [_NOTE_NO_OUTCOME]
+            if not missing and step.get("verify") and (outcome is None or outcome not in NO_CHANGE_OUTCOMES) \
+                    and (not is_git or _head(work_repo) != head_before or _state(work_repo) != before):
+                # Doğrulama kapısı: değişiklik yapan ajanın işi ana ağaca/push'a girmeden derlenip doğrulanır
+                # (derlenmeyen ara kayıt Drone'u kırıyordu: #350).
+                vr = subprocess.run(step["verify"], shell=True, cwd=str(work_repo), capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=int(step.get("verify_timeout", 900)))
+                if vr.returncode != 0:
+                    tail = "\n".join((vr.stdout + vr.stderr).strip().splitlines()[-12:])
+                    missing.append("doğrulama (verify) başarısız")
+                    notes = [("\n\n[UYARI] Doğrulama komutu başarısız oldu (`" + step["verify"][:120] + "`). Hatayı düzelt, "
+                              "aynı komutla derlendiğini doğrula, sonra commit et. Çıktı:\n" + tail)]
             if missing and asks_question(text):
                 missing.append("soru sorarak bitti")
                 notes = notes + [_NOTE_QUESTION]
