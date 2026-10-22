@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.5] - 2026-10-22
+
+### Düzeltildi
+- `push` adımındaki Drone isteklerine `User-Agent` eklendi; Drone'un önündeki katman varsayılan `Python-urllib` kimliğini 403 ile reddediyordu ("Drone tetiklenemedi: 403", webhook gelmeyen/`[ci skip]` push'larda API tetiği çalışmıyordu).
+
 ## [3.6.4] - 2026-10-21
 
 ### Düzeltildi
