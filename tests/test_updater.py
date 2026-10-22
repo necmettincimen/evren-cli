@@ -47,6 +47,7 @@ def test_windows_pip_update_is_deferred_without_running_pip(monkeypatch):
     monkeypatch.setattr(updater, "is_git_checkout", lambda root=None: False)
     monkeypatch.setattr(updater, "_log", lambda _: None)
     monkeypatch.setattr(updater, "update_from_pip", MagicMock(side_effect=AssertionError))
+    monkeypatch.setattr(updater, "sync_source_clone", lambda: (True, "ok"))
     restart = MagicMock()
     monkeypatch.setattr(updater, "restart_process", restart)
     with patch.object(updater.subprocess, "Popen") as popen:
@@ -58,6 +59,45 @@ def test_windows_pip_update_is_deferred_without_running_pip(monkeypatch):
     assert args[:2] == [sys.executable, "-c"]
     assert args[3] == str(updater.os.getpid())
     assert args[5:] == updater._pip_command()
+
+
+def test_source_clone_is_cloned_once_then_only_fetched(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    calls = []
+
+    def fake_run(cmd, cwd=None, timeout=300):
+        calls.append(cmd)
+        return 0, ""
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    ok, _ = updater.sync_source_clone()
+    assert ok is True
+    assert calls[0][:2] == ["git", "clone"]
+
+    # Simulate the clone existing: the next sync must fetch, not clone again.
+    (updater.get_source_dir() / ".git").mkdir(parents=True)
+    calls.clear()
+    ok, _ = updater.sync_source_clone()
+    assert ok is True
+    assert calls[0][:4] == ["git", "-C", str(updater.get_source_dir()), "fetch"]
+    assert calls[1][3:] == ["reset", "--hard", "FETCH_HEAD"]
+    assert not any(c[:2] == ["git", "clone"] for c in calls)
+
+
+def test_source_clone_failure_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(updater, "_run", lambda cmd, cwd=None, timeout=300: (128, "fatal: no network"))
+    ok, msg = updater.sync_source_clone()
+    assert ok is False
+    assert "fatal: no network" in msg
+
+
+def test_pip_command_installs_local_clone_without_build_isolation(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    cmd = updater._pip_command()
+    assert "--no-build-isolation" in cmd
+    assert "--force-reinstall" not in cmd
+    assert cmd[-1] == str(updater.get_source_dir())
 
 
 
