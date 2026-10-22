@@ -64,6 +64,7 @@ from src.ui import (
 # Empty or truncated-tool turns. A single miss is normal for thinking models;
 # giving up on the second one aborts real tasks. Budget doubles on each miss.
 _MAX_STALLS = 4
+_MAX_API_RETRIES = 12
 
 # Sub-agent (delegate) instruction: the clean-context prompt the delegated
 # research task runs under. {task} is substituted at delegation time.
@@ -2113,17 +2114,24 @@ class AgentSession:
                     step_count, max_steps, effective_mode, stalled_steps, output_budget,
                 )
             except Exception as e:
-                if isinstance(e, EvrenApiError) and e.retryable and stalled_steps + 1 < _MAX_STALLS:
-                    stalled_steps += 1
-                    print_warning(
-                        "Model çağrısı bağlantı veya sunucu hatasıyla kesildi; "
-                        f"yeniden deneniyor ({stalled_steps}/{_MAX_STALLS})."
-                    )
-                    continue
+                if isinstance(e, EvrenApiError) and e.retryable:
+                    # Geçici API hatası "takıldı" sayacına yazılmaz (birkaç 5xx ajanı öldürüyordu);
+                    # ayrı bütçe, artan bekleme ve hatanın asıl nedeni görünür.
+                    self._api_retries = getattr(self, "_api_retries", 0) + 1
+                    if self._api_retries <= _MAX_API_RETRIES:
+                        cause = f"{type(e).__name__} HTTP {e.status_code}: {str(e)[:200]}"
+                        print_warning(
+                            "Model çağrısı bağlantı veya sunucu hatasıyla kesildi; "
+                            f"yeniden deneniyor ({self._api_retries}/{_MAX_API_RETRIES}) - {cause}"
+                        )
+                        step_count -= 1
+                        time.sleep(min(60.0, 3.0 * 2 ** (self._api_retries - 1)))
+                        continue
                 detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 print_error(f"Model çağrısı sırasında hata oluştu: {detail}")
                 return f"Hata: {detail}"
 
+            self._api_retries = 0
             kind, message, _ = self._classify_response(response)
             if kind == "content_filter":
                 error = "HATA: Model yanıtı içerik filtresi nedeniyle durdu; görev tamamlanmadı."

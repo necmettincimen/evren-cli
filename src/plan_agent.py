@@ -131,7 +131,7 @@ def _exclude_artifacts(repo: Path) -> None:
     path = Path(out) if Path(out).is_absolute() else repo / out
     path.parent.mkdir(parents=True, exist_ok=True)
     have = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
-    add = [x for x in (".evren/", "/agent.md", "/changelog.md") if x not in have]
+    add = [x for x in (".evren/", "/agent.md", "/changelog.md", "/.evren-rapor.md") if x not in have]
     if add:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write("\n".join(add) + "\n")
