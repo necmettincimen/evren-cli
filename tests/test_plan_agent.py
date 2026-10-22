@@ -254,3 +254,25 @@ def test_step_limit_continues_with_larger_budget(ws, monkeypatch):
                                "max_steps": 60, "_label": "t-15"}, root, False, _resolve)
     assert seen == [60, 90] and "[sonuç: fixed]" in out
     assert (repo / "yarim.txt").exists() and (repo / "tamam.txt").exists()
+
+
+def _py(code):
+    import sys
+    return f'"{sys.executable}" -c "{code}"'
+
+
+def test_verify_gate_blocks_broken_work(ws, monkeypatch):
+    root, repo = ws
+    _fake(monkeypatch, lambda wd: (wd / "bozuk.txt").write_text("x"))
+    with pytest.raises(RuntimeError, match="verify"):
+        plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-16",
+                             "verify": _py("import sys; sys.exit(1)")}, root, False, _resolve)
+    assert not (repo / "bozuk.txt").exists()          # ana ağaca girmedi
+
+
+def test_verify_gate_passes_good_work(ws, monkeypatch):
+    root, repo = ws
+    _fake(monkeypatch, lambda wd: (wd / "iyi.txt").write_text("x"))
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-17",
+                               "verify": _py("import sys; sys.exit(0)")}, root, False, _resolve)
+    assert "ana ağaca alındı" in out and (repo / "iyi.txt").exists()

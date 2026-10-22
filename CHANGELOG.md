@@ -10,6 +10,11 @@ sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kura
 ### Düzeltildi
 -  kurumsal proxy arkasında  indiremiyor, 407 hatasıyla başarısız oluyordu. Güncelleme artık her seferinde GitHub'dan paket indirmek yerine kalıcı bir kaynak klonunda () çalışır: ilk seferde klonlanır, sonra yalnızca yeni commit'ler çekilir. Kurulum yerel klondan build izolasyonu kapalı yapılır.
 
+## [3.9.1] - 2026-10-22
+
+### Eklendi
+- `agent` adımı `verify` (shell komutu, `verify_timeout` sn, varsayılan 900): değişiklik yapan ajanın işi ana ağaca alınmadan/push edilmeden ÖNCE ajan kopyasında çalıştırılır (örn. `dotnet build Presentation/Presentation.csproj -v q --nologo`). Başarısızsa çıktı kuyruğu ajana uyarı olarak verilip yeniden denenir; hâlâ başarısızsa iş ana ağaca girmez. Önceden adım sınırında alınan yarım "ara kayıt" ya da derlenmeyen son hâl sözleşmeyi (değişiklik+commit+rapor) karşıladığı için merge+push edilip Drone'u kırabiliyordu (#350). Kodsuz sonuçlarda (ZATEN ÇÖZÜLMÜŞ/FRONTEND/...) doğrulama çalıştırılmaz.
+
 ## [3.9.0] - 2026-10-22
 
 ### Eklendi
