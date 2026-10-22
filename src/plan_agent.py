@@ -7,6 +7,7 @@ eksiğe özel uyarıyla yeniden denenir, yine sağlanmazsa HATA verir:
   - `report` (yol): ajan bu dosyayı yazmış ve boş olmamalı (salt rapor/keşif adımları için `require_changes: false` ile);
   - ajanın son sözü soru ile bitmemeli ("onay ister misin?" gibi) — soru sorarak biten çıktı eksik sayılır.
 Ajanın TÜM çıktısı `reports/agent-logs/<etiket>-a<deneme>.log` dosyasına yazılır; ekranda yalnız son satır + yol görünür.
+`push: true`: iş ana ağaca alınınca Evren hemen push eder (Drone sonucunu bekler; pushlar sıralı) — `--allow-push` gerekir.
 `worktree: true` (repo != kök): iş `.evren/worktrees/<etiket>` altındaki geçici git worktree'de ve `evren/<etiket>` dalında
 yapılır, bitince ana ağaca ff-only/cherry-pick ile alınır; yarım kalan iş ana ağacı kirletmez. `parallel` adımı alt
 adımları eşzamanlı koşturur (agent alt adımlarında worktree varsayılan açık).
@@ -25,6 +26,7 @@ from pathlib import Path
 _PRINT_LOCK = threading.Lock()
 _MERGE_LOCK = threading.Lock()
 _PROGRESS_EVERY_S = 30
+PUSH_HOOK = None  # plan_runner doldurur: callable(step) -> özet (kilitli _op_push)
 
 _HEADLESS_DIRECTIVE = (
     "\n\n[BAŞSIZ KİP] Yalnız bu dar görevi uygula; plan sunma, soru sorma, onay isteme. "
@@ -175,6 +177,7 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
         (root / report).unlink()  # eski sonuç yeni koşunun sonucu sayılmasın
     before = _state(work_repo) if (need_changes or need_commit) else None
     head_before = _head(work_repo) if is_git else None
+    head_before_main = _head(repo) if is_git else None
     notes: list[str] = []
     last = "tamam"
     problems = ""
@@ -220,7 +223,10 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                         merged = f" [ana ağaca alındı: {_merge_back(repo, branch, base)}]"
                     _git(repo, "worktree", "remove", "--force", str(work_repo))
                     _git(repo, "branch", "-D", branch)
-                return (f"(deneme {attempt + 1}) " if attempt else "") + last + merged + suffix
+                pushed = ""
+                if step.get("push") and is_git and PUSH_HOOK is not None and _head(repo) != head_before_main:
+                    pushed = " [push: " + PUSH_HOOK(step) + "]"
+                return (f"(deneme {attempt + 1}) " if attempt else "") + last + merged + pushed + suffix
             problems = ", ".join(missing)
             _say(f"  ! {label} deneme {attempt + 1}/{attempts} eksik: {problems}")
         raise RuntimeError(f"ajan sözleşmeyi karşılamadı ({problems}); son çıktı: {last} (günlük: reports/agent-logs/{label}-a*.log)"

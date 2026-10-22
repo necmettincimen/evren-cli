@@ -13,7 +13,7 @@ Plan dosyası (JSON):
     {"op": "push", "repo": "portal-egp-sign"},                      # yalnız --allow-push ile
     {"op": "ssh" | "scp" | "http" | "wait", ...},                    # bkz. plan_ops_remote.py
     {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80, "repo": "x", "retries": 1,
-     "require_changes": true, "commit": false, "report": "reports/x.md", "worktree": false, "commit_message": "..."},
+     "require_changes": true, "commit": false, "push": false, "report": "reports/x.md", "worktree": false, "commit_message": "..."},
     {"op": "parallel", "max_workers": 3, "steps": [ {agent...}, {agent...} ]}   # agent alt adımlarında worktree varsayılan açık
   ]}
 """
@@ -26,6 +26,7 @@ import shutil
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from src import plan_agent
@@ -256,6 +257,16 @@ OPS = {"clone_tree": _op_clone_tree, "replace": _op_replace, "write": _op_write,
        "commit": _op_commit, "agent": _op_agent}
 
 
+_PUSH_LOCK = threading.Lock()
+
+
+def _locked_push(step, root, dry, allow_push):
+    """agent `push: true`: eşzamanlı ajanların pushları sıralanır (Drone izleme durumu küresel)."""
+    keep = {k: step[k] for k in ("branch", "drone", "drone_wait", "drone_result", "drone_timeout") if k in step}
+    with _PUSH_LOCK:
+        return _op_push({"repo": step["repo"], **keep}, root, dry, allow_push)
+
+
 def _op_parallel(step, root, dry, ctx=None):
     return plan_agent.op_parallel(step, root, dry, OPS, _p, expand, ctx or {})
 
@@ -283,6 +294,7 @@ def run_plan(plan_path: str, workspace: str, dry_run: bool = False, allow_push: 
     _load_secrets()
     steps = json.loads(Path(plan_path).read_text(encoding="utf-8-sig"))["steps"]
     ctx: dict = {}
+    plan_agent.PUSH_HOOK = lambda s: _locked_push(s, root, dry_run, allow_push)
     for i, step in enumerate(steps, 1):
         if i < start:
             continue

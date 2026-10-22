@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.7.1] - 2026-10-22
+
+### Eklendi
+- `agent` adımına `push: true`: iş ana ağaca alınır alınmaz Evren o repoyu hemen push eder (Drone sonucunu bekler, `--allow-push` gerekir). Paralel adımlarda pushlar kilitle sıralanır; yavaş/hatalı bir ajan bitmiş işlerin push'unu bekletmez. Ana ağaca bir şey alınmadıysa push yapılmaz.
+
 ## [3.7.0] - 2026-10-22
 
 ### Eklendi
