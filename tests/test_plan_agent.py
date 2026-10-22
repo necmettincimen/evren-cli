@@ -105,3 +105,10 @@ def test_no_push_when_nothing_merged(ws, monkeypatch):
     with pytest.raises(RuntimeError):
         plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "push": True, "_label": "t-6"}, root, False, _resolve)
     assert calls == []
+
+
+def test_contract_options_require_repo(ws, monkeypatch):
+    root, repo = ws
+    _fake(monkeypatch, lambda wd: None)
+    with pytest.raises(ValueError, match="repo"):
+        plan_agent.op_agent({"prompt": "x", "worktree": True, "commit": True, "_label": "t-7"}, root, False, _resolve)
