@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.1] - 2026-10-22
+
+### Düzeltildi
+-  kurumsal proxy arkasında  indiremiyor, 407 hatasıyla başarısız oluyordu. Güncelleme artık her seferinde GitHub'dan paket indirmek yerine kalıcı bir kaynak klonunda () çalışır: ilk seferde klonlanır, sonra yalnızca yeni commit'ler çekilir. Kurulum yerel klondan build izolasyonu kapalı yapılır.
+
 ## [3.9.0] - 2026-10-22
 
 ### Eklendi

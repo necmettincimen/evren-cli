@@ -7,8 +7,8 @@ Self-update mechanism for EVREN CLI.
      olduğunu tespit eder.
   2. Git checkout ise `git pull --ff-only` ile en son sürümü çeker ve
      editable kurulumu tazeler.
-  3. Aksi halde paketi doğrudan GitHub deposundan yeniden kurar
-     (`pip install --upgrade git+https://github.com/necmettincimen/evren-cli.git`).
+  3. Aksi halde kalıcı bir kaynak klonunu (%LOCALAPPDATA%/evren-cli/source) ilk
+     seferde klonlar, sonra yalnızca yeni commit'leri çeker ve paketi o klondan kurar.
   4. İsteğe bağlı olarak süreci yeni kodla yeniden başlatır (os.execv).
 
 Tüm işlemler .evren/logs/update.log dosyasına kaydedilir.
@@ -17,6 +17,7 @@ Tüm işlemler .evren/logs/update.log dosyasına kaydedilir.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -30,8 +31,10 @@ REPO_OWNER = "necmettincimen"
 REPO_NAME = "evren-cli"
 REPO_HTTPS = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_GIT_URL = f"{REPO_HTTPS}.git"
+SOURCE_BRANCH = "master"
 
-# pip ile kurulum için kullanılan hedef (git+https).
+# pip ile kurulum için kullanılan hedef (git+https). Artık yalnızca bilgi amaçlı;
+# kurulum yerel kaynak klonundan yapılır (bkz. sync_source_clone).
 PIP_TARGET = f"git+{REPO_GIT_URL}"
 
 
@@ -127,7 +130,10 @@ def update_from_git(root: Path | None = None) -> tuple[bool, str]:
 
 
 def update_from_pip() -> tuple[bool, str]:
-    """Paketi doğrudan GitHub deposundan yeniden kurar."""
+    """Kaynak klonunu günceller, paketi yerel klondan kurar."""
+    ok, msg = sync_source_clone()
+    if not ok:
+        return False, msg
     code, out = _run(_pip_command(), timeout=600)
     if code != 0:
         return False, f"pip kurulumu başarısız oldu:\n{out.strip()}"
@@ -174,21 +180,67 @@ def update_is_deferred(root: Path | None = None) -> bool:
     return os.name == "nt" and not is_git_checkout(root or get_project_root())
 
 
+def get_source_dir() -> Path:
+    """Kalıcı kaynak klonunun yolu."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "evren-cli" / "source"
+
+
+def sync_source_clone() -> tuple[bool, str]:
+    """Kaynak klonunu son commit'e getirir.
+
+    İlk seferde sığ bir klon alınır; sonraki güncellemelerde yalnızca yeni
+    commit'ler indirilir ve paket dosyaları yeniden indirilmez. Git, pip'in
+    build izolasyonundaki PyPI isteğinin aksine kurumsal proxy'de 407 almaz.
+    """
+    target = get_source_dir()
+    if (target / ".git").exists():
+        action = "git fetch"
+        code, out = _run(
+            ["git", "-C", str(target), "fetch", "--depth", "1", "origin", SOURCE_BRANCH],
+            timeout=300,
+        )
+        if code == 0:
+            code, out = _run(
+                ["git", "-C", str(target), "reset", "--hard", "FETCH_HEAD"], timeout=120
+            )
+    else:
+        action = "git clone"
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        code, out = _run(
+            ["git", "clone", "--depth", "1", "--branch", SOURCE_BRANCH, REPO_GIT_URL, str(target)],
+            timeout=600,
+        )
+    if code != 0:
+        return False, f"{action} başarısız oldu:\n{out.strip()}"
+    return True, out.strip() or "Kaynak güncel."
+
+
 def _pip_command() -> list[str]:
+    """Yerel klondan kurulum. Build izolasyonu kapalıdır: setuptools PyPI'dan indirilmez.
+
+    `--upgrade` yalnızca sürümü değişen paketleri ve eksik bağımlılıkları indirir.
+    """
     return [
         sys.executable,
         "-m",
         "pip",
         "install",
         "--upgrade",
-        "--force-reinstall",
-        "--no-cache-dir",
-        PIP_TARGET,
+        "--no-build-isolation",
+        str(get_source_dir()),
     ]
 
 
 def schedule_deferred_pip_update() -> tuple[bool, str]:
     """Run pip in a new console after this process releases evren.exe."""
+    # Git işlemi bu süreçte yapılır (evren.exe'ye dokunmaz); pip ertelenir.
+    ok, msg = sync_source_clone()
+    if not ok:
+        _log(f"ERROR: kaynak klonu güncellenemedi: {msg}")
+        return False, msg
     args = [
         sys.executable, "-c", _DEFERRED_PIP_SCRIPT,
         str(os.getpid()), str(_log_path()), *_pip_command(),
