@@ -137,3 +137,17 @@ def test_msys_path_rewritten_in_prompt(ws, monkeypatch):
     msys = "/" + str(repo)[0].lower() + str(repo)[2:].replace("\\", "/")
     plan_agent.op_agent({"prompt": f"cd {msys} && build", "repo": "app", "worktree": True, "_label": "t-9"}, root, False, _resolve)
     assert ".evren/worktrees/t-9" in seen["p"].split("ANA AĞAÇ")[0].replace("\\", "/")
+
+
+def test_workdir_scopes_agent_and_moves_report(ws, monkeypatch):
+    root, repo = ws
+    seen = {}
+    def run_once(cmd, logpath, label, timeout):
+        seen["w"] = Path(cmd[cmd.index("-w") + 1]); seen["p"] = cmd[cmd.index("-p") + 1]
+        (seen["w"] / ".evren-rapor.md").write_text("teshis")
+        logpath.parent.mkdir(parents=True, exist_ok=True); logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    out = plan_agent.op_agent({"prompt": "x", "repo": ".", "workdir": "app", "worktree": False, "require_changes": False,
+                               "report": "reports/t.md", "_label": "t-10"}, root, False, _resolve)
+    assert seen["w"] == repo.resolve() and (root / "reports" / "t.md").read_text() == "teshis" and "rapor: reports/t.md" in out
+    assert "HIZ KURALLARI" in seen["p"]
