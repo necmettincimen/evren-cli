@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.7.4] - 2026-10-22
+
+### Düzeltildi
+- worktree kipinde ajan `git add -A` ile geçici rapor dosyasını (`.evren-rapor.md`) kendi commit'ine katıyor, Evren sonradan silip ikinci bir "temizlik" commit'i atıyordu (geçmişte ekle/sil çiftleri kalıyordu). Dosya artık repo `info/exclude`'una eklenir; hiçbir commit'e girmez.
+
+## [3.7.4] - 2026-10-22
+
+### Düzeltildi
+- Geçici API hataları (5xx, zaman aşımı, bağlantı) ajanın "takıldı" sayacına (`_MAX_STALLS`=4) yazılıyordu; birkaç ardışık hata ajanı düşürüyordu. Artık ayrı bütçe (12 deneme), artan bekleme (3 sn'den 60 sn'ye) ve adım hakkı korunur; başarılı yanıtta sayaç sıfırlanır.
+- Yeniden deneme uyarısı hatanın asıl nedenini (HTTP kodu ve mesaj) gösterir; önceden istisna atılıyordu.
+
 ## [3.7.3] - 2026-10-22
 
 ### Düzeltildi
