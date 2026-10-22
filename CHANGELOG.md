@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.7] - 2026-10-22
+
+### Düzeltildi
+- Açılışta Brief isteminin üstünde beliren "Kota: ..." satırı kaldırıldı: kota sorgusu artık banner'ın "Kalan Günlük Kota" satırında gösteriliyor ve istem açılmadan önce tamamlanıyor (sorgu 5 sn'den uzun sürerse banner "kontrol ediliyor..." gösterir).
+
 ## [3.6.6] - 2026-10-22
 
 ### Eklendi

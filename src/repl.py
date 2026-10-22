@@ -810,7 +810,11 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
 
     client = EvrenClient(default_model=initial_model)
 
-    # 4.2: quota + terms check runs in the background so the prompt appears at once.
+    # 4.2: quota check runs in the background. Its result is shown in the banner
+    # (joined below) instead of printed from the thread, because a late print
+    # lands on top of the "Brief >" prompt.
+    quota_result: dict[str, str] = {}
+
     def _startup_checks() -> None:
         try:
             quota_data = None
@@ -835,9 +839,9 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
                 qs = str(remaining)
             if quota_data.get("masked"):
                 qs += f" (anahtar {quota_data['masked']})"
-            print_info(f"Kota: {qs}")
+            quota_result["text"] = qs
         except Exception as e:
-            print_warning(f"Kota okunamadı: {type(e).__name__}: {e}")
+            quota_result["text"] = f"okunamadı ({type(e).__name__})"
 
     try:
         ensure_terms_accepted(interactive=True, api_key=client.api_key, silent_ok=True)
@@ -846,8 +850,10 @@ def start_repl(workspace_path: str | None = None, initial_model: str | None = No
 
     import threading
 
-    threading.Thread(target=_startup_checks, daemon=True).start()
-    quota_str = "kontrol ediliyor..."
+    quota_thread = threading.Thread(target=_startup_checks, daemon=True)
+    quota_thread.start()
+    quota_thread.join(timeout=5)
+    quota_str = quota_result.get("text", "kontrol ediliyor...")
 
     session = AgentSession(client=client, workspace_root=workspace_root, model=initial_model)
 
