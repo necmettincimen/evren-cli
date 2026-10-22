@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.8.3] - 2026-10-22
+
+### Düzeltildi
+- `run` adımı gizli/arka plan süreçlerinde (`Start-Process -WindowStyle Hidden`) PATH'teki Windows WSL yönlendiricisi `bash.exe`'ye (System32) düşüp `execvpe(/bin/bash) failed` ile her seferinde çıkış kodu 1 veriyordu. Git Bash (`C:\Program Files\Gitinash.exe`) tercih edilir, WSL yönlendiricisi atlanır.
+
 ## [3.8.2] - 2026-10-22
 
 ### Eklendi

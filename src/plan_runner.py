@@ -85,10 +85,25 @@ def _op_write(step, root, dry):
     return f"yazıldı: {path}"
 
 
+def _find_bash() -> str | None:
+    """Git Bash tercih edilir: gizli/arka plan süreçlerinde PATH'teki `bash` Windows'un WSL yönlendiricisi
+    (System32\bash.exe) olabilir; /bin/bash bulunamadığı için her `run` adımı çıkış kodu 1 verirdi."""
+    if os.name == "nt":
+        for cand in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe",
+                     r"C:\Program Files (x86)\Git\bin\bash.exe"):
+            if os.path.isfile(cand):
+                return cand
+        found = shutil.which("bash")
+        if found and "system32" in found.lower().replace("/", "\\"):
+            return None
+        return found
+    return shutil.which("bash")
+
+
 def _op_run(step, root, dry):
     if dry:
         return f"çalıştırılacak: {step['cmd']}"
-    bash = shutil.which("bash") if step.get("shell", "bash") == "bash" else None
+    bash = _find_bash() if step.get("shell", "bash") == "bash" else None
     cmd = [bash, "-c", step["cmd"]] if bash else step["cmd"]
     r = subprocess.run(cmd, shell=not bash, cwd=_p(root, step.get("cwd", ".")), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=int(step.get("timeout", 900)))
