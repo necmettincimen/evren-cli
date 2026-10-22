@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.8.1] - 2026-10-22
+
+### Düzeltildi
+- `find_files` ve özyinelemeli `list_dir` önce `Path.rglob` ile TÜM ağacı yürüyüp sonra filtreliyordu: `bin/`, `obj/`, `node_modules/` içine iniyor, `.gitignore` yalnız kök git deposuysa uygulanıyordu (çalışma alanı kökü depo değilse hiç). Tek arama 150-180 sn sürüp zaman aşımına düşüyordu. Artık yürüyüş budamalı (`bin`, `obj`, `node_modules`, `.git`, `.venv`, `.vs`, `.idea`, `TestResults`, `coverage`, `.next`, `.nuget`, `packages`, `.evren` hiç girilmez) ve iç içe her git deposunda dosyalar `git ls-files --cached --others --exclude-standard` ile listelenir (`.gitignore` saygılı, yürümeden).
+- `run_command` içindeki özyinelemeli `grep -r` çağrılarına (kendi `--exclude-dir`'i yoksa) `bin/obj/node_modules/.git/.evren` hariç tutma bayrakları otomatik eklenir; `git grep` ve PowerShell/Python kipleri etkilenmez.
+
 ## [3.8.0] - 2026-10-22
 
 ### Eklendi
