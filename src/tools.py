@@ -856,7 +856,7 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
         return f"HATA: Belirtilen yol bir klasör değil: {resolved}"
 
     entries = []
-    iterator = resolved.rglob("*") if recursive else resolved.iterdir()
+    iterator = _list_recursive(resolved, root) if recursive else resolved.iterdir()
     for item in iterator:
         # Skip forbidden parts
         if any(p in (".git", ".venv", "node_modules", "__pycache__", ".evren") for p in item.parts):
@@ -866,6 +866,89 @@ def tool_list_directory(path: str = ".", recursive: bool = False, workspace_root
         entries.append(f"{kind}  {rel}")
 
     return "\n".join(sorted(entries)[:100]) or "Klasör boş."
+
+
+# Directories that never hold hand-written sources; pruned during the walk instead of filtered after it
+# (rglob descended into node_modules/bin/obj first, a single search at a workspace root took 150-180 s).
+_JUNK_DIRS = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".evren", "bin", "obj", ".vs", ".idea",
+    "TestResults", "coverage", ".next", ".nuget", ".wt", "packages",
+})
+
+
+def _list_recursive(start: Path, root: Path):
+    """Recursive listing without descending into junk dirs (files and directories, like rglob('*'))."""
+    stack = [start]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(os.scandir(current), key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.name in _JUNK_DIRS:
+                continue
+            path = Path(entry.path)
+            yield path
+            if entry.is_dir(follow_symlinks=False):
+                stack.append(path)
+
+
+def _git_files(repo: Path) -> list[Path] | None:
+    """Tracked + untracked-but-not-ignored files of a git repo (honours .gitignore); None when git fails."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [repo / rel for rel in proc.stdout.split("\x00") if rel]
+
+
+def _pattern_matcher(root: Path, pattern: str):
+    """Mimics Path.rglob(pattern): name glob, or a right-anchored path glob when the pattern has a slash."""
+    import fnmatch
+    from pathlib import PurePath
+
+    pat = pattern or "*"
+    if pat.startswith("**/"):
+        pat = pat[3:]
+    if "/" not in pat and "\\" not in pat:
+        return lambda path: fnmatch.fnmatch(path.name, pat)
+    return lambda path: PurePath(path.relative_to(root).as_posix()).match(pat)
+
+
+def iter_workspace_files(root: Path, pattern: str = "*") -> list[Path]:
+    """Sorted files under `root` matching `pattern`, never entering junk dirs and (inside git repos, including
+    the root itself) listing files via `git ls-files` so .gitignore is respected without walking ignored trees."""
+    match = _pattern_matcher(root, pattern)
+    found: dict[Path, None] = {}
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        if (current / ".git").exists():
+            files = _git_files(current)
+            if files is not None:
+                for f in files:
+                    if f.is_file() and not any(p in _JUNK_DIRS for p in f.relative_to(root).parts[:-1]) and match(f):
+                        found[f] = None
+                continue
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                if entry.name not in _JUNK_DIRS:
+                    stack.append(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                f = Path(entry.path)
+                if match(f):
+                    found[f] = None
+    return sorted(found)
 
 
 _REGEX_HINT_RE = re.compile(r"\\[.dswbDSWB()\[\]{}+*?^$]|\(\?|[.*+?]\*|\[[^\]]+\]|\([^()]+\|[^()]+\)|\^|\$$")
@@ -957,8 +1040,8 @@ def tool_find_files(
     truncated = False
 
     candidates = [
-        path for path in sorted(root.rglob(pattern or "*"))
-        if not any(p in skip for p in path.parts) and path.is_file()
+        path for path in iter_workspace_files(root, pattern or "*")
+        if not any(p in skip for p in path.relative_to(root).parts)
     ]
     ignored = _git_ignored(root, candidates)
     for path in candidates:
@@ -1124,6 +1207,27 @@ def _command_argv(
     return [exe, "-NoProfile", "-NonInteractive", "-Command", script], False
 
 
+_GREP_RECURSIVE_RE = re.compile(r"\bgrep\b((?:\s+-[A-Za-z0-9=,.-]+)*)")
+_GREP_EXCLUDES = " --exclude-dir=bin --exclude-dir=obj --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.evren"
+
+
+def _speed_grep(command: str) -> str:
+    """`grep -r` over a big tree walked bin/obj/node_modules (180 s timeouts); add --exclude-dir to recursive greps
+    that do not already choose their own exclusions."""
+    if "--exclude-dir" in command or "git grep" in command:
+        return command
+
+    def fix(m: re.Match) -> str:
+        flags = m.group(1) or ""
+        recursive = any(
+            (f.startswith("-") and not f.startswith("--") and "r" in f.lower() and "=" not in f) or f in ("--recursive", "-R")
+            for f in flags.split()
+        )
+        return m.group(0) + _GREP_EXCLUDES if recursive else m.group(0)
+
+    return _GREP_RECURSIVE_RE.sub(fix, command)
+
+
 def tool_run_command(
     command: str,
     workspace_root: Path | None = None,
@@ -1154,7 +1258,10 @@ def tool_run_command(
         # timeout, not just the direct shell child. Its return value carries the
         # full captured output + exit status.
         try:
-            argv, use_shell = _command_argv(vault.expand(command), use_powershell, use_python)
+            _expanded = vault.expand(command)
+            if not (use_powershell or use_python):
+                _expanded = _speed_grep(_expanded)
+            argv, use_shell = _command_argv(_expanded, use_powershell, use_python)
         except MultilineShellCommand as e:
             return f"HATA: {e}"
         extra = {"env": vault.env()} if vault else {}
