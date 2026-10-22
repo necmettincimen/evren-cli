@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.0] - 2026-10-22
+
+### Eklendi
+- **Rapor sonuç sözleşmesi:** `report` + `commit`/`require_changes` olan agent adımlarında rapor `SONUÇ: <DÜZELTİLDİ | ZATEN ÇÖZÜLMÜŞ | FRONTEND | KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ | BELİRSİZ>` satırıyla başlar (yönerge otomatik eklenir, Türkçe i/İ harf farkına toleranslı). Kod değişikliği gerektirmeyen geçerli sonuçlarda (ZATEN ÇÖZÜLMÜŞ/FRONTEND/KÜTÜPHANE/BELİRSİZ) "değişiklik yok / commit yok" artık HATA SAYILMAZ (doğru sonucu raporlayan ajanlar sözleşmeyi karşılamadı diye düşüyordu); `DÜZELTİLDİ` ise hâlâ değişiklik+commit ister; sonuç satırı eksik rapor eksiğe özel uyarıyla yeniden denenir. Adım çıktısında `[sonuç: ...]` görünür. `"outcome": false` ile kapatılır.
+- **Adım sınırı = devam sinyali:** ajan `--max-steps` sınırına takılırsa adım hata vermez; çalışma kopyasındaki iş ara commit'le korunur, sınır %50 artırılıp "[UYARI] kaldığın yerden devam et" notuyla yeniden denenir (kalan `retries` hakkı kadar).
+
 ## [3.8.3] - 2026-10-22
 
 ### Düzeltildi

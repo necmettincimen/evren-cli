@@ -50,6 +50,32 @@ _NOTE_NO_CHANGE = ("\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. 
 _NOTE_NO_COMMIT = ("\n\n[UYARI] Önceki deneme değişiklikleri commit etmedi. İşi bitirince yalnız dokunduğun dosyaları "
                    "git add ile ekleyip commit at (git add -A kullanma).")
 _NOTE_NO_REPORT = "\n\n[UYARI] Önceki deneme istenen rapor dosyasını yazmadı. İşi bitirmeden önce raporu yaz."
+_NOTE_STEP_LIMIT = ("\n\n[UYARI] Önceki deneme adım sınırına takılıp yarıda kaldı. Çalışma kopyasında yaptığın iş duruyor "
+                    "(git status / git log). Kaldığın yerden DEVAM ET, keşfi tekrarlama; işi küçük tut, derle, commit et ve raporu yaz.")
+_NOTE_NO_OUTCOME = ("\n\n[UYARI] Raporun İLK satırı `SONUÇ: ...` olmalı (DÜZELTİLDİ | ZATEN ÇÖZÜLMÜŞ | FRONTEND | "
+                    "KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ | BELİRSİZ). Raporu bu satırla düzelt.")
+# Rapor sonuç satırı: `.` işaretli yerler Türkçe i/İ/ı büyük-küçük harf farkına toleranslıdır.
+_OUTCOME_RE = re.compile(
+    r"^[\s>*_#`-]*SONU[ÇçCc]\s*[:：]\s*[*_`\s]*(?:"
+    r"(?P<fixed>D[ÜüUu]ZELT.LD.)|"
+    r"(?P<done>ZATEN\s+[ÇçCc][ÖöOo]Z[ÜüUu]LM[ÜüUu][ŞşSs])|"
+    r"(?P<front>FRONTEND)|"
+    r"(?P<lib>K[ÜüUu]T[ÜüUu]PHANE)|"
+    r"(?P<unk>BEL.RS.Z))", re.I | re.M)
+# Kod değişikliği gerektirmeyen GEÇERLİ sonuçlar: değişiklik/commit sözleşmesinden muaf, rapor şartı korunur.
+NO_CHANGE_OUTCOMES = {"done", "front", "lib", "unk"}
+
+
+def report_outcome(path: Path) -> str | None:
+    """Raporun `SONUÇ:` satırından sonuç anahtarı (fixed/done/front/lib/unk); satır yoksa None."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = _OUTCOME_RE.search(text)
+    return m.lastgroup if m else None
+
+
 _NOTE_QUESTION = ("\n\n[UYARI] Önceki deneme soru/onay isteyerek bitti. SORU SORMA: kimse cevap vermeyecek. "
                   "Belirsizlikte en makul varsayımı seç, işi sonuna kadar yap ve varsayımı raporda belirt.")
 
@@ -213,11 +239,17 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                    f"{str(repo).replace(chr(92), '/')} (ve /{str(repo)[0].lower()}{str(repo)[2:].replace(chr(92), '/')}) dizinine ASLA yazma, "
                    "orada derleme/komut çalıştırma; tüm komutları (cd dahil) yukarıdaki repo kökünde çalıştır.")
     report_in_agent = None
+    want_outcome = bool(step.get("outcome", need_changes or need_commit))
     if report:
         report_in_agent = ".evren-rapor.md" if (use_wt or workdir) else report
         prompt += (f"\n\n[RAPOR] Sonucu (kök neden, yapılan değişiklik, doğrulama, kalan iş, varsayımlar) "
                    f"{str(work_root / report_in_agent).replace(chr(92), '/')} dosyasına yaz"
-                   + (" ve bu dosyayı commit'e KATMA." if use_wt else "."))
+                   + (" ve bu dosyayı commit'e KATMA." if use_wt else ".")
+                   + (" Raporun İLK satırı sonuç satırı olsun: `SONUÇ: DÜZELTİLDİ` (kod değişti ve commit edildi) | "
+                     "`SONUÇ: ZATEN ÇÖZÜLMÜŞ` (kod değişikliği gerekmiyor, hangi commit) | `SONUÇ: FRONTEND` (kaynak frontend; "
+                     "beklenen API davranışını yaz) | `SONUÇ: KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ` | `SONUÇ: BELİRSİZ` (nedenini yaz). "
+                     "Kod değişikliği gerekmeyen işlerde değişiklik yapmak ZORUNDA DEĞİLSİN; doğru sonucu ve gerekçesini raporla."
+                     if want_outcome else ""))
     if workdir:
         prompt += (f"\n\n[ÇALIŞMA DİZİNİ] Çalışma alanın {str(workdir).replace(chr(92), '/')} ile sınırlı (aramalar hızlı olsun diye); "
                    "üst dizinlere erişme.")
@@ -237,13 +269,24 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
     last = "tamam"
     problems = ""
     try:
+        cur_max = int(step.get("max_steps", 80))
         for attempt in range(attempts):
-            cmd = [sys.executable, "-m", "src.cli", "-w", str(work_root), "--yes", "--max-steps", str(step.get("max_steps", 80))]
+            cmd = [sys.executable, "-m", "src.cli", "-w", str(work_root), "--yes", "--max-steps", str(cur_max)]
             if step.get("model"):
                 cmd += ["-m", step["model"]]
             cmd += ["-p", prompt + _HEADLESS_DIRECTIVE + "".join(notes)]
             logpath = root / "reports" / "agent-logs" / f"{label}-a{attempt + 1}.log"
             rc, text = _run_once(cmd, logpath, label, int(step.get("timeout", 1800)))
+            if rc != 0 and "maksimum adım" in text.lower() and attempt + 1 < attempts:
+                # Adım sınırı hata değil, devam sinyalidir: iş çalışma kopyasında durur; sınırı %50 artırıp kaldığı yerden sürdür.
+                cur_max = int(cur_max * 1.5)
+                notes = [_NOTE_STEP_LIMIT]
+                problems = "adım sınırı"
+                _say(f"  ! {label} deneme {attempt + 1}/{attempts} adım sınırına takıldı; sınır {cur_max}'e çıkarılıp devam ediliyor")
+                if use_wt and _git(work_repo, "status", "--porcelain").stdout.strip():
+                    _git(work_repo, "add", "-A")
+                    _git(work_repo, "commit", "-q", "-m", step.get("commit_message") or f"agent: {label} (ara kayıt)")
+                continue
             if rc != 0:
                 raise RuntimeError(text.strip()[-400:] + f"\n(günlük: {logpath})")
             last = (text.strip().splitlines() or ["tamam"])[-1][:200]
@@ -261,20 +304,28 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                 if _git(work_repo, "status", "--porcelain").stdout.strip():
                     _git(work_repo, "add", "-A")
                     _git(work_repo, "commit", "-q", "-m", step.get("commit_message") or f"agent: {label}")
-            if need_changes and _state(work_repo) == before and _head(work_repo) == head_before:
+            outcome = report_outcome(root / report) if report else None
+            # Raporda geçerli bir "kod değişikliği gerekmiyor" sonucu (zaten çözülmüş/frontend/kütüphane/belirsiz) varsa
+            # değişiklik/commit koşulu aranmaz: doğru sonuç raporlanmıştır.
+            no_change_ok = outcome in NO_CHANGE_OUTCOMES
+            if need_changes and not no_change_ok and _state(work_repo) == before and _head(work_repo) == head_before:
                 missing.append("değişiklik yok")
                 notes = [_NOTE_NO_CHANGE]
-            elif need_commit and _head(work_repo) == head_before:
+            elif need_commit and not no_change_ok and _head(work_repo) == head_before:
                 missing.append("commit yok")
                 notes = [_NOTE_NO_COMMIT]
             if report and not ((root / report).is_file() and (root / report).stat().st_size > 0):
                 missing.append("rapor yok")
                 notes = notes + [_NOTE_NO_REPORT]
+            elif report and outcome is None and want_outcome:
+                missing.append("rapor sonuç satırı yok")
+                notes = notes + [_NOTE_NO_OUTCOME]
             if missing and asks_question(text):
                 missing.append("soru sorarak bitti")
                 notes = notes + [_NOTE_QUESTION]
             if not missing:
-                suffix = f" [günlük: {rel_log}]" + (f" [rapor: {report}]" if report else "")
+                suffix = (f" [günlük: {rel_log}]" + (f" [rapor: {report}]" if report else "")
+                          + (f" [sonuç: {outcome}]" if outcome else ""))
                 merged = ""
                 if use_wt:
                     if _head(work_repo) != base:
