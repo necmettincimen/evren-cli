@@ -175,3 +175,13 @@ def test_resume_keeps_previous_worktree_work(ws, monkeypatch):
     out = plan_agent.op_agent(dict(step), root, False, _resolve)
     assert "ana ağaca alındı" in out
     assert (repo / "yarim.txt").exists() and (repo / "tamam.txt").exists()
+
+
+def test_find_bash_prefers_git_bash_on_windows():
+    import os
+    from src import plan_runner
+    found = plan_runner._find_bash()
+    if os.name == "nt":
+        assert found is None or "system32" not in found.lower()
+    else:
+        assert found is not None
