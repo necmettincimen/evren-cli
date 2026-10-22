@@ -185,3 +185,72 @@ def test_find_bash_prefers_git_bash_on_windows():
         assert found is None or "system32" not in found.lower()
     else:
         assert found is not None
+
+
+def _report_fake(monkeypatch, outcome_line, change=False, wt=True):
+    def run_once(cmd, logpath, label, timeout):
+        wd = Path(cmd[cmd.index("-w") + 1])
+        if change:
+            (wd / "z.txt").write_text("1")
+        if "-p" in cmd and "[RAPOR]" in cmd[cmd.index("-p") + 1]:
+            (wd / ".evren-rapor.md").write_text(outcome_line + "\n\nGerekçe...", encoding="utf-8")
+        logpath.parent.mkdir(parents=True, exist_ok=True); logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+
+
+@pytest.mark.parametrize("line,key", [
+    ("SONUÇ: ZATEN ÇÖZÜLMÜŞ (commit abc)", "done"),
+    ("**SONUÇ:** FRONTEND", "front"),
+    ("Sonuç: Kütüphane değişikliği gerekli", "lib"),
+    ("# SONUÇ: Belirsiz", "unk"),
+    ("sonuç: düzeltildi", "fixed"),
+])
+def test_outcome_parser(tmp_path, line, key):
+    f = tmp_path / "r.md"
+    f.write_text(line + "\nx", encoding="utf-8")
+    assert plan_agent.report_outcome(f) == key
+
+
+def test_no_change_outcome_passes_contract(ws, monkeypatch):
+    root, repo = ws
+    _report_fake(monkeypatch, "SONUÇ: FRONTEND")
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r.md",
+                               "_label": "t-12"}, root, False, _resolve)
+    assert "[sonuç: front]" in out and (root / "reports" / "r.md").exists()
+    assert "ana ağaca alındı" not in out
+
+
+def test_fixed_outcome_without_change_fails(ws, monkeypatch):
+    root, repo = ws
+    _report_fake(monkeypatch, "SONUÇ: DÜZELTİLDİ")
+    with pytest.raises(RuntimeError, match="değişiklik yok|commit yok"):
+        plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r2.md",
+                             "_label": "t-13"}, root, False, _resolve)
+
+
+def test_missing_outcome_line_is_retried_then_fails(ws, monkeypatch):
+    root, repo = ws
+    _report_fake(monkeypatch, "Başlık yok", change=True)
+    with pytest.raises(RuntimeError, match="sonuç satırı"):
+        plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r3.md",
+                             "_label": "t-14"}, root, False, _resolve)
+
+
+def test_step_limit_continues_with_larger_budget(ws, monkeypatch):
+    root, repo = ws
+    seen = []
+    def run_once(cmd, logpath, label, timeout):
+        wd = Path(cmd[cmd.index("-w") + 1])
+        seen.append(int(cmd[cmd.index("--max-steps") + 1]))
+        logpath.parent.mkdir(parents=True, exist_ok=True)
+        if len(seen) == 1:
+            (wd / "yarim.txt").write_text("1")
+            logpath.write_text("HATA: Ajan maksimum adım sınırına (60) ulaştı"); return 1, "HATA: Ajan maksimum adım sınırına (60) ulaştı"
+        assert "[UYARI] Önceki deneme adım sınırına" in cmd[cmd.index("-p") + 1]
+        (wd / ".evren-rapor.md").write_text("SONUÇ: DÜZELTİLDİ\n")
+        (wd / "tamam.txt").write_text("2"); logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r4.md",
+                               "max_steps": 60, "_label": "t-15"}, root, False, _resolve)
+    assert seen == [60, 90] and "[sonuç: fixed]" in out
+    assert (repo / "yarim.txt").exists() and (repo / "tamam.txt").exists()
