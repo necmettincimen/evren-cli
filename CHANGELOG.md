@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.6.6] - 2026-10-22
+
+### Eklendi
+- `push` adımı Drone build'ini tetikledikten/yakaladıktan sonra bitmesini bekler (`drone_result`, varsayılan açık; `drone_timeout` sn, varsayılan 1500). Build `failure/error/killed` olursa adım HATA verir ve başarısız adımın log kuyruğunu (son 25 satır) gösterir; başarıda "BAŞARILI" yazar. Kapatmak için `"drone_result": false`.
+
 ## [3.6.5] - 2026-10-22
 
 ### Düzeltildi

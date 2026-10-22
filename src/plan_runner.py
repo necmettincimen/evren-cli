@@ -122,8 +122,14 @@ def _op_push(step, root, dry, allow_push=False):
         raise RuntimeError(r.stderr.strip()[-300:])
     msg = "push edildi"
     if step.get("drone", True):
+        _LAST_DRONE.clear()
         msg += "; " + _drone_trigger(repo, branch, step.get("drone_wait", 90))
+        if step.get("drone_result", True) and _LAST_DRONE.get("number"):
+            msg += "; " + _drone_await(_LAST_DRONE["slug"], _LAST_DRONE["number"], float(step.get("drone_timeout", 1500)))
     return msg
+
+
+_LAST_DRONE: dict = {}
 
 
 def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
@@ -154,6 +160,7 @@ def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
             with urllib.request.urlopen(urllib.request.Request(f"{server}/api/repos/{slug}/builds?per_page=5", headers=hdr), timeout=30) as resp:
                 for b in _json.load(resp):
                     if b.get("after") == sha:
+                        _LAST_DRONE.update(slug=slug, number=b.get("number"))
                         return f"Drone build #{b.get('number')} webhook ile geldi ({slug})"
             _time.sleep(10)
         def _post(path):
@@ -173,9 +180,54 @@ def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
             _post(f"/api/repos/{slug}/chown")
             n = _post(trig).get("number")
             how = "repo sahipliği (chown) onarılıp API ile tetiklendi"
+        _LAST_DRONE.update(slug=slug, number=n)
         return f"webhook {int(wait_s)} sn içinde gelmedi, Drone build #{n} {how} ({slug})"
     except Exception as e:  # noqa: BLE001
         return f"Drone tetiklenemedi: {str(e)[:120]}"
+
+
+def _drone_await(slug: str, number, timeout_s: float = 1500) -> str:
+    """Build bitene kadar bekler; failure/error/killed ise başarısız adımın log kuyruğuyla RuntimeError fırlatır
+    (push sonrası 'build geçti mi' denetimi plana gömülüdür, elle bakmaya gerek kalmaz)."""
+    import json as _json
+    import time as _time
+    import urllib.request
+    server = os.environ.get("DRONE_SERVER", "https://drone.sentayazilimtest.space").rstrip("/")
+    hdr = {"Authorization": f"Bearer {os.environ.get('DRONE_TOKEN', '')}", "User-Agent": "curl/8.0"}
+
+    def _get(path):
+        with urllib.request.urlopen(urllib.request.Request(f"{server}{path}", headers=hdr), timeout=60) as resp:
+            return _json.load(resp)
+
+    deadline = _time.time() + timeout_s
+    build = {}
+    while _time.time() < deadline:
+        try:
+            build = _get(f"/api/repos/{slug}/builds/{number}")
+        except Exception:  # noqa: BLE001
+            _time.sleep(15)
+            continue
+        if build.get("status") not in ("pending", "running", "blocked", "waiting_on_dependencies"):
+            break
+        _time.sleep(15)
+    status = build.get("status", "bilinmiyor")
+    if status == "success":
+        return f"Drone build #{number} BAŞARILI ({slug})"
+    if status in ("pending", "running", "bilinmiyor"):
+        return f"Drone build #{number} {int(timeout_s)} sn içinde bitmedi (durum: {status}); elle izle ({slug})"
+    detail = ""
+    for st in build.get("stages", []):
+        for sp in st.get("steps", []):
+            if sp.get("status") in ("failure", "error", "killed"):
+                try:
+                    lines = _get(f"/api/repos/{slug}/builds/{number}/logs/{st.get('number')}/{sp.get('number')}")
+                    detail = f"\nadım '{sp.get('name')}':\n" + "\n".join("".join(x.get("out", "") for x in lines).splitlines()[-25:])
+                except Exception:  # noqa: BLE001
+                    detail = f"\nadım '{sp.get('name')}' (log alınamadı)"
+                break
+        if detail:
+            break
+    raise RuntimeError(f"Drone build #{number} {status.upper()} ({slug}){detail}")
 
 
 def _git_state(path: Path) -> str | None:
