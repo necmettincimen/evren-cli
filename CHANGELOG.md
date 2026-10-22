@@ -5,6 +5,19 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.7.0] - 2026-10-22
+
+### Eklendi
+- Plan `agent` adımı için **sonuç sözleşmesi** (`src/plan_agent.py`): `require_changes` (varsayılan açık), `commit` (HEAD ilerlemeli) ve `report` (ajan raporu yazmalı, boş olmamalı) koşulları sağlanmazsa adım eksiğe özel uyarıyla yeniden denenir (`retries`, varsayılan 1), yine sağlanmazsa HATA verir.
+- **Soru yakalama:** Ajanın son sözü soru/onay isteğiyse ("devam edeyim mi?" vb.) ve sözleşme karşılanmadıysa çıktı eksik sayılır ve "soru sorma" uyarısıyla yeniden çalıştırılır.
+- **Tam çıktı günlüğü:** Ajanın tüm çıktısı `reports/agent-logs/<plan>-<adım>-a<deneme>.log` dosyasına yazılır; ekranda yalnız son satır ve günlük yolu görünür (önceden son paragraf dışındaki her şey kayboluyordu).
+- **Git worktree yalıtımı** (`"worktree": true`): ajan `.evren/worktrees/<etiket>` altında geçici worktree/dalda çalışır; kalan değişiklikleri Evren commit eder (`commit_message`), bitince ana ağaca ff-only/cherry-pick ile alınır; yarım kalan iş ana ağacı kirletmez, başarısızlıkta dal incelenmek üzere bırakılır.
+- **`parallel` adımı:** alt adımları eşzamanlı koşturur (`max_workers`, varsayılan 3); agent alt adımlarında worktree varsayılan açık, ana ağaca alma kilitli/sıralı; hatalar toplu raporlanır.
+- **Canlı ilerleme:** ajan çalışırken 30 sn'de bir "çalışıyor N sn | satır sayısı | son satır" basılır.
+
+### Değişti
+- `agent` adımının eski `_HEADLESS_DIRECTIVE` metnine "onay isteme, belirsizlikte en makul varsayımla ilerle ve raporla" eklendi.
+
 ## [3.6.7] - 2026-10-22
 
 ### Düzeltildi

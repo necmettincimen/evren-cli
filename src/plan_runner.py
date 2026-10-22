@@ -12,7 +12,9 @@ Plan dosyası (JSON):
     {"op": "commit", "repo": "portal-egp-sign", "message": "..."},
     {"op": "push", "repo": "portal-egp-sign"},                      # yalnız --allow-push ile
     {"op": "ssh" | "scp" | "http" | "wait", ...},                    # bkz. plan_ops_remote.py
-    {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80, "repo": "x", "retries": 1, "require_changes": true}
+    {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80, "repo": "x", "retries": 1,
+     "require_changes": true, "commit": false, "report": "reports/x.md", "worktree": false, "commit_message": "..."},
+    {"op": "parallel", "max_workers": 3, "steps": [ {agent...}, {agent...} ]}   # agent alt adımlarında worktree varsayılan açık
   ]}
 """
 
@@ -26,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src import plan_agent
 from src.plan_ops_remote import REMOTE_OPS, expand
 
 _AI_SIGNATURE = re.compile(r"co-authored-by|generated with|claude", re.I)
@@ -244,48 +247,17 @@ def _git_state(path: Path) -> str | None:
         return None
 
 
-_HEADLESS_DIRECTIVE = (
-    "\n\n[BAŞSIZ KİP] Yalnız bu dar görevi uygula; plan sunma, soru sorma. "
-    "Analiz ya da rapor yazıp bitirme: bulduğun her yeri HEMEN edit_file/write_file ile uygula. "
-    "Bağımsız okuma ve aramaları AYNI turda birden çok araç çağrısıyla yap "
-    "(view_file + search_code + find_files birlikte); dosyaları tek tek sırayla okuma. "
-    "Bitirmeden önce derlemeyi/çalıştırmayı tek komutla doğrula. "
-    "Büyük dosyayı TEK write_file çağrısında yazma (çıktı sınırında kesilir ve iş döngüye girer): "
-    "çağrı başına en çok ~2500 karakter; ilk parça write_file, devamı write_file(append=true)."
-)
-_RETRY_NOTE = (
-    "\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. Bu kez analiz yazmadan, "
-    "ilk turda ilgili dosyaları birlikte okuyup ikinci turda edit_file ile değişiklikleri uygula."
-)
-
-
 def _op_agent(step, root, dry):
-    """Dar anlamsal görev. `repo` (varsayılan kök) git deposuysa ajan bir dosya değiştirmeden bitirirse
-    `retries` (varsayılan 1) kez uyarıyla yeniden denenir; yine değişiklik yoksa adım hata verir
-    (`require_changes: false` ile kapatılır; salt rapor/keşif adımları için)."""
-    if dry:
-        return "agent adımı (kuru çalıştırmada atlandı)"
-    repo = _p(root, step.get("repo", "."))
-    before = _git_state(repo) if step.get("require_changes", True) else None
-    attempts = int(step.get("retries", 1)) + 1
-    last = "tamam"
-    for attempt in range(attempts):
-        cmd = [sys.executable, "-m", "src.cli", "-w", str(root), "--yes", "--max-steps", str(step.get("max_steps", 80))]
-        if step.get("model"):
-            cmd += ["-m", step["model"]]
-        cmd += ["-p", step["prompt"] + _HEADLESS_DIRECTIVE + (_RETRY_NOTE if attempt else "")]
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
-                           timeout=int(step.get("timeout", 1800)))
-        if r.returncode != 0:
-            raise RuntimeError((r.stdout + r.stderr).strip()[-400:])
-        last = (r.stdout.strip().splitlines() or ["tamam"])[-1][:200]
-        if before is None or _git_state(repo) != before:
-            return last if not attempt else f"(2. denemede) {last}"
-    raise RuntimeError("ajan hiçbir dosyayı değiştirmedi (require_changes); son çıktı: " + last)
+    """Dar anlamsal görev; sözleşme, soru yakalama, günlük, worktree ve canlı ilerleme için bkz. src/plan_agent.py."""
+    return plan_agent.op_agent(step, root, dry, _p)
 
 
 OPS = {"clone_tree": _op_clone_tree, "replace": _op_replace, "write": _op_write, "run": _op_run,
        "commit": _op_commit, "agent": _op_agent}
+
+
+def _op_parallel(step, root, dry, ctx=None):
+    return plan_agent.op_parallel(step, root, dry, OPS, _p, expand, ctx or {})
 
 
 def _load_secrets() -> int:
@@ -317,7 +289,10 @@ def run_plan(plan_path: str, workspace: str, dry_run: bool = False, allow_push: 
         op = step.get("op")
         try:
             step = expand(step, ctx)
-            if op == "push":
+            step["_label"] = f"{Path(plan_path).stem}-{i}"
+            if op == "parallel":
+                out = _op_parallel(step, root, dry_run, ctx)
+            elif op == "push":
                 out = _op_push(step, root, dry_run, allow_push)
             elif op in REMOTE_OPS:
                 out = REMOTE_OPS[op](step, root, dry_run, ctx)
