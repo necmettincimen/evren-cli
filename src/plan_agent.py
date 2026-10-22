@@ -36,7 +36,14 @@ _HEADLESS_DIRECTIVE = (
     "(view_file + search_code + find_files birlikte); dosyaları tek tek sırayla okuma. "
     "Bitirmeden önce derlemeyi/çalıştırmayı tek komutla doğrula. "
     "Büyük dosyayı TEK write_file çağrısında yazma (çıktı sınırında kesilir ve iş döngüye girer): "
-    "çağrı başına en çok ~2500 karakter; ilk parça write_file, devamı write_file(append=true)."
+    "çağrı başına en çok ~2500 karakter; ilk parça write_file, devamı write_file(append=true). "
+    "HIZ KURALLARI (ölçüldü: bunlar ajanın süresinin çoğunu yiyordu): (1) Arama/okumayı ASLA çalışma alanı kökünde ya da "
+    "/d/ayssoftorg gibi üst dizinlerde yapma (bin/obj/node_modules dahil dakikalar sürer, zaman aşımına düşer); yalnız "
+    "ilgili repo/klasörde ve tercihen `git grep -n <desen> -- '*.cs'` (yalnız izlenen dosyalar, saniyeler) ya da "
+    "`grep -rn --include=*.cs --exclude-dir={bin,obj,node_modules,.git}` kullan. (2) Derlemeyi tüm solution yerine yalnız "
+    "değişen csproj için yap: `dotnet build <Proje>.csproj -v q --nologo`; solution derlemesi yalnız en sonda gerekiyorsa. "
+    "(3) Tüm test paketini ASLA çalıştırma; gerekirse `dotnet test --filter` ile yalnız ilgili testi. "
+    "(4) Aynı dosyayı tekrar tekrar okuma; bulgularını ilk okumada not et. (5) Gereksiz doğrulama turu atma: derleme geçtiyse commit et ve bitir."
 )
 _NOTE_NO_CHANGE = ("\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. Bu kez analiz yazmadan, "
                    "ilk turda ilgili dosyaları birlikte okuyup ikinci turda edit_file ile değişiklikleri uygula.")
@@ -171,9 +178,10 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
     need_commit = bool(step.get("commit", False)) and is_git
     report = step.get("report")
     use_wt = bool(step.get("worktree")) and is_git and repo != root
+    workdir = resolve(root, step["workdir"]) if step.get("workdir") and not use_wt else None
     attempts = int(step.get("retries", 1)) + 1
 
-    work_root, work_repo, branch, base = root, repo, None, None
+    work_root, work_repo, branch, base = (workdir or root), repo, None, None
     if use_wt:
         base = _head(repo)
         branch = f"evren/{label}"
@@ -198,10 +206,13 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                    "orada derleme/komut çalıştırma; tüm komutları (cd dahil) yukarıdaki repo kökünde çalıştır.")
     report_in_agent = None
     if report:
-        report_in_agent = ".evren-rapor.md" if use_wt else report
+        report_in_agent = ".evren-rapor.md" if (use_wt or workdir) else report
         prompt += (f"\n\n[RAPOR] Sonucu (kök neden, yapılan değişiklik, doğrulama, kalan iş, varsayımlar) "
                    f"{str(work_root / report_in_agent).replace(chr(92), '/')} dosyasına yaz"
                    + (" ve bu dosyayı commit'e KATMA." if use_wt else "."))
+    if workdir:
+        prompt += (f"\n\n[ÇALIŞMA DİZİNİ] Çalışma alanın {str(workdir).replace(chr(92), '/')} ile sınırlı (aramalar hızlı olsun diye); "
+                   "üst dizinlere erişme.")
 
     if report and (root / report).is_file():
         (root / report).unlink()  # eski sonuç yeni koşunun sonucu sayılmasın
@@ -225,6 +236,9 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             rel_log = logpath.relative_to(root).as_posix()
 
             missing: list[str] = []
+            if workdir and report_in_agent and (workdir / report_in_agent).exists():
+                (root / report).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(workdir / report_in_agent), str(root / report))
             if use_wt:
                 # Rapor ajan kopyasından ana kökteki yerine taşınır (commit'e girmesin); kalan değişiklikleri Evren commit eder.
                 if report_in_agent and (work_repo / report_in_agent).exists():

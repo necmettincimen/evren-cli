@@ -5,6 +5,14 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.8.0] - 2026-10-22
+
+### Eklendi
+- `agent` adımı `workdir`: ajanın çalışma alanını (`-w`) repo klasörüne daraltır (salt okuma/teşhis adımları için). Çalışma alanı kökünden taramak (ör. tüm `/d/ayssoftorg` altında `grep -r`/`search_code`) bin/obj/node_modules yüzünden 150-180 sn sürüyor ve zaman aşımına düşüyordu; rapor ajan kopyasındaki `.evren-rapor.md`'den ana kökteki `report` yoluna taşınır.
+
+### Değişti
+- Başsız kip yönergesine ölçüme dayalı **HIZ KURALLARI** eklendi: üst dizinlerde arama yok, `git grep` / `--exclude-dir` kullan, derlemeyi solution yerine yalnız değişen csproj için yap, tüm test paketini çalıştırma (`--filter`), aynı dosyayı tekrar okuma, derleme geçtiyse commit edip bitir. (İzleme: ajan süresinin çoğu 180 sn'lik taramalar, 186 sn'lik solution derlemeleri ve 170 sn'lik tam test koşularında geçiyordu.)
+
 ## [3.7.5] - 2026-10-22
 
 ### Düzeltildi
