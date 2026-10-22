@@ -5,6 +5,12 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.7.3] - 2026-10-22
+
+### Düzeltildi
+- worktree kipinde ajan, repo yolunu msys biçiminde (`/d/...`) ya da Windows biçiminde yazıp **ana ağaca** yazabiliyordu. Prompt'taki tüm yol biçimleri (Windows, `/`, msys) worktree yoluna çevrilir ve "ANA AĞAÇ YASAK" uyarısı eklenir. Buna rağmen ana ağaca yazılırsa birleştirmeden önce değişiklikler `evren-ana-agac-kirlendi <etiket>` adlı stash'e alınır (geri alınabilir, adım çıktısında UYARI görünür).
+- worktree commit'ine Evren'in çalışma alanına yazdığı yardımcı dosyalar (`.evren/`, `agent.md`, `changelog.md`) girmesin diye repo `info/exclude`'una eklenir.
+
 ## [3.7.2] - 2026-10-22
 
 ### Düzeltildi

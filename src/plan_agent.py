@@ -123,14 +123,37 @@ def _run_once(cmd: list[str], logpath: Path, label: str, timeout: int) -> tuple[
     return proc.returncode, text
 
 
+def _exclude_artifacts(repo: Path) -> None:
+    """Evren'in çalışma alanına yazdığı yardımcı dosyalar (agent.md, changelog.md, .evren/) worktree commit'ine girmesin."""
+    out = _git(repo, "rev-parse", "--git-path", "info/exclude").stdout.decode().strip()
+    if not out:
+        return
+    path = Path(out) if Path(out).is_absolute() else repo / out
+    path.parent.mkdir(parents=True, exist_ok=True)
+    have = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
+    add = [x for x in (".evren/", "/agent.md", "/changelog.md") if x not in have]
+    if add:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(add) + "\n")
+
+
+def _quarantine_main(repo: Path, label: str) -> str:
+    """Ajan jail dışına (ana ağaca) yazdıysa değişiklikler adlandırılmış stash'e alınır ki birleştirme ilerlesin; geri alınabilir."""
+    if not _git(repo, "status", "--porcelain").stdout.strip():
+        return ""
+    r = _git(repo, "stash", "push", "-u", "-m", f"evren-ana-agac-kirlendi {label}")
+    return " [UYARI: ana ağaç kirlenmişti, değişiklikler stash'e alındı: evren-ana-agac-kirlendi " + label + "]" if r.returncode == 0 else ""
+
+
 def _merge_back(repo: Path, branch: str, base: str) -> str:
     """worktree dalını ana ağaca alır: önce ff-only, olmazsa cherry-pick; çatışmada iptal edip hata verir."""
     with _MERGE_LOCK:
+        warn = _quarantine_main(repo, branch)
         if _git(repo, "merge", "--ff-only", branch).returncode == 0:
-            return "ff"
+            return "ff" + warn
         r = _git(repo, "cherry-pick", f"{base}..{branch}")
         if r.returncode == 0:
-            return "cherry-pick"
+            return "cherry-pick" + warn
         _git(repo, "cherry-pick", "--abort")
         raise RuntimeError(f"ana ağaca alınamadı ({branch}); dal ve worktree incelenmek üzere bırakıldı: "
                            + (r.stdout + r.stderr).decode("utf-8", "replace").strip()[-250:])
@@ -160,14 +183,19 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
         _git(repo, "branch", "-D", branch)
         wt.parent.mkdir(parents=True, exist_ok=True)
         _git(repo, "worktree", "add", "-b", branch, str(wt), base, check=True, timeout=300)
+        _exclude_artifacts(repo)
         work_root = work_repo = wt
 
     prompt = step["prompt"]
     if use_wt:
-        for variant in {str(repo), str(repo).replace("\\", "/"), str(repo).replace("/", "\\")}:
+        rp = str(repo)
+        msys = "/" + rp[0].lower() + rp[2:].replace("\\", "/") if len(rp) > 2 and rp[1] == ":" else rp
+        for variant in sorted({rp, rp.replace("\\", "/"), rp.replace("/", "\\"), msys}, key=len, reverse=True):
             prompt = re.sub(re.escape(variant), lambda m: str(work_repo).replace("\\", "/"), prompt, flags=re.I)
         prompt += (f"\n\n[ÇALIŞMA DİZİNİ] Bu görev geçici bir kopyada koşuyor: repo kökü {str(work_repo).replace(chr(92), '/')}. "
-                   "Yalnız bu dizinde çalış; üst dizinlere/diğer repolara dokunma.")
+                   "Yalnız bu dizinde çalış; üst dizinlere/diğer repolara dokunma. ANA AĞAÇ YASAK: "
+                   f"{str(repo).replace(chr(92), '/')} (ve /{str(repo)[0].lower()}{str(repo)[2:].replace(chr(92), '/')}) dizinine ASLA yazma, "
+                   "orada derleme/komut çalıştırma; tüm komutları (cd dahil) yukarıdaki repo kökünde çalıştır.")
     report_in_agent = None
     if report:
         report_in_agent = ".evren-rapor.md" if use_wt else report

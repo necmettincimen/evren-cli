@@ -112,3 +112,28 @@ def test_contract_options_require_repo(ws, monkeypatch):
     _fake(monkeypatch, lambda wd: None)
     with pytest.raises(ValueError, match="repo"):
         plan_agent.op_agent({"prompt": "x", "worktree": True, "commit": True, "_label": "t-7"}, root, False, _resolve)
+
+
+def test_main_tree_contamination_is_quarantined(ws, monkeypatch):
+    root, repo = ws
+    def act(wd):
+        (repo / "kirli.txt").write_text("ana agaca yazildi")   # jail dışı yazım
+        (wd / "e.txt").write_text("5")
+    _fake(monkeypatch, act)
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-8"}, root, False, _resolve)
+    assert "stash'e alındı" in out and not (repo / "kirli.txt").exists() and (repo / "e.txt").exists()
+    stash = subprocess.run(["git", "-C", str(repo), "stash", "list"], capture_output=True, text=True).stdout
+    assert "evren-ana-agac-kirlendi" in stash
+
+
+def test_msys_path_rewritten_in_prompt(ws, monkeypatch):
+    root, repo = ws
+    seen = {}
+    def run_once(cmd, logpath, label, timeout):
+        seen["p"] = cmd[cmd.index("-p") + 1]
+        wd = Path(cmd[cmd.index("-w") + 1]); (wd / "f.txt").write_text("6")
+        logpath.parent.mkdir(parents=True, exist_ok=True); logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    msys = "/" + str(repo)[0].lower() + str(repo)[2:].replace("\\", "/")
+    plan_agent.op_agent({"prompt": f"cd {msys} && build", "repo": "app", "worktree": True, "_label": "t-9"}, root, False, _resolve)
+    assert ".evren/worktrees/t-9" in seen["p"].split("ANA AĞAÇ")[0].replace("\\", "/")
