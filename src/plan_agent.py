@@ -182,15 +182,23 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
     attempts = int(step.get("retries", 1)) + 1
 
     work_root, work_repo, branch, base = (workdir or root), repo, None, None
+    resumed = False
     if use_wt:
         base = _head(repo)
         branch = f"evren/{label}"
         wt = root / ".evren" / "worktrees" / label
-        if wt.exists():
-            _git(repo, "worktree", "remove", "--force", str(wt))
-        _git(repo, "branch", "-D", branch)
-        wt.parent.mkdir(parents=True, exist_ok=True)
-        _git(repo, "worktree", "add", "-b", branch, str(wt), base, check=True, timeout=300)
+        if wt.exists() and _is_git(wt) and _git(repo, "rev-parse", "--verify", branch).returncode == 0:
+            # Öldürülüp aynı etiketle yeniden başlatılan plan: önceki çalışmanın (commit'li/commit'siz) işi korunur, ajan devam eder.
+            resumed = True
+            base = _git(repo, "merge-base", branch, base).stdout.decode().strip() or base
+        else:
+            if wt.exists():
+                _git(repo, "worktree", "remove", "--force", str(wt))
+                shutil.rmtree(wt, ignore_errors=True)
+            _git(repo, "worktree", "prune")
+            _git(repo, "branch", "-D", branch)
+            wt.parent.mkdir(parents=True, exist_ok=True)
+            _git(repo, "worktree", "add", "-b", branch, str(wt), base, check=True, timeout=300)
         _exclude_artifacts(repo)
         work_root = work_repo = wt
 
@@ -218,6 +226,12 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
         (root / report).unlink()  # eski sonuç yeni koşunun sonucu sayılmasın
     before = _state(work_repo) if (need_changes or need_commit) else None
     head_before = _head(work_repo) if is_git else None
+    if resumed:
+        # Sözleşme ölçütü: çalışma kopyasının taban commit'ine göre fark (önceki turdan kalan iş de sayılır).
+        before = base + "\n"
+        head_before = base
+        prompt += ("\n\n[DEVAM] Bu görev daha önce başlatılmış ve yarıda kesilmişti: çalışma kopyasında önceki işin değişiklikleri/commit'leri "
+                   "duruyor. `git status` ve `git log` ile ne yapıldığını gör, baştan başlama, kaldığın yerden tamamla.")
     head_before_main = _head(repo) if is_git else None
     notes: list[str] = []
     last = "tamam"

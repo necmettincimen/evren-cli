@@ -151,3 +151,27 @@ def test_workdir_scopes_agent_and_moves_report(ws, monkeypatch):
                                "report": "reports/t.md", "_label": "t-10"}, root, False, _resolve)
     assert seen["w"] == repo.resolve() and (root / "reports" / "t.md").read_text() == "teshis" and "rapor: reports/t.md" in out
     assert "HIZ KURALLARI" in seen["p"]
+
+
+def test_resume_keeps_previous_worktree_work(ws, monkeypatch):
+    root, repo = ws
+    # 1. koşu: ajan dosya yazar ama süreç "öldürülür" (hata) → worktree ve dal kalır
+    calls = {"n": 0}
+    def run_once(cmd, logpath, label, timeout):
+        wd = Path(cmd[cmd.index("-w") + 1])
+        calls["n"] += 1
+        logpath.parent.mkdir(parents=True, exist_ok=True); logpath.write_text("ok")
+        if calls["n"] == 1:
+            (wd / "yarim.txt").write_text("onceki is")
+            raise RuntimeError("öldürüldü")
+        assert (wd / "yarim.txt").exists()        # devam: önceki iş duruyor
+        assert "[DEVAM]" in cmd[cmd.index("-p") + 1]
+        (wd / "tamam.txt").write_text("son")
+        return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    step = {"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-11"}
+    with pytest.raises(RuntimeError):
+        plan_agent.op_agent(dict(step), root, False, _resolve)
+    out = plan_agent.op_agent(dict(step), root, False, _resolve)
+    assert "ana ağaca alındı" in out
+    assert (repo / "yarim.txt").exists() and (repo / "tamam.txt").exists()

@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.8.2] - 2026-10-22
+
+### Eklendi
+- **Devam (resume):** worktree kipindeki `agent` adımı, aynı etiketle yeniden başlatıldığında önceki (öldürülmüş) çalışmanın worktree'sini ve dalını SİLMEZ; commit'li/commit'siz işi korur, ajana "[DEVAM] kaldığın yerden tamamla" notu eklenir ve sözleşme ölçütü taban commit'e göre hesaplanır. Evren'i güncelleyip planları öldürüp yeniden başlatmak artık saatlerdir süren işi çöpe atmaz.
+
 ## [3.8.1] - 2026-10-22
 
 ### Düzeltildi
