@@ -147,7 +147,7 @@ def _drone_trigger(repo: str, branch: str, wait_s: float = 90) -> str:
         import time as _time
         import urllib.error
         import urllib.request
-        hdr = {"Authorization": f"Bearer {tok}"}
+        hdr = {"Authorization": f"Bearer {tok}", "User-Agent": "curl/8.0"}  # Drone önündeki katman Python-urllib UA'sını 403'ler
         # Önce webhook'un getirdiği build'i bekle (çift build olmasın); süre dolunca API'den tetikle.
         deadline = _time.time() + float(wait_s)
         while _time.time() < deadline:
