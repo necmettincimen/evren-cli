@@ -85,3 +85,23 @@ def test_report_contract(ws, monkeypatch):
     out = plan_agent.op_agent({"prompt": "x", "repo": ".", "require_changes": False, "report": "reports/r.md",
                                "_label": "t-4"}, root, False, _resolve)
     assert "rapor: reports/r.md" in out
+
+
+def test_push_hook_called_after_merge(ws, monkeypatch):
+    root, repo = ws
+    calls = []
+    monkeypatch.setattr(plan_agent, "PUSH_HOOK", lambda s: calls.append(s["repo"]) or "ok")
+    _fake(monkeypatch, lambda wd: (wd / "d.txt").write_text("4"))
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "push": True,
+                               "_label": "t-5"}, root, False, _resolve)
+    assert calls == ["app"] and "[push: ok]" in out
+
+
+def test_no_push_when_nothing_merged(ws, monkeypatch):
+    root, repo = ws
+    calls = []
+    monkeypatch.setattr(plan_agent, "PUSH_HOOK", lambda s: calls.append(1) or "ok")
+    _fake(monkeypatch, lambda wd: None)
+    with pytest.raises(RuntimeError):
+        plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "push": True, "_label": "t-6"}, root, False, _resolve)
+    assert calls == []
