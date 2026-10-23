@@ -349,6 +349,14 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                 if _git(work_repo, "status", "--porcelain").stdout.strip():
                     _git(work_repo, "add", "-A")
                     _git(work_repo, "commit", "-q", "-m", step.get("commit_message") or f"agent: {label}")
+            if report and not need_changes and not need_commit and step.get("report_fallback", True) \
+                    and not ((root / report).is_file() and (root / report).stat().st_size > 0) and text.strip():
+                # Salt rapor adımı: ajan keşifte adım sınırına takılıp raporu yazamadıysa bulgular kaybolmasın; son çıktısı
+                # rapor olarak kaydedilir (2026-10-23: aktivasyon teşhisi 290 KB keşfe rağmen rapor yazmadan bitti).
+                (root / report).parent.mkdir(parents=True, exist_ok=True)
+                (root / report).write_text("# Ajan raporu yazmadı; Evren son çıktısını kaydetti\n\n" + text.strip()[-12000:] + "\n",
+                                           encoding="utf-8")
+                _say(f"  ! {label}: rapor yazılmadı, ajanın son çıktısı rapora kaydedildi ({report})")
             outcome = report_outcome(root / report) if report else None
             if outcome == "unk" and is_skeleton_report(root / report):
                 outcome = None  # iskelet rapor geçerli "BELİRSİZ" sonucu sayılmaz; sözleşme eksik -> yeniden dene
