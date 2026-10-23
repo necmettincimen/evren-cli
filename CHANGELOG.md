@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.4] - 2026-10-23
+
+### Düzeltildi
+- `agent` salt rapor adımı (`require_changes: false`, commit yok): ajan raporu yazamadan biterse son çıktısı (son 12000 karakter) rapor dosyasına kaydedilir (`report_fallback: false` ile kapatılır). Keşifte adım sınırına takılan teşhis ajanlarının bulguları kayboluyordu.
+
 ## [3.9.3] - 2026-10-23
 
 ### Düzeltildi
