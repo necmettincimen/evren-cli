@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.7] - 2026-10-23
+
+### Değişti
+- Varsayılan model `deepseek-v4.1-flash` yerine `mimo-v2.6-pro` (`EVREN_DEFAULT_MODEL` ile değiştirilebilir). Planlayıcı modeli değişmedi (`EVREN_PLANNER_MODEL`, varsayılan deepseek-v4.1-flash).
+
 ## [3.9.6] - 2026-10-23
 
 ### Düzeltildi
