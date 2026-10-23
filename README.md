@@ -62,7 +62,7 @@ copy .env.example .env
 ```env
 EVREN_API_KEY=evren_llm_gercek_anahtariniz_buraya
 EVREN_BASE_URL=https://evren-llmapi.ssyz.org.tr/v1
-EVREN_DEFAULT_MODEL=deepseek-v4.1-flash
+EVREN_DEFAULT_MODEL=mimo-v2.6-pro
 EVREN_DEFAULT_MAX_TOKENS=4096
 ```
 
