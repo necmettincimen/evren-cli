@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.3] - 2026-10-23
+
+### Düzeltildi
+- `agent` adımı: iskelet rapor (`SONUÇ: BELİRSİZ` + "çalışma sürüyor/iskelet/görev sonunda güncellenecek" ya da 200 karakterden kısa) geçerli kodsuz sonuç sayılmaz; sonuç satırı eksik kabul edilip ajan yeniden denenir. Ajanlar önce yazdıkları iskelet raporla bitip sözleşmeyi karşılamış görünüyordu.
+
 ## [3.9.2] - 2026-10-23
 
 ### Eklendi
