@@ -60,13 +60,18 @@ def _ssh_run(step: dict, root: Path) -> str:
         pw = os.environ.get(step["sudo_pass_env"])
         if pw is None:
             raise RuntimeError(f"ortam değişkeni yok: {step['sudo_pass_env']}")
-        remote = "sudo -S -p '' bash -c " + shlex.quote(remote)
+        # sudo secure_path'te /usr/local/bin yok (k3s kubectl orada): kubectl "command not found" verip boş çıktıyla
+        # "tamam" sayılıyordu (2026-10-23).
+        remote = "sudo -S -p '' bash -c " + shlex.quote("export PATH=/usr/local/sbin:/usr/local/bin:$PATH; " + remote)
         stdin = pw.encode() + b"\n" + (stdin or b"")
     cmd += [step["host"], remote]
     r = subprocess.run(cmd, input=stdin, capture_output=True, timeout=int(step.get("timeout", 180)))
     out = (r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace"))
     if r.returncode not in step.get("ok_exit", [0]):
         raise RuntimeError(f"ssh çıkış kodu {r.returncode}\n{_tail(out)}")
+    # `a; b | head` ya da `for x in $(b)` biçiminde b bulunamasa da çıkış kodu 0 döner; bulunamayan komut sessiz başarı sayılmasın.
+    if not step.get("allow_missing_cmd") and re.search(r"(?m)(: command not found|: komut bulunamadı)$", out):
+        raise RuntimeError(f"uzak komut bulunamadı (allow_missing_cmd ile susturulabilir)\n{_tail(out)}")
     return out
 
 
