@@ -62,14 +62,66 @@ class RepeatGuardTest(unittest.TestCase):
 
     def test_identical_grep_runs_once_then_loop_is_broken(self):
         replies = [reply(tools=[call("run_command", {"command": GREP}, f"c{i}")]) for i in range(4)]
-        replies.append(reply("Bulgular: Program.cs:1. Kalan iş: düzenleme."))
+        replies.append(reply("Bulgular: Program.cs:1. Kalan iş: Program.cs düzenle."))
+        replies.append(reply("Tamamlandı: değişiklik gerekmedi."))
         result, execute, sent = self._run(replies)
         self.assertEqual(execute.call_count, 1)           # the 3 repeats never ran
         blocked = [m for m in self.session.messages if m.get("role") == "tool"
                    and m["content"].startswith("TEKRAR ENGELLENDİ")]
         self.assertEqual(len(blocked), 3)
-        self.assertEqual(sent[-1], "none")                # forced answer turn
+        self.assertEqual(sent[-2], "none")                # forced summary turn
+        self.assertIsNone(sent[-1])                       # tools re-opened afterwards
+        self.assertIn("Tamamlandı", result)
+
+    def test_forced_summary_of_change_task_reopens_tools_and_edits(self):
+        # 2026-10-23: after the forced summary every later turn stayed tool-less and
+        # the agent ended with "Tek somut sonraki adım: edit_file ..." and no edit.
+        replies = [reply(tools=[call("run_command", {"command": GREP}, f"c{i}")]) for i in range(4)]
+        replies.append(reply("Yapılan: kök neden bulundu.\n**Tek somut sonraki adım:** a.py düzenle."))
+        replies.append(reply(tools=[call("edit_file", {"path": "a.py", "target_snippet": "x",
+                                                        "replacement_snippet": "y"}, "e")]))
+        replies.append(reply("Düzeltildi."))
+        sent = []
+        self.client.chat_stream_assembled.side_effect = lambda **k: (sent.append(k.get("tool_choice")),
+                                                                      replies.pop(0))[1]
+        outputs = iter(["Presentation/Program.cs:1: using X;\n" * 20, "BAŞARILI: 'a.py' güncellendi."])
+        with patch("src.agent.execute_tool_call", side_effect=lambda **k: next(outputs)) as execute:
+            result = self.session.run_step("hatayı düzelt")
+        self.assertEqual(execute.call_count, 2)           # grep + the edit
+        self.assertEqual(sent[4], "none")
+        self.assertIsNone(sent[5])
+        self.assertEqual(result, "Düzeltildi.")
+
+    def test_forced_summary_of_question_is_the_answer(self):
+        replies = [reply(tools=[call("run_command", {"command": GREP}, f"c{i}")]) for i in range(4)]
+        replies.append(reply("Neden: Program.cs:1."))
+        self.client.chat_stream_assembled.side_effect = lambda **k: replies.pop(0)
+        with patch("src.agent.execute_tool_call", return_value="x\n" * 200):
+            result = self.session.run_step("bu hata neden oluyor?")
+        self.assertEqual(result, "Neden: Program.cs:1.")
+
+    def test_loop_release_is_bounded(self):
+        # A model that only ever repeats itself still ends: at most two releases.
+        replies = []
+        for r in range(3):
+            replies += [reply(tools=[call("run_command", {"command": GREP}, f"c{r}{i}")]) for i in range(4)]
+            replies.append(reply("Kalan iş: a.py düzenle."))
+        self.client.chat_stream_assembled.side_effect = lambda **k: replies.pop(0)
+        with patch("src.agent.execute_tool_call", return_value="x\n" * 200):
+            result = self.session.run_step("hatayı düzelt")
         self.assertIn("Kalan iş", result)
+        self.assertEqual(self.session._loop_releases, 2)
+
+    def test_compaction_forgets_seen_calls(self):
+        self.session._call_epochs = {"run_command:{}": 0}
+        self.session._output_seen = {("run_command", 1): 3}
+        self.session._loop_blocks = 3
+        self.session.messages += [{"role": "user", "content": "x"}] * 4
+        with patch.object(self.session.compactor, "compact", side_effect=lambda m, *a, **k: m[:1]):
+            self.session._prepare_request(1, 0, 0)
+        self.assertEqual(self.session._call_epochs, {})
+        self.assertEqual(self.session._output_seen, {})
+        self.assertEqual(self.session._loop_blocks, 0)
 
     def test_same_command_after_an_edit_is_allowed(self):
         replies = [
@@ -94,6 +146,25 @@ class RepeatGuardTest(unittest.TestCase):
         self.assertEqual(execute.call_count, 2)
         last_tool = [m for m in self.session.messages if m.get("role") == "tool"][-1]
         self.assertIn("aynısı bu görevde 2. kez", last_tool["content"])
+        # Two searches with the same answer are narrowing down, not a loop.
+        self.assertEqual(self.session._loop_blocks, 0)
+
+    def test_no_plan_brief_skips_planner(self):
+        with patch.dict(os.environ, {"EVREN_AUTO_ROUTE": "true"}), \
+                patch("src.agent.planner_model", return_value="p"), \
+                patch("src.agent.executor_model", return_value="e"):
+            self.assertFalse(self.session._should_route("PLAN YAZMA; keşfi sınırla, sonra DÜZENLE. " * 200))
+            self.assertTrue(self.session._should_route("önce planla sonra uygula"))
+
+    def test_missing_plan_paths_are_flagged(self):
+        root = Path(self._tmp.name)
+        (root / "Application" / "Invoices").mkdir(parents=True)
+        (root / "Application" / "Invoices" / "A.cs").write_text("x")
+        note = self.session._missing_plan_paths_note(
+            "1. Application/Invoices/A.cs düzenle\n2. src/Portal.Application/Invoices/B.cs düzenle")
+        self.assertIn("src/Portal.Application/Invoices/B.cs", note)
+        self.assertNotIn("Application/Invoices/A.cs,", note)
+        self.assertEqual(self.session._missing_plan_paths_note("1. Application/Invoices/A.cs"), "")
 
 
 

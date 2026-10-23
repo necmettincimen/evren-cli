@@ -247,7 +247,8 @@ def test_step_limit_continues_with_larger_budget(ws, monkeypatch):
             (wd / "yarim.txt").write_text("1")
             logpath.write_text("HATA: Ajan maksimum adım sınırına (60) ulaştı"); return 1, "HATA: Ajan maksimum adım sınırına (60) ulaştı"
         assert "[UYARI] Önceki deneme adım sınırına" in cmd[cmd.index("-p") + 1]
-        (wd / ".evren-rapor.md").write_text("SONUÇ: DÜZELTİLDİ\n")
+        (wd / ".evren-rapor.md").write_text(
+            "SONUÇ: DÜZELTİLDİ\n\n## VERİ YOLU\n- a.cs:1 uç\n- b.cs:2 servis\n- c.cs:3 depo\n", encoding="utf-8")
         (wd / "tamam.txt").write_text("2"); logpath.write_text("ok"); return 0, "ok"
     monkeypatch.setattr(plan_agent, "_run_once", run_once)
     out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r4.md",
@@ -276,3 +277,46 @@ def test_verify_gate_passes_good_work(ws, monkeypatch):
     out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-17",
                                "verify": _py("import sys; sys.exit(0)")}, root, False, _resolve)
     assert "ana ağaca alındı" in out and (repo / "iyi.txt").exists()
+
+
+def test_no_change_retry_carries_previous_findings(ws, monkeypatch):
+    # 2026-10-23: the second attempt re-ran the same searches because it only got
+    # "previous attempt changed nothing"; the first had already named the fix.
+    root, repo = ws
+    prompts = []
+    def run_once(cmd, logpath, label, timeout):
+        wd = Path(cmd[cmd.index("-w") + 1])
+        prompts.append(cmd[cmd.index("-p") + 1])
+        logpath.parent.mkdir(parents=True, exist_ok=True)
+        if len(prompts) == 1:
+            text = ("arama çıktısı\n" * 50 + "**Yapılan:** kök neden Validator.cs:60.\n"
+                    "**Tek somut sonraki adım:** Validator.cs:60-75 düzenle.")
+            logpath.write_text(text, encoding="utf-8"); return 0, text
+        (wd / "b.txt").write_text("2")
+        logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "_label": "t-f"},
+                        root, False, _resolve)
+    assert "ÖNCEKİ DENEMENİN BULGULARI" in prompts[1]
+    assert "Validator.cs:60-75 düzenle" in prompts[1]
+    assert "arama çıktısı" not in prompts[1]
+
+
+def test_planner_false_and_env_reach_agent_process(ws, monkeypatch):
+    root, repo = ws
+    seen = {}
+    def run_once(cmd, logpath, label, timeout, env=None):
+        seen["env"] = env
+        (Path(cmd[cmd.index("-w") + 1]) / "c.txt").write_text("3")
+        logpath.parent.mkdir(parents=True, exist_ok=True)
+        logpath.write_text("ok"); return 0, "ok"
+    monkeypatch.setattr(plan_agent, "_run_once", run_once)
+    plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "planner": False,
+                         "env": {"EVREN_X": 1}, "_label": "t-e"}, root, False, _resolve)
+    assert seen["env"] == {"EVREN_X": "1", "EVREN_AUTO_ROUTE": "0"}
+
+
+def test_previous_findings_without_headings_uses_tail():
+    out = plan_agent._previous_findings("a" * 10000 + "SON")
+    assert out.endswith("SON") and len(out) < 4000
+    assert plan_agent._previous_findings("") == ""

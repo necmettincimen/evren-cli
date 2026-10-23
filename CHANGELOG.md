@@ -5,6 +5,22 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.6] - 2026-10-23
+
+### Düzeltildi
+- Döngü kilidi: 3 tekrar engelinden sonra araçlar kapatılıp özet isteniyor, ama sayaç hiç sıfırlanmadığı için sonraki bütün turlar araçsız kalıyordu; değişiklik görevleri kök nedeni bulup düzenleme yapamadan bitiyordu (23 Ekim ClickUp koşularında 7+ ajan). Özet artık bir ara durak: değişiklik görevinde araçlar yeniden açılır ve "sonraki adım" uygulatılır (görev başına en çok 2 kez). Onay dürtmesi de araçları açar.
+- Planlayıcı aşamasındaki çağrılar uygulayıcıda "tekrar" sayılıyordu (uygulayıcının ilk aramaları engelleniyordu); planlayıcıdan sonra tekrar koruması sıfırlanır.
+- Bağlam sıkıştırıldığında tekrar koruması belleği temizlenir: kaybolan çıktıyı yeniden okumak döngü sayılmaz.
+- Aynı çıktıyı veren iki farklı arama artık döngü sayılmaz (üçüncüsü sayılır).
+- Değişiklik yapmadan biten denemeden sonra yeniden deneme, önceki denemenin bulgularını (Yapılan / Kök neden / Kalan iş / sonraki adım) alır; keşif baştan yapılmaz.
+- ask/plan kipi güvenliği: `git branch -D`, `git tag <ad>`, `git remote add`, `git diff --output`, `git reflog expire` artık salt-okuma sayılmaz; `$(...)` ve ters tırnak tırnak içinde de reddedilir.
+
+### Eklendi
+- Brief "PLAN YAZMA" içeriyorsa planlayıcı aşaması atlanır (önceden "plan yap" kalıbı bunu tersine tetikliyordu).
+- Planda geçen ve çalışma alanında olmayan yollar uygulayıcıya uyarı olarak bildirilir.
+- ask/plan kipinde salt-okuma zincirleri (`git log ...; echo ---`, `git grep ... | head`, `cd x && git status`), `git -C <dizin>`, `git grep` ve tırnak içindeki `|`/`;` desenleri kabul edilir.
+- `agent` adımında `planner: false` (planlayıcı yok) ve `env: {...}` (ajan sürecine ortam değişkenleri).
+
 ## [3.9.5] - 2026-10-23
 
 ### Eklendi

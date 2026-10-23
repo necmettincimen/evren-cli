@@ -234,6 +234,12 @@ _ANALYSIS_RE = re.compile(
 _PLAN_INTENT_RE = re.compile(
     r"(?i)\b(planla\w*|plan\s+(yap|çıkar|hazırla|oluştur)\w*|önce\s+plan)"
 )
+# The brief itself forbids a planning phase.
+_NO_PLAN_RE = re.compile(r"(?i)\bplan\s+(yazma|yapma|çıkarma|sunma)\b|\bplanlama\s+yapma\b")
+# Path-like tokens in a plan, checked against the workspace before execution.
+_PLAN_PATH_RE = re.compile(
+    r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.(?:cs|csproj|py|ts|tsx|js|jsx|json|xslt|xml|sql|java|kt|go|rs|yml|yaml|md))\b"
+)
 
 
 def is_listing_task(text: str) -> bool:
@@ -301,6 +307,13 @@ from src.tool_registry import REPEAT_EXEMPT as _REG_REPEAT
 _REPEAT_EXEMPT_TOOLS = frozenset(_REG_REPEAT | {"stop_background"})
 # Blocked/flagged repeats after which the next turn must answer without tools.
 _LOOP_BLOCK_LIMIT = 3
+# How many of those tool-less summaries may be turned back into work per task.
+_MAX_LOOP_RELEASES = 2
+# Hand-off wording of a summary that still has work in it.
+_HANDOFF_RE = re.compile(
+    r"(?i)(tek\s+somut\s+sonraki\s+ad[ıi]m|kalan\s+i[şs]\s*[:*]+\s*(?!\**\s*yok\b)\S"
+    r"|d[üu]zenleme\s+yap[ıi]lamad[ıi])"
+)
 # A final answer that asks for approval although the task already ordered the
 # change ("düzelt", "ekle"); negated forms ("yazma", "değiştirme") do not count.
 _ASKS_APPROVAL_RE = re.compile(
@@ -309,7 +322,9 @@ _ASKS_APPROVAL_RE = re.compile(
     # 2026-10-20: gerçek koşularda plan yazıp "Onaylarsan uygularım" / "Tek somut sonraki adım" ile bırakıldı.
     r"|onaylarsan|onay\s+verirsen|onay\s+verir\s+misin|devam\s+edeyim\s+mi|ba[şs]lay[ae]y[ıi]m\s+m[ıi]"
     r"|ba[şs]lat[ae]y[ıi]m\s+m[ıi]|uygulamam[ıi]\s+ister|s[ıi]radaki\s+(tek\s+)?(somut\s+)?ad[ıi]m"
-    r"|yap[ıi]lacak(lar)?\s*[:\n]|sonraki\s+ad[ıi]m(lar)?\s*[:\n])"
+    r"|yap[ıi]lacak(lar)?\s*[:\n]|sonraki\s+ad[ıi]m(lar)?\s*[:\n*]"
+    # 2026-10-23: headless agents ended with "Kalan iş: 1. ... düzenle" and no edit.
+    r"|kalan\s+i[şs]\s*[:*]+\s*(?!\**\s*yok\b)\S|d[üu]zenleme\s+yap[ıi]lamad[ıi])"
 )
 _IMPERATIVE_RE = re.compile(
     r"(?i)\b(düzelt|ekle|uygula|güncelle|değiştir|oluştur|kaldır|yaz|düzenle|yap|tamamla|dönüştür|kopyala|taşı|çevir"
@@ -1163,6 +1178,11 @@ class AgentSession:
         # executor, which spent 15 of 20 steps exploring.
         from src.intent import clef_label
 
+        if _NO_PLAN_RE.search(text or ""):
+            # "PLAN YAZMA ... DÜZENLE" briefs: the read-only planner contradicted
+            # the brief, spent its steps on refused commands and handed the
+            # executor guessed paths (2026-10-23 ClickUp runs).
+            return False
         if _PLAN_INTENT_RE.search(text or ""):
             return True
         return self.token_manager.estimate_text(text) >= route_min_tokens()
@@ -1205,6 +1225,10 @@ class AgentSession:
         )
         plan = self._plan_phase(task_text, planner)
         self.model = executor
+        # The planner ran in its own history: its calls must not count as
+        # repeats for the executor (whose first find_files was "blocked") and
+        # its loop blocks must not start the executor tool-less.
+        self._reset_repeat_guard()
         if not plan:
             print_warning(f"Plan çıkarılamadı; doğrudan {executor} ile uygulanıyor.")
             return
@@ -1216,7 +1240,7 @@ class AgentSession:
             "content": f"{self.messages[-1]['content']}\n\n{execution_brief(plan, planner)}" + (
                 "\n\nPLANLAYICININ OKUDUĞU DOSYALAR (güncel; yeniden okuma, doğrudan düzenle):\n"
                 + self._planner_reads if getattr(self, "_planner_reads", "") else ""
-            ),
+            ) + self._missing_plan_paths_note(plan),
         }
         print_info(f"Plan hazır; uygulama için {executor} modeline geçiliyor.")
 
@@ -1325,6 +1349,28 @@ class AgentSession:
             return max_steps
         return max(max_steps, min(40, 3 * items + 5))
 
+    def _missing_plan_paths_note(self, plan: str) -> str:
+        """Warns the executor about plan paths that do not exist in the workspace.
+
+        A planner wrote `src/Portal.Application/...` for a file that lives at
+        `Application/...`; the executor's first read failed and it re-explored.
+        """
+        root = Path(self.workspace_root)
+        missing: list[str] = []
+        for raw in dict.fromkeys(_PLAN_PATH_RE.findall(plan or "")):
+            rel = raw.replace("\\", "/").lstrip("./")
+            try:
+                if not (root / rel).exists():
+                    missing.append(rel)
+            except OSError:
+                continue
+        if not missing:
+            return ""
+        return (
+            "\n\n[EVREN] Planda geçen şu yollar çalışma alanında YOK (planlayıcı tahmin etmiş olabilir); "
+            "okumadan önce find_files ile gerçek yolu bul: " + ", ".join(missing[:12])
+        )
+
     def _plan_phase(self, task_text: str, planner: str) -> str | None:
         """Runs a short read-only loop on the planner model; returns the plan text."""
         self._planner_reads = ""
@@ -1400,6 +1446,10 @@ class AgentSession:
         self._output_seen: dict[tuple[str, int], int] = {}
         self._write_epoch = 0
         self._loop_blocks = 0
+        # Forced tool-less summaries turned back into work (see _release_loop).
+        self._loop_releases = 0
+        self._loop_exhausted = False
+        self._approval_nudges = 0
         # Verification gate (plan 3.3): code written, no test/build ran since.
         self._code_written = False
         self._verified_since_write = False
@@ -1413,6 +1463,40 @@ class AgentSession:
         self._family_runs: dict[str, tuple[int, int]] = {}
         self._probe_runs: dict[int, int] = {}
         self._probe_note = ""
+
+    def _forget_seen_calls(self) -> None:
+        """Drops repeat-guard memory whose outputs may no longer be in the history."""
+        self._call_epochs = {}
+        self._output_seen = {}
+        self._loop_blocks = 0
+
+    def _release_loop(self, final_content: str) -> bool:
+        """Turns a forced tool-less loop summary back into work; True = keep going.
+
+        After _LOOP_BLOCK_LIMIT blocked repeats the next turn runs with
+        tool_choice="none" and the model writes "Yapılan / Kalan iş / Tek somut
+        sonraki adım". The counter never reset, so every later turn stayed
+        tool-less and change tasks ended with no edit (2026-10-23: 7 ClickUp
+        agents found the fix, could not apply it, and retried from scratch).
+        The summary is a checkpoint: re-open the tools and apply its next step.
+        """
+        if self._loop_blocks < _LOOP_BLOCK_LIMIT:
+            return False
+        self._loop_blocks = 0
+        if self._loop_releases >= _MAX_LOOP_RELEASES:
+            self._loop_exhausted = True  # no approval nudge either: end here
+            return False
+        if not _IMPERATIVE_RE.search(self.task_goal or ""):
+            return False  # a question: the summary is the answer
+        if self._write_epoch and not _HANDOFF_RE.search(final_content[-1500:]):
+            return False  # edits done and nothing left over
+        self._loop_releases += 1
+        self._verify_note = (
+            "[EVREN] DÖNGÜ ÖZETİ ALINDI; araçlar yeniden açık. Özetindeki 'sonraki adım'ı ŞİMDİ uygula: "
+            "edit_file/write_file ile düzenle, sonra tek doğrulama çalıştır. Daha önce yaptığın arama ve "
+            "okumaları tekrarlama; eksik bilgi varsa FARKLI bir sorgu ya da satır aralığı kullan."
+        )
+        return True
 
     @staticmethod
     def _call_signature(fn_name: str, args: dict) -> str:
@@ -1530,7 +1614,11 @@ class AgentSession:
                 "son çalışan hale getir, sonra bulguyu 'kısmi' olarak bildir."
             )
         if seen >= 2:
-            self._loop_blocks += 1
+            # Two different searches that return the same lines are normal while
+            # narrowing down; only a third identical output counts as a loop
+            # (2026-10-23: three such hits locked agents into tool_choice="none").
+            if seen >= 3:
+                self._loop_blocks += 1
             return result + (
                 f"\n[EVREN] Bu çıktının aynısı bu görevde {seen}. kez geldi; aynı bilgiyi yeniden arama, "
                 "yaklaşımı değiştir ya da sıradaki adıma geç."
@@ -1728,6 +1816,11 @@ class AgentSession:
         self.messages = self.compactor.compact(
             self.messages, output_budget, max_tokens=compact_limit
         )
+        if len(self.messages) < before:
+            # Compaction dropped earlier tool outputs: the repeat guard's
+            # "the result is above" is no longer true, and a re-read of a lost
+            # result must not count as a loop.
+            self._forget_seen_calls()
         if len(self.messages) < before and not self._compaction_notified:
             self._compaction_notified = True
             print_info(
@@ -2198,6 +2291,9 @@ class AgentSession:
             # No tool calls: model has provided its final response
             final_content = message.content or ""
             self.messages.append({"role": "assistant", "content": final_content})
+            if effective_mode == AgentMode.NORMAL and step_count < max_steps \
+                    and self._release_loop(final_content):
+                continue
             if (
                 effective_mode == AgentMode.NORMAL
                 and self._code_written
@@ -2213,6 +2309,7 @@ class AgentSession:
             if (
                 effective_mode == AgentMode.NORMAL
                 and getattr(self, "_approval_nudges", 0) < 3
+                and not getattr(self, "_loop_exhausted", False)
                 and self._write_epoch == 0
                 and step_count < max_steps
                 and _ASKS_APPROVAL_RE.search(final_content[-500:])
@@ -2221,6 +2318,8 @@ class AgentSession:
                 # "çalışmıyorsa düzelt" was answered twice with "uygulamamı ister
                 # misin?": the instruction already is the approval.
                 self._approval_nudges = getattr(self, "_approval_nudges", 0) + 1
+                # The nudge says "apply it now": the tools must be callable.
+                self._loop_blocks = 0
                 self._verify_note = (
                     "[EVREN] Kullanıcı görevde zaten düzelt/ekle/uygula dedi; onay bekleme. "
                     "Önerdiğin değişikliği şimdi uygula ve doğrula."
