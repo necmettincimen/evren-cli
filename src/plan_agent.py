@@ -102,7 +102,8 @@ _OUTCOME_RE = re.compile(
     r"(?P<done>ZATEN\s+[ÇçCc][ÖöOo]Z[ÜüUu]LM[ÜüUu][ŞşSs])|"
     r"(?P<front>FRONTEND)|"
     r"(?P<lib>K[ÜüUu]T[ÜüUu]PHANE)|"
-    r"(?P<unk>BEL.RS.Z))", re.I | re.M)
+    r"(?P<unk>BEL.RS.Z)|"
+    r"(?P<partial>K.SM.))", re.I | re.M)  # KISMİ: kod değişti ama iş tamamen bitmedi (KALAN yazılır); değişiklik sözleşmesi geçerli
 # Kod değişikliği gerektirmeyen GEÇERLİ sonuçlar: değişiklik/commit sözleşmesinden muaf, rapor şartı korunur.
 NO_CHANGE_OUTCOMES = {"done", "front", "lib", "unk"}
 
@@ -288,7 +289,7 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                    + (" ve bu dosyayı commit'e KATMA." if use_wt else ".")
                    + (" Raporun İLK satırı sonuç satırı olsun: `SONUÇ: DÜZELTİLDİ` (kod değişti ve commit edildi) | "
                      "`SONUÇ: ZATEN ÇÖZÜLMÜŞ` (kod değişikliği gerekmiyor, hangi commit) | `SONUÇ: FRONTEND` (kaynak frontend; "
-                     "beklenen API davranışını yaz) | `SONUÇ: KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ` | `SONUÇ: BELİRSİZ` (nedenini yaz). "
+                     "beklenen API davranışını yaz) | `SONUÇ: KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ` | `SONUÇ: BELİRSİZ` (nedenini yaz) | `SONUÇ: KISMİ` (kod değişti, kalan iş `KALAN` bölümünde). "
                      "Kod değişikliği gerekmeyen işlerde değişiklik yapmak ZORUNDA DEĞİLSİN; doğru sonucu ve gerekçesini raporla."
                      if want_outcome else ""))
     # Kod değiştiren ve rapor yazan ajanlarda uçtan uca iz zorunlu (`trace: false` ile kapatılır).
@@ -375,7 +376,7 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             elif report and outcome is None and want_outcome:
                 missing.append("rapor sonuç satırı yok")
                 notes = notes + [_NOTE_NO_OUTCOME]
-            elif want_trace and outcome == "fixed" and not report_has_trace(root / report):
+            elif want_trace and outcome in ("fixed", "partial") and not report_has_trace(root / report):
                 missing.append("VERİ YOLU bölümü yok")
                 notes = notes + [_NOTE_NO_TRACE]
             if not missing and step.get("verify") and (outcome is None or outcome not in NO_CHANGE_OUTCOMES) \
