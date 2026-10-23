@@ -54,6 +54,34 @@ _NOTE_STEP_LIMIT = ("\n\n[UYARI] Önceki deneme adım sınırına takılıp yar�
                     "(git status / git log). Kaldığın yerden DEVAM ET, keşfi tekrarlama; işi küçük tut, derle, commit et ve raporu yaz.")
 _NOTE_NO_OUTCOME = ("\n\n[UYARI] Raporun İLK satırı `SONUÇ: ...` olmalı (DÜZELTİLDİ | ZATEN ÇÖZÜLMÜŞ | FRONTEND | "
                     "KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ | BELİRSİZ). Raporu bu satırla düzelt.")
+# Uçtan uca iz kuralı (3.9.2): 2026-10-23 gelen kutusu XML'i üç turda düzeltilemedi; ajan her seferinde tek katmanı
+# (SQL, sonra nesne adı) düzeltip yalnız o katmanı test etti; konumu taşıyan ara katman (locator) veriyi atıyordu ve
+# canlıda InvoiceStorage:Bucket koddaki varsayılandan (app-data) farklıydı (ays-storage).
+_TRACE_DIRECTIVE = (
+    "\n\n[UÇTAN UCA İZ] Bir okuma/yazma/hesaplama hatasını düzeltiyorsan veriyi kullanıcının çağırdığı uç noktadan "
+    "son depolama/çıktıya kadar HALKA HALKA izle (endpoint -> handler -> store/locator/mapper -> depolama/SQL/şablon) "
+    "ve değiştirdiğin değerin HER halkadan geçtiğini kodda doğrula; bir halka değeri atıyor/eziyorsa onu da düzelt. "
+    "Koddaki varsayılan yapılandırma değerlerine (kova adı, önek, URL, bayrak) güvenme: canlı değer farklı olabilir; "
+    "çözümün varsayılandan farklı ayarla da çalışmasını sağla ve testi varsayılandan FARKLI ayarla yaz. "
+    "Rapora `## VERİ YOLU` bölümü yaz: her halka bir satır, `dosya:satır — ne yapıyor — değer burada nasıl taşınıyor`; "
+    "ayarlara bağlı halkalarda `CANLI AYAR VARSAYIMI:` ile hangi ayara dayandığını yaz.")
+_NOTE_NO_TRACE = ("\n\n[UYARI] Rapor `## VERİ YOLU` bölümünü (uç noktadan depolamaya her halka dosya:satır, en az 3 halka) "
+                  "içermiyor. Yolu kodda izle; değeri atan/ezen bir ara halka bulursan onu da düzelt, sonra bölümü yaz.")
+_TRACE_RE = re.compile(r"^#+\s*VER[İIi]\s*YOLU", re.I | re.M)
+_FILE_REF_RE = re.compile(r"[\w./-]+\.(?:cs|ts|tsx|js|jsx|py|sql|xslt|java|go|json|ya?ml):\d+")
+
+
+def report_has_trace(path: Path) -> bool:
+    """Raporda `## VERİ YOLU` başlığı ve altında en az 3 `dosya:satır` başvurusu var mı."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    m = _TRACE_RE.search(text)
+    if not m:
+        return False
+    section = re.split(r"^#+\s", text[m.end():], maxsplit=1, flags=re.M)[0]
+    return len(set(_FILE_REF_RE.findall(section))) >= 3
 # Rapor sonuç satırı: `.` işaretli yerler Türkçe i/İ/ı büyük-küçük harf farkına toleranslıdır.
 _OUTCOME_RE = re.compile(
     r"^[\s>*_#`-]*SONU[ÇçCc]\s*[:：]\s*[*_`\s]*(?:"
@@ -250,6 +278,10 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                      "beklenen API davranışını yaz) | `SONUÇ: KÜTÜPHANE DEĞİŞİKLİĞİ GEREKLİ` | `SONUÇ: BELİRSİZ` (nedenini yaz). "
                      "Kod değişikliği gerekmeyen işlerde değişiklik yapmak ZORUNDA DEĞİLSİN; doğru sonucu ve gerekçesini raporla."
                      if want_outcome else ""))
+    # Kod değiştiren ve rapor yazan ajanlarda uçtan uca iz zorunlu (`trace: false` ile kapatılır).
+    want_trace = bool(step.get("trace", bool(report) and (need_changes or need_commit)))
+    if want_trace:
+        prompt += _TRACE_DIRECTIVE
     if workdir:
         prompt += (f"\n\n[ÇALIŞMA DİZİNİ] Çalışma alanın {str(workdir).replace(chr(92), '/')} ile sınırlı (aramalar hızlı olsun diye); "
                    "üst dizinlere erişme.")
@@ -320,6 +352,9 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             elif report and outcome is None and want_outcome:
                 missing.append("rapor sonuç satırı yok")
                 notes = notes + [_NOTE_NO_OUTCOME]
+            elif want_trace and outcome == "fixed" and not report_has_trace(root / report):
+                missing.append("VERİ YOLU bölümü yok")
+                notes = notes + [_NOTE_NO_TRACE]
             if not missing and step.get("verify") and (outcome is None or outcome not in NO_CHANGE_OUTCOMES) \
                     and (not is_git or _head(work_repo) != head_before or _state(work_repo) != before):
                 # Doğrulama kapısı: değişiklik yapan ajanın işi ana ağaca/push'a girmeden derlenip doğrulanır

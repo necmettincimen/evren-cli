@@ -5,6 +5,14 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.2] - 2026-10-23
+
+### Eklendi
+- `agent` adımı uçtan uca iz sözleşmesi (`trace`, kod değiştiren + rapor yazan ajanlarda varsayılan açık): ajana veriyi uç noktadan depolamaya kadar halka halka izlemesi, ara katmanların değeri atıp atmadığını doğrulaması, koddaki varsayılan yapılandırmaya güvenmemesi ve testi varsayılandan farklı ayarla yazması söylenir. `SONUÇ: DÜZELTİLDİ` raporunda `## VERİ YOLU` bölümü ve en az 3 `dosya:satır` başvurusu yoksa adım eksik sayılıp yeniden denenir. Neden: gelen kutusu XML hatası üç turda düzeltilemedi; ajanlar tek katmanı (SQL, nesne adı) düzeltip yalnız o katmanı test etti, aradaki locator değeri atıyordu ve canlıda kova adı koddaki varsayılandan farklıydı.
+
+### Düzeltildi
+- `ssh` adımı: `sudo_pass_env` kipinde PATH'e `/usr/local/bin` eklenir (k3s `kubectl` sudo secure_path'te yoktu). Çıktıda `command not found` varsa adım hata verir (`allow_missing_cmd: true` ile susturulur); `a; b | head` ya da `for x in $(b)` biçimli komutlarda bulunamayan komut 0 çıkış koduyla sessiz başarı sayılıyordu.
+
 ## [3.9.1] - 2026-10-22
 
 ### Düzeltildi
