@@ -13,7 +13,8 @@ Plan dosyası (JSON):
     {"op": "push", "repo": "portal-egp-sign"},                      # yalnız --allow-push ile
     {"op": "ssh" | "scp" | "http" | "wait", ...},                    # bkz. plan_ops_remote.py
     {"op": "agent", "prompt": "...", "model": "mimo-v2.6-pro", "max_steps": 80, "repo": "x", "retries": 1,
-     "require_changes": true, "commit": false, "push": false, "report": "reports/x.md", "worktree": false, "commit_message": "..."},
+     "require_changes": true, "commit": false, "push": false, "report": "reports/x.md", "worktree": false, "commit_message": "...",
+     "planner": false, "env": {"EVREN_X": "1"}},                       # planner:false = planlayıcı aşaması yok (dar düzenleme işleri)
     {"op": "parallel", "max_workers": 3, "steps": [ {agent...}, {agent...} ]}   # agent alt adımlarında worktree varsayılan açık
   ]}
 """

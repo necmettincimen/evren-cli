@@ -15,6 +15,7 @@ adımları eşzamanlı koşturur (agent alt adımlarında worktree varsayılan a
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -169,13 +170,51 @@ def _slug(label: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-") or "agent"
 
 
-def _run_once(cmd: list[str], logpath: Path, label: str, timeout: int) -> tuple[int, str]:
+_FINDINGS_MARK_RE = re.compile(r"(?im)^\W*(yap[ıi]lan|kök neden|kalan i[şs]|tek somut sonraki ad[ıi]m)\b")
+_FINDINGS_MAX = 3500
+
+
+def _previous_findings(text: str) -> str:
+    """Previous attempt's own hand-off (Yapılan / Kök neden / Kalan iş / sonraki adım) for the retry.
+
+    2026-10-23: no-change retries started from scratch with only "previous attempt
+    changed nothing"; the second attempt re-ran the same 60-90 searches and ended
+    the same way although the first had already named the exact lines to edit.
+    """
+    body = (text or "").strip()
+    if not body:
+        return ""
+    marks = list(_FINDINGS_MARK_RE.finditer(body))
+    # From the first hand-off heading of the final summary (last ~6000 chars), else the tail.
+    tail_start = max(0, len(body) - 6000)
+    starts = [m.start() for m in marks if m.start() >= tail_start]
+    chunk = body[starts[0]:] if starts else body[-_FINDINGS_MAX:]
+    chunk = chunk[-_FINDINGS_MAX:].strip()
+    return ("\n\nÖNCEKİ DENEMENİN BULGULARI (doğrulanmış kabul et; keşfi TEKRARLAMA, en fazla 3 okumayla "
+            "doğrula ve 'sonraki adım'ı hemen edit_file ile uygula):\n" + chunk)
+
+
+def _agent_env(step: dict) -> dict | None:
+    """Per-step environment for the agent process: `env` map plus `planner: false`.
+
+    `planner: false` turns the planning phase off (EVREN_AUTO_ROUTE=0) for
+    narrow edit tasks where the read-only planner only costs steps.
+    """
+    env = {str(k): str(v) for k, v in (step.get("env") or {}).items()}
+    if step.get("planner") is False:
+        env["EVREN_AUTO_ROUTE"] = "0"
+    return env or None
+
+
+def _run_once(cmd: list[str], logpath: Path, label: str, timeout: int,
+              env: dict | None = None) -> tuple[int, str]:
     """Ajanı çalıştırır; tüm çıktıyı dosyaya yazar, 30 sn'de bir canlı ilerleme satırı basar."""
     logpath.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     last_tick = t0
     with open(logpath, "w", encoding="utf-8", errors="replace") as fh:
-        proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                env={**os.environ, **env} if env else None)
         while True:
             try:
                 proc.wait(timeout=2)
@@ -322,7 +361,9 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                 cmd += ["-m", step["model"]]
             cmd += ["-p", prompt + _HEADLESS_DIRECTIVE + "".join(notes)]
             logpath = root / "reports" / "agent-logs" / f"{label}-a{attempt + 1}.log"
-            rc, text = _run_once(cmd, logpath, label, int(step.get("timeout", 1800)))
+            env = _agent_env(step)
+            rc, text = _run_once(cmd, logpath, label, int(step.get("timeout", 1800)),
+                                 **({"env": env} if env else {}))
             if rc != 0 and "maksimum adım" in text.lower() and attempt + 1 < attempts:
                 # Adım sınırı hata değil, devam sinyalidir: iş çalışma kopyasında durur; sınırı %50 artırıp kaldığı yerden sürdür.
                 cur_max = int(cur_max * 1.5)
@@ -366,7 +407,7 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             no_change_ok = outcome in NO_CHANGE_OUTCOMES
             if need_changes and not no_change_ok and _state(work_repo) == before and _head(work_repo) == head_before:
                 missing.append("değişiklik yok")
-                notes = [_NOTE_NO_CHANGE]
+                notes = [_NOTE_NO_CHANGE + _previous_findings(text)]
             elif need_commit and not no_change_ok and _head(work_repo) == head_before:
                 missing.append("commit yok")
                 notes = [_NOTE_NO_COMMIT]
