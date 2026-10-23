@@ -71,6 +71,19 @@ _TRACE_RE = re.compile(r"^#+\s*VER[İIi]\s*YOLU", re.I | re.M)
 _FILE_REF_RE = re.compile(r"[\w./-]+\.(?:cs|ts|tsx|js|jsx|py|sql|xslt|java|go|json|ya?ml):\d+")
 
 
+_SKELETON_RE = re.compile(r"iskelet|çalışma sürüyor|calisma suruyor|görev sonunda güncellenecek|TODO\b", re.I)
+
+
+def is_skeleton_report(path: Path) -> bool:
+    """Yarım bırakılmış iskelet rapor mu (ör. 'SONUÇ: BELİRSİZ' + 'çalışma sürüyor')? 2026-10-23: ajanlar önce yazılan
+    iskelet raporla bitip BELİRSİZ'i geçerli kodsuz sonuç saydırıyordu."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(_SKELETON_RE.search(text)) or len(text.strip()) < 200
+
+
 def report_has_trace(path: Path) -> bool:
     """Raporda `## VERİ YOLU` başlığı ve altında en az 3 `dosya:satır` başvurusu var mı."""
     try:
@@ -337,6 +350,8 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                     _git(work_repo, "add", "-A")
                     _git(work_repo, "commit", "-q", "-m", step.get("commit_message") or f"agent: {label}")
             outcome = report_outcome(root / report) if report else None
+            if outcome == "unk" and is_skeleton_report(root / report):
+                outcome = None  # iskelet rapor geçerli "BELİRSİZ" sonucu sayılmaz; sözleşme eksik -> yeniden dene
             # Raporda geçerli bir "kod değişikliği gerekmiyor" sonucu (zaten çözülmüş/frontend/kütüphane/belirsiz) varsa
             # değişiklik/commit koşulu aranmaz: doğru sonuç raporlanmıştır.
             no_change_ok = outcome in NO_CHANGE_OUTCOMES
