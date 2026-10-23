@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.5] - 2026-10-23
+
+### Eklendi
+- Rapor sonucu `SONUÇ: KISMİ` tanınır: kod değişti ama iş tamamen bitmedi (kalan `KALAN` bölümünde). Değişiklik/commit sözleşmesi ve VERİ YOLU şartı `DÜZELTİLDİ` ile aynı uygulanır. Önceden KISMİ raporlu ajanlar 'rapor sonuç satırı yok' ile başarısız sayılıp işleri dalda kalıyordu.
+
 ## [3.9.4] - 2026-10-23
 
 ### Düzeltildi
