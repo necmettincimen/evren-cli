@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.8] - 2026-10-26
+
+### Değişti
+- Plan ajanı: kod commit edildiği halde yalnız rapor eksikse (rapor yok / sonuç satırı yok / VERİ YOLU yok) görev baştan koşturulmaz; en çok 20 adımlık "yalnız raporu yaz" turu koşar ve bu tur deneme hakkından düşmez.
+
 ## [3.9.7] - 2026-10-23
 
 ### Değişti

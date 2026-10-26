@@ -51,6 +51,9 @@ _NOTE_NO_CHANGE = ("\n\n[UYARI] Önceki deneme hiçbir dosyayı değiştirmedi. 
 _NOTE_NO_COMMIT = ("\n\n[UYARI] Önceki deneme değişiklikleri commit etmedi. İşi bitirince yalnız dokunduğun dosyaları "
                    "git add ile ekleyip commit at (git add -A kullanma).")
 _NOTE_NO_REPORT = "\n\n[UYARI] Önceki deneme istenen rapor dosyasını yazmadı. İşi bitirmeden önce raporu yaz."
+_NOTE_REPORT_ONLY = ("\n\n[UYARI] Kod işi önceki denemede yapılıp commit edildi; TEKRAR YAPMA, koda dokunma. "
+                     "Yalnız `git log -3 --stat` ve `git show` ile yapılanı gör ve istenen rapor dosyasını eksiksiz yaz, sonra bitir.")
+_REPORT_ONLY_MISSING = {"rapor yok", "rapor sonuç satırı yok", "VERİ YOLU bölümü yok"}
 _NOTE_STEP_LIMIT = ("\n\n[UYARI] Önceki deneme adım sınırına takılıp yarıda kaldı. Çalışma kopyasında yaptığın iş duruyor "
                     "(git status / git log). Kaldığın yerden DEVAM ET, keşfi tekrarlama; işi küçük tut, derle, commit et ve raporu yaz.")
 _NOTE_NO_OUTCOME = ("\n\n[UYARI] Raporun İLK satırı `SONUÇ: ...` olmalı (DÜZELTİLDİ | ZATEN ÇÖZÜLMÜŞ | FRONTEND | "
@@ -355,7 +358,10 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
     problems = ""
     try:
         cur_max = int(step.get("max_steps", 80))
-        for attempt in range(attempts):
+        attempt = -1
+        report_bonus = 1  # kod işi tamam, yalnız rapor eksikse bir kısa ek tur (deneme hakkından düşmez)
+        while attempt + 1 < attempts:
+            attempt += 1
             cmd = [sys.executable, "-m", "src.cli", "-w", str(work_root), "--yes", "--max-steps", str(cur_max)]
             if step.get("model"):
                 cmd += ["-m", step["model"]]
@@ -447,6 +453,14 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                 if step.get("push") and is_git and PUSH_HOOK is not None and _head(repo) != head_before_main:
                     pushed = " [push: " + PUSH_HOOK(step) + "]"
                 return (f"(deneme {attempt + 1}) " if attempt else "") + last + merged + pushed + suffix
+            if missing and set(missing) <= _REPORT_ONLY_MISSING and report_bonus and is_git \
+                    and (_head(work_repo) != head_before or _state(work_repo) != before):
+                # Kod commit edildi, eksik yalnız rapor: tüm görevi baştan koşturmak yerine kısa bir rapor turu
+                # (2026-10-26: hata-nabzi dalgasında 7 ajanın 3'ü commit edip raporsuz bitti, her biri ~10 dk tekrar koştu).
+                report_bonus -= 1
+                attempts += 1
+                cur_max = min(cur_max, 20)
+                notes = [_NOTE_REPORT_ONLY] + notes
             problems = ", ".join(missing)
             _say(f"  ! {label} deneme {attempt + 1}/{attempts} eksik: {problems}")
         raise RuntimeError(f"ajan sözleşmeyi karşılamadı ({problems}); son çıktı: {last} (günlük: reports/agent-logs/{label}-a*.log)"
