@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.10] - 2026-10-28
+
+### Düzeltildi
+- Agent adımı son denemede yalnız rapor eksiği (`rapor yok` / sonuç satırı / VERİ YOLU) yüzünden düşüyorsa derlenmiş kod artık çöpe gitmiyor: verify koşturulur, rapor ajanın son çıktısı + `git log --stat` özetinden `SONUÇ: KISMİ` olarak üretilir, iş ana ağaca alınır. 28 Ekim koşusunda 11 dosyalık rol düzeltmesi commit edilmişken 3 x 12 dk rapor turu boşa koştu ve commit yarım iş dalında kaldı.
+
 ## [3.9.9] - 2026-10-28
 
 ### Eklendi
