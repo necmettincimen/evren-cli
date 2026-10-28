@@ -18,8 +18,8 @@ jobs:
     name: ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install "ruff>=0.6"
@@ -36,8 +36,8 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -50,7 +50,7 @@ jobs:
       # LLM'siz: tests/test_stdio_compat.py gerçek `--stdio` sürecini scripts/fake_llm_server.py ile koşturur.
       - run: python -m pytest -q --cov --cov-report=xml
       - if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml
@@ -59,12 +59,12 @@ jobs:
     name: wheel/sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install "build>=1.2" && python -m build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
