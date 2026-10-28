@@ -66,3 +66,8 @@ htmlcov/
 # Bench sonuçları (scripts/bench.py); taban çizgisini saklamak için: git add -f
 bench/results/*
 !bench/results/.gitkeep
+
+# test çıktıları
+coverage.xml
+.coverage
+htmlcov/

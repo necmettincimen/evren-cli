@@ -27,6 +27,8 @@ from src.config import (
 )
 from src.version import get_version
 from src.ui import (
+    HAVE_RICH,
+    console,
     print_info,
     print_success,
     print_warning,

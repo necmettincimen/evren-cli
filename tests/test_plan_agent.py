@@ -230,10 +230,19 @@ def test_fixed_outcome_without_change_fails(ws, monkeypatch):
 
 def test_missing_outcome_line_is_retried_then_fails(ws, monkeypatch):
     root, repo = ws
-    _report_fake(monkeypatch, "Başlık yok", change=True)
+    _report_fake(monkeypatch, "Başlık yok")
     with pytest.raises(RuntimeError, match="sonuç satırı"):
         plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r3.md",
                              "_label": "t-14"}, root, False, _resolve)
+
+
+def test_missing_outcome_line_with_commit_is_recovered_as_partial(ws, monkeypatch):
+    root, repo = ws
+    _report_fake(monkeypatch, "Başlık yok", change=True)
+    out = plan_agent.op_agent({"prompt": "x", "repo": "app", "worktree": True, "commit": True, "report": "reports/r3b.md",
+                               "_label": "t-14b"}, root, False, _resolve)
+    assert "[sonuç: partial]" in out and (repo / "z.txt").exists()
+    assert (root / "reports/r3b.md").read_text(encoding="utf-8").startswith("SONUÇ: KISMİ")
 
 
 def test_step_limit_continues_with_larger_budget(ws, monkeypatch):

@@ -84,7 +84,6 @@ def test_secret_env_keeps_path_and_approval_is_required(monkeypatch, tmp_path):
     """Background jobs keep PATH when secrets are exported and honour approval."""
     import sys
     from src import tools
-    from src.background import get_manager
     from src.secret_vault import SecretVault, set_active_vault
 
     vault = SecretVault()
@@ -120,7 +119,6 @@ def test_check_waits_for_completion_and_returns_early(tmp_path):
     import sys
     import time
     from src import tools
-    from src.background import get_manager
 
     started = tools.execute_tool_call(
         "run_command",

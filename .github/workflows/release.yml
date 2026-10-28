@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # İsteğe bağlı: evren-vscode'a repository_dispatch yetkisi olan PAT (Settings > Secrets > Actions).
+      DISPATCH_TOKEN: ${{ secrets.VSCODE_DISPATCH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Etiket pyproject sürümüyle aynı mı
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$v\"" pyproject.toml || { echo "::error::pyproject.toml sürümü $v değil"; exit 1; }
+      - run: pip install "build>=1.2" && python -m build
+      - name: Sürüm notları (CHANGELOG.md bölümü)
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v h="## [$v]" 'index($0, "## [") == 1 { f = (index($0, h) == 1); next } f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md içinde [$v] bölümü yok"; exit 1; }
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* protocol/stdio-v1.schema.json \
+            --title "evren-cli $GITHUB_REF_NAME" --notes-file notes.md
+      - name: evren-vscode uyumluluk işini tetikle
+        if: env.DISPATCH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.DISPATCH_TOKEN }}
+        run: |
+          gh api repos/necmettincimen/evren-vscode/dispatches \
+            -f event_type=evren-cli-release -f "client_payload[tag]=$GITHUB_REF_NAME"

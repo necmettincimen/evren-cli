@@ -80,6 +80,7 @@ import io
 import json
 import os
 import re
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -334,6 +335,11 @@ class ScenarioResult:
 # runner
 # --------------------------------------------------------------------------- #
 
+class _FakeTty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 def _patch_if_present(stack: contextlib.ExitStack, target: str, value: Any) -> bool:
     """Patches `module.attr` when it exists, so a refactor that moves a name
     does not break the harness (the scenario still exercises the new path)."""
@@ -481,6 +487,9 @@ class _Runner:
             _patch_if_present(stack, "src.config.EVREN_AUTO_APPROVE", auto_approve)
             _patch_if_present(stack, "src.tools.EVREN_AUTO_APPROVE", auto_approve)
             stack.enter_context(patch.object(builtins, "input", self.fake_input))
+            # prompt_confirm skips input() when stdin is not a tty (pytest's capture
+            # never is); the harness plays an interactive terminal.
+            stack.enter_context(patch.object(sys, "stdin", _FakeTty()))
             stack.enter_context(contextlib.redirect_stdout(stdout))
             patched = [
                 _patch_if_present(stack, "src.agent.execute_tool_call", self.dispatch),

@@ -293,7 +293,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "ssh_list_hosts",
-            "description": "SON ÇARE: kayıtlı SSH alias'larını listeler; hedef biliniyorsa (alias ya da user@host) çağırma. bu host/localhost yereldir.",
+            "description": "SON ÇARE: kayıtlı SSH alias'larını listeler; hedef biliniyorsa (alias ya da user@host) çağırma. Yalnız UZAK sunucu için; bu host/localhost yereldir.",
             "parameters": {
                 "type": "object",
                 "properties": {},

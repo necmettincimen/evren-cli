@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from src.agent import AgentSession, SYSTEM_PROMPT
+from src.agent import _MAX_API_RETRIES, AgentSession, SYSTEM_PROMPT
 from src.errors import NetworkError
 from src.config import execution_context_block
 from src.modes import AgentMode
@@ -64,10 +64,11 @@ class TestAgentLoop(unittest.TestCase):
 
     def test_unproductive_loops_stop_explicitly(self):
         cases = (
-            (response("", "length"), "HATA:"),
-            (NetworkError("Connection error."), "Hata:"),
+            (response("", "length"), "HATA:", 4),
+            # Geçici ağ hatası ayrı bütçeyle yeniden denenir: ilk çağrı + _MAX_API_RETRIES.
+            (NetworkError("Connection error."), "Hata:", 1 + _MAX_API_RETRIES),
         )
-        for index, (reply, prefix) in enumerate(cases):
+        for index, (reply, prefix, calls) in enumerate(cases):
             with self.subTest(case=index):
                 # A fresh session per case: recovery counters are per task.
                 client = MagicMock(default_model="test-model")
@@ -78,7 +79,7 @@ class TestAgentLoop(unittest.TestCase):
                     client.chat_stream_assembled.return_value = reply
                 result = session.run_step("uygula")
                 self.assertTrue(result.startswith(prefix))
-                self.assertEqual(client.chat_stream_assembled.call_count, 4)
+                self.assertEqual(client.chat_stream_assembled.call_count, calls)
                 if prefix == "Hata:":
                     self.assertIn("Connection error", result)
 

@@ -14,6 +14,11 @@ evren --stdio [--workspace <yol>] [--model <ad>] [--continue] [--yes] [--allowed
 - `--yes` tüm onayları otomatik verir; `--allowed-tools` listedeki araçları onaysız çalıştırır
   (başsız kiple aynı anlam). `.evren/settings*.json` izin kuralları da geçerlidir.
 
+Makine tarafından okunur sözleşme: [`protocol/stdio-v1.schema.json`](../protocol/stdio-v1.schema.json)
+(JSON Schema 2020-12). CLI testleri gerçek çıktıyı bu şemayla doğrular; evren-vscode CI'ı aynı
+dosyayı CLI etiketinden indirip istemci tarafını sınar. Geriye uyumsuz değişiklik protokol
+sürümünü artırır (`stdio-v2.schema.json`).
+
 ## Zarf
 
 Her mesajda bulunur:

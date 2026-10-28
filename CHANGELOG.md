@@ -12,9 +12,16 @@ sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kura
 - `src/ui.py`: tek onay/soru kancası (`set_approval_handler`, `confirm_action`, `ask_text`) ve olay çıkışı (`set_event_sink`). Kanca yokken terminal ve başsız kip aynen çalışır.
 - Dosya düzenleyen araçlar (`edit_file`, `write_file`) onaydan önce önerilen içeriği kancaya verir; eklentide düzeltilen içerik (`edited_content`) diske yazılır.
 - `@yol#L10-20` bahsetme biçimi (`@yol:10-20` ile aynı).
+- `protocol/stdio-v1.schema.json`: protokol v1 için JSON Schema (2020-12). CLI testleri gerçek `--stdio` çıktısını bu şemaya göre doğrular; eklenti CI'ı şemayı CLI etiketinden indirir.
+- `scripts/fake_llm_server.py`: OpenAI uyumlu sahte model sunucusu; LLM'siz uyumluluk ve e2e testleri için.
+- GitHub Actions: CI (ruff, pytest; Python 3.10–3.12, Ubuntu ve Windows), etiketle release (wheel, sdist, şema; evren-vscode'a `repository_dispatch`), CodeQL, OpenSSF Scorecard, SonarQube Cloud, Dependabot.
+- MIT lisansı, SECURITY / CONTRIBUTING / CODE_OF_CONDUCT, issue ve PR şablonları, CODEOWNERS, `.coderabbit.yaml`.
 
 ### Düzeltildi
 - Reddedilen onaylar ("İPTAL EDİLDİ: ...") araç sonucu satırında artık başarı (✔) olarak görünmüyor.
+- Plan ajanı rapor kurtarma yolu `git log --stat` çıktısını bayt olarak birleştirip çöküyordu.
+- `src/cli.py`: Rich yokken `HAVE_RICH`/`console` içe aktarımı düzeltildi.
+- Paket meta verisi olmadan çalışırken bildirilen sürüm (`_FALLBACK_VERSION`) 3.10.0 oldu.
 
 ## [3.9.10] - 2026-10-28
 

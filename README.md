@@ -1,6 +1,42 @@
-# EVREN CLI (AI Development Assistant)
+<div align="center">
 
-> **EVREN LLM API** (`https://evren-llmapi.ssyz.org.tr/v1`) altyapısını kullanarak Windows üzerinde çalışan açık kaynaklı otonom yazılım geliştirme ve proje düzenleme asistanı.
+<img src="docs/assets/logo.png" width="112" alt="Evren logosu">
+
+# EVREN CLI
+
+**Terminalde, editörde ve paralel plan ajanlarında çalışan Türkçe otonom yazılım geliştirme asistanı.**
+
+[![CI](https://github.com/necmettincimen/evren-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/necmettincimen/evren-cli/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/necmettincimen/evren-cli?sort=semver)](https://github.com/necmettincimen/evren-cli/releases)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=necmettincimen_evren-cli&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=necmettincimen_evren-cli)
+[![CodeQL](https://github.com/necmettincimen/evren-cli/actions/workflows/codeql.yml/badge.svg)](https://github.com/necmettincimen/evren-cli/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/necmettincimen/evren-cli/badge)](https://scorecard.dev/viewer/?uri=github.com/necmettincimen/evren-cli)
+[![License: MIT](https://img.shields.io/github/license/necmettincimen/evren-cli)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+
+[Hızlı başlangıç](#-hızlı-başlangıç-windows-powershell) ·
+[VS Code eklentisi](https://github.com/necmettincimen/evren-vscode) ·
+[stdio protokolü](docs/stdio-protocol.md) ·
+[Değişiklikler](CHANGELOG.md) ·
+[English](#english-summary)
+
+</div>
+
+> **EVREN LLM API** (`https://evren-llmapi.ssyz.org.tr/v1`) ve OpenAI uyumlu uç noktalarla çalışır.
+> Dosyaları okur, cerrahi düzenleme yapar, komut çalıştırır, testleri doğrular. Her değişiklik
+> önce diff ile gösterilir, onay alınır ve yedeklenir.
+
+<!-- Ekran görüntüsü / GIF: docs/assets/demo.gif eklendiğinde aşağıdaki satırı açın. -->
+<!-- <p align="center"><img src="docs/assets/demo.gif" width="720" alt="Evren TUI demo"></p> -->
+
+| | |
+|---|---|
+| 🤖 **Otonom ajan döngüsü** | Plan → oku → düzenle → çalıştır → doğrula; adım bütçesi, kesilme kurtarma |
+| 🧭 **Plan ajanları** | `evren plan` ile JSON planındaki adımları worktree'lerde paralel ajanlara dağıtır |
+| 🧩 **Editör entegrasyonu** | `evren --stdio` NDJSON protokolü v1 ve [VS Code eklentisi](https://github.com/necmettincimen/evren-vscode) |
+| 🛡️ **Güvenli varsayılanlar** | Çalışma alanı sınırı, onay, otomatik yedek, `/undo`, sır maskeleme |
+| 🔌 **SSH ve beceriler** | Uzak sunucu araçları, kalıcı hafıza, playbook ve beceri dosyaları |
+| 🧪 **LLM'siz testler** | Sahte model sunucusuyla uçtan uca protokol testleri, Ubuntu + Windows CI |
 
 ---
 
@@ -35,6 +71,45 @@
    - **Otomatik Yedekleme:** Değiştirilen her dosya `.evren/backups/` altında zaman damgasıyla yedeklenir.
    - **Rollback Desteği:** `/undo <dosya>` veya `evren rollback <dosya>` ile tek tuşla önceki sürüme dönülür.
    - **Renkli Diff Önizleme:** Değişiklikler uygulanmadan önce yeşil `+` ve kırmızı `-` satırlarıyla kullanıcıya gösterilir ve onay istenir.
+
+---
+
+## 🧩 Editör Entegrasyonu: `evren --stdio`
+
+`evren --stdio`, editör eklentileri için uzun ömürlü bir NDJSON süreci başlatır. Her satır bir
+JSON mesajıdır: stdin'e komutlar, stdout'a olaylar yazılır. Diğer tüm çıktılar stderr'e gider.
+Protokolün tamamı [docs/stdio-protocol.md](docs/stdio-protocol.md) belgesinde, makine tarafından okunabilen sözleşme ise
+[`protocol/stdio-v1.schema.json`](protocol/stdio-v1.schema.json) (JSON Schema 2020-12) dosyasındadır.
+
+```mermaid
+flowchart LR
+  subgraph VSC["VS Code · evren-vscode"]
+    UI["Sohbet paneli<br/>(webview)"] <--> EXT["EvrenProcess<br/>protokol istemcisi"]
+    DIFF["Diff onayı"] <--> EXT
+    AGV["Ajanlar paneli"]
+  end
+  EXT <-- "NDJSON stdio v1<br/>komut ⇄ olay" --> CLI["evren --stdio"]
+  CLI --> LOOP["Ajan döngüsü<br/>araçlar · onay · yedek"]
+  LOOP <--> API[("EVREN LLM API<br/>OpenAI uyumlu")]
+  PLAN["evren plan"] --> A1["plan ajanı 1<br/>git worktree"]
+  PLAN --> A2["plan ajanı 2<br/>git worktree"]
+  A1 <--> API
+  A2 <--> API
+  AGV -. "süreç ve günlük taraması" .-> PLAN
+```
+
+### Uyumluluk ve sürüm politikası
+
+| evren-vscode | En düşük evren-cli | stdio protokolü |
+|---|---|---|
+| 0.1.x | 3.10.0 | v1 |
+
+- **Protokol sürümü** (`v` alanı, `ready.protocol`) yalnız geriye uyumsuz değişiklikte artar.
+  Yeni komut, olay ya da isteğe bağlı alan eklemek v1 içinde kalır. İstemciler tanımadıkları olayları atlar.
+- **CLI sürümü** SemVer kullanır. Eklenti `ready.version` değerini kendi `MIN_CLI_VERSION` değeriyle karşılaştırır; eski CLI'da güncelleme ister.
+- Şema her release'e eklenir. evren-vscode CI'ı şemayı ve sahte sunucuyu `protocol/CLI_TAG` etiketinden indirip
+  sözleşme testi ile gerçek CLI'a karşı Ubuntu ve Windows'ta uyumluluk testi koşturur. Her evren-cli release'i bu işi
+  `repository_dispatch` ile yeniden tetikler.
 
 ---
 
@@ -566,3 +641,47 @@ Betik şu üç dosyayı tutarlı biçimde günceller:
 2. **Kritik Dosya Koruması:** `.env` ve sistem dosyalarının doğrudan ezilmesi önlenir.
 3. **Kullanıcı Onayı:** `EVREN_AUTO_APPROVE=false` olduğu sürece her dosya değişikliği ve her PowerShell komutu öncesi kullanıcıdan `[Y/n]` onayı istenir.
 4. **Geri Alınabilirlik:** Her değişikliğin orijinal hali `.evren/backups` klasörüne zaman damgasıyla saklanır.
+
+---
+
+## ❓ SSS
+
+**Gerçek bir model olmadan deneyebilir miyim?**
+Evet. `python scripts/fake_llm_server.py` OpenAI uyumlu, deterministik bir sahte sunucu başlatır.
+`EVREN_BASE_URL` değişkenini yazdırdığı adrese, `EVREN_API_KEY` değişkenini herhangi bir değere ayarlayın.
+
+**Anahtarlarım nerede tutulur?**
+`.env` dosyasında ya da `~/.evren` altındaki kasada tutulur. Anahtarlar repoya, günlüklere ve bağlam dosyalarına yazılmaz; yazılan metinler otomatik maskelenir.
+
+**Windows dışında çalışır mı?**
+Evet. CI testleri Ubuntu ve Windows'ta Python 3.10–3.12 ile koşar. Kurulum betikleri Windows odaklıdır; diğer sistemlerde `pip install .` yeterlidir.
+
+**VS Code eklentisi hangi CLI sürümünü ister?**
+Yukarıdaki [uyumluluk tablosuna](#uyumluluk-ve-sürüm-politikası) bakın.
+
+## 🤝 Katkı
+
+[CONTRIBUTING.md](CONTRIBUTING.md) dosyasını okuyun. Davranış kuralları [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) dosyasında, güvenlik
+bildirimleri için yol [SECURITY.md](SECURITY.md) dosyasındadır. PR'lar CI (ruff + pytest), CodeQL ve SonarQube Cloud
+kontrollerinden geçer.
+
+## 📄 Lisans
+
+[MIT](LICENSE)
+
+---
+
+## English summary
+
+**EVREN CLI** is an autonomous coding assistant for the terminal, written with Turkish-first UX. It reads, edits
+and runs code under explicit approval, with automatic backups and rollback. It talks to the EVREN LLM API or
+any OpenAI-compatible endpoint. `evren --stdio` exposes a versioned NDJSON protocol
+([schema](protocol/stdio-v1.schema.json)), which the [VS Code extension](https://github.com/necmettincimen/evren-vscode)
+uses. `evren plan` fans plan steps out to parallel agents in git worktrees.
+
+```bash
+pip install "evren-cli @ git+https://github.com/necmettincimen/evren-cli"
+evren --version
+```
+
+Tests need no LLM: a fake OpenAI-compatible server drives the real `--stdio` process on Ubuntu and Windows CI. MIT licensed.

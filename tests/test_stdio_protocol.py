@@ -18,6 +18,7 @@ import pytest
 from src import secret_vault, session_context, ui
 from src.stdio_server import StdioServer
 from src.todos import get_store
+from tests.protocol_schema import SCHEMA_PATH, schema, validate_event
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = {
@@ -74,8 +75,10 @@ class Harness:
 
     def _write(self, line: str) -> None:
         assert line.endswith("\n") and "\n" not in line[:-1]
+        event = json.loads(line)
+        validate_event(event)
         with self.cond:
-            self.events.append(json.loads(line))
+            self.events.append(event)
             self.cond.notify_all()
 
     def send(self, **msg) -> None:
@@ -281,6 +284,27 @@ def test_subprocess_stdout_is_protocol_only(tmp_path):
     )
     lines = [ln for ln in proc.stdout.decode("utf-8").splitlines() if ln.strip()]
     events = [json.loads(ln) for ln in lines]  # every stdout line is JSON
+    for e in events:
+        validate_event(e)
     assert events[0]["type"] == "ready" and events[0]["version"]
     assert [e["type"] for e in events[1:]] == ["error", "sessions"]
     assert proc.returncode == 0
+
+
+def test_schema_lists_match_server():
+    """Şemadaki komut/olay/hata listeleri sunucu koduyla aynı kalmalı."""
+    import re
+
+    from src import stdio_server
+
+    src_text = Path(stdio_server.__file__).read_text(encoding="utf-8")
+    s = schema()
+    commands = {n[len("_cmd_"):] for n in dir(stdio_server.StdioServer) if n.startswith("_cmd_")}
+    assert commands == set(s["x-command-types"])
+    codes = set(re.findall(r'code="([a-z_]+)"', src_text))
+    assert codes <= set(s["x-error-codes"]), codes - set(s["x-error-codes"])
+    assert s["x-protocol-version"] == stdio_server.PROTOCOL_VERSION
+    doc = (ROOT / "docs" / "stdio-protocol.md").read_text(encoding="utf-8")
+    for name in s["x-event-types"] + s["x-error-codes"]:
+        assert f"`{name}" in doc, f"docs/stdio-protocol.md içinde yok: {name}"
+    assert SCHEMA_PATH.is_file()

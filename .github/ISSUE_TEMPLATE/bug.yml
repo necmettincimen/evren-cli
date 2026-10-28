@@ -1,0 +1,30 @@
+name: Hata bildirimi
+description: Beklenmeyen davranış ya da çökme
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Ne oldu, ne bekliyordunuz?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Yeniden üretme adımları
+      placeholder: "1. ...\n2. ..."
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Sürümler
+      placeholder: "evren --version, eklenti sürümü, VS Code sürümü, işletim sistemi"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Günlük / çıktı
+      description: Anahtar ve parola gibi sırları silin.
+      render: text

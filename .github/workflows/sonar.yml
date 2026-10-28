@@ -1,0 +1,39 @@
+name: SonarQube Cloud
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    env:
+      # Settings > Secrets and variables > Actions > SONAR_TOKEN. Yoksa iş atlanır.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        if: env.SONAR_TOKEN != ''
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Testler + kapsam
+        if: env.SONAR_TOKEN != ''
+        run: |
+          git config --global user.name "evren-ci"
+          git config --global user.email "ci@evren.invalid"
+          git config --global init.defaultBranch master
+          pip install -e ".[dev]"
+          python -m pytest -q --cov --cov-report=xml
+      - uses: SonarSource/sonarqube-scan-action@v5
+        if: env.SONAR_TOKEN != ''

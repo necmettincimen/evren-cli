@@ -461,7 +461,8 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                 attempts += 1
                 cur_max = min(cur_max, 20)
                 notes = [_NOTE_REPORT_ONLY] + notes
-            if attempt + 1 >= attempts and set(missing) <= _REPORT_ONLY_MISSING and is_git                     and (_head(work_repo) != head_before or _state(work_repo) != before) and text.strip():
+            if attempt + 1 >= attempts and set(missing) <= _REPORT_ONLY_MISSING and is_git \
+                    and (_head(work_repo) != head_before or _state(work_repo) != before) and text.strip():
                 # Son hak da yalnız rapor yüzünden düştüyse derlenen kod çöpe gitmesin: doğrula, raporu ajanın son
                 # çıktısı + git özetinden üret, ana ağaca al (2026-10-28: rol düzeltmesi 11 dosya commit edilmişken
                 # 3 x 12 dk rapor turu boşa koştu ve commit yarım iş dalında kaldı).
@@ -471,7 +472,7 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
                                         encoding="utf-8", errors="replace", timeout=int(step.get("verify_timeout", 900)))
                     ok = vr.returncode == 0
                 if ok:
-                    stat = _git(work_repo, "log", "--stat", "--format=%h %s", f"{head_before}..HEAD").stdout.strip()
+                    stat = _git(work_repo, "log", "--stat", "--format=%h %s", f"{head_before}..HEAD").stdout.decode("utf-8", "replace").strip()
                     if report:
                         (root / report).parent.mkdir(parents=True, exist_ok=True)
                         (root / report).write_text(
