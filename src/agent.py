@@ -25,6 +25,8 @@ def _check_esc() -> None:
         raise KeyboardInterrupt
 
 from src.config import (
+    EVREN_FALLBACK_MODEL,
+    EVREN_FALLBACK_AFTER,
     get_workspace_dir,
     execution_context_block,
     git_context_block,
@@ -561,6 +563,43 @@ class AgentSession:
     def set_model(self, new_model: str):
         self.model = new_model
         self._sync_window()
+
+    def _maybe_fallback_model(self, error: Exception) -> bool:
+        """Sağlayıcı aynı modeli art arda "dolu"/5xx ile reddediyorsa yedek modele geçer.
+
+        mimo-v2.6-pro 2026-10-28'de isteklerin ~%30'unu 21 sn sonra HTTP 503
+        "Model şu anda dolu" ile reddetti; üstel bekleme ile ajanlar 1800 sn'lik
+        zaman aşımına düşüp hiç iş yapamadı. Yedek model (EVREN_FALLBACK_MODEL)
+        farklıysa EVREN_FALLBACK_AFTER art arda hatadan sonra görev o modelle sürer.
+        """
+        fallback = EVREN_FALLBACK_MODEL
+        if not fallback or fallback == self.model:
+            return False
+        status = getattr(error, "status_code", None)
+        text = str(error).lower()
+        busy = status in (502, 503, 504, 529) or any(
+            k in text for k in ("dolu", "busy", "overloaded", "capacity", "unavailable")
+        )
+        if not busy:
+            return False
+        if self._api_retries < max(1, EVREN_FALLBACK_AFTER):
+            return False
+        previous = self.model
+        self.set_model(fallback)
+        self._fallback_from = previous
+        print_warning(
+            f"Model {previous} art arda {self._api_retries} kez dolu/5xx döndü; "
+            f"görev yedek model {fallback} ile sürüyor (EVREN_FALLBACK_MODEL)."
+        )
+        writer = getattr(self, "_trace_writer", None)
+        if writer is not None:
+            try:
+                writer._write({"type": "model_fallback", "task_id": writer.task_id,
+                               "from": previous, "to": fallback,
+                               "status": status, "retries": self._api_retries})
+            except Exception:
+                pass
+        return True
 
     def _sync_window(self) -> None:
         """Keeps the token manager's context window in step with the model."""
@@ -2218,6 +2257,9 @@ class AgentSession:
                             f"yeniden deneniyor ({self._api_retries}/{_MAX_API_RETRIES}) - {cause}"
                         )
                         step_count -= 1
+                        if self._maybe_fallback_model(e):
+                            time.sleep(1.0)
+                            continue
                         time.sleep(min(60.0, 3.0 * 2 ** (self._api_retries - 1)))
                         continue
                 detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__

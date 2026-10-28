@@ -5,6 +5,11 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.9.9] - 2026-10-28
+
+### Eklendi
+- Model yedekleme: sağlayıcı aynı modeli art arda (`EVREN_FALLBACK_AFTER`, varsayılan 2) HTTP 502/503/504 ya da "model dolu" ile reddederse ajan görevi `EVREN_FALLBACK_MODEL` (varsayılan `qwen3.8-flash-next`) ile sürdürür; iz kaydına `model_fallback` olayı düşer. 28 Ekim ClickUp koşusunda mimo-v2.6-pro isteklerin ~%30'unu 21 sn sonra 503 ile reddetti, 7 ajan üstel beklemeyle 1800 sn zaman aşımına düşüp hiç iş yapamadı.
+
 ## [3.9.8] - 2026-10-26
 
 ### Değişti

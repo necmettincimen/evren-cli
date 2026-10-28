@@ -196,6 +196,11 @@ _load_legacy_evren_cli_config()
 EVREN_API_KEY = os.getenv("EVREN_API_KEY", "")
 EVREN_BASE_URL = os.getenv("EVREN_BASE_URL", "https://evren-llmapi.ssyz.org.tr/v1").rstrip("/")
 EVREN_DEFAULT_MODEL = os.getenv("EVREN_DEFAULT_MODEL", "mimo-v2.6-pro")
+# Model "dolu"/5xx hatasını art arda verince ajanın geçtiği yedek yürütücü model.
+# Boş verilirse yedekleme kapalıdır.
+EVREN_FALLBACK_MODEL = os.getenv("EVREN_FALLBACK_MODEL", "qwen3.8-flash-next").strip()
+# Kaç art arda geçici hatadan sonra yedek modele geçilir.
+EVREN_FALLBACK_AFTER = int(os.getenv("EVREN_FALLBACK_AFTER", "2") or 2)
 EVREN_DEFAULT_MAX_TOKENS = int(os.getenv("EVREN_DEFAULT_MAX_TOKENS", "4096"))
 EVREN_DEFAULT_TEMPERATURE = float(os.getenv("EVREN_DEFAULT_TEMPERATURE", "0.3"))
 EVREN_AUTO_APPROVE = os.getenv("EVREN_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
