@@ -55,6 +55,8 @@ from src.ui import (
     print_reasoning,
     print_markdown,
     print_markdown_stream,
+    emit,
+    set_tool_call_id,
     flush_markdown,
     markdown_stream_active,
     print_run_summary,
@@ -2152,6 +2154,7 @@ class AgentSession:
         fn_name = tc.function.name
         t_tool = time.perf_counter()
         raw_args = tc.function.arguments
+        set_tool_call_id(getattr(tc, "id", None))
         try:
             args = self._parse_tool_args(raw_args, fn_name)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
@@ -2197,13 +2200,17 @@ class AgentSession:
         self._note_read(fn_name, args, result, tc.id)
         if "[EVREN] Tam çıktı (" in result and is_listing_task(self.task_goal):
             self._listing_done = True
-        is_err = result.startswith("HATA:") or result.startswith("İPTAL:") or result.startswith("REDDEDİLDİ:")
+        # "İPTAL" also covers a refused approval ("İPTAL EDİLDİ: ...").
+        is_err = result.startswith(("HATA:", "İPTAL", "REDDEDİLDİ:"))
         summary = result.splitlines()[0] if result else "Tamamlandı"
         if fn_name == "todo_write" and not is_err:
             # The checklist is the point of the tool: show every item,
             # not just the "Görev listesi (1/3 tamamlandı):" header.
             summary = result
-        print_tool_result(fn_name, summary, is_error=is_err)
+            from src.todos import get_store
+
+            emit("todos", items=get_store().snapshot())
+        print_tool_result(fn_name, summary, is_error=is_err, detail=result)
         self._note_tool_call(fn_name, args, result)
         self._trace_tool(fn_name, args, t_tool, result)
         self._tool_reply(tc, fn_name, result)

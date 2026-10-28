@@ -5,6 +5,17 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.10.0] - 2026-10-28
+
+### Eklendi
+- `evren --stdio`: editör eklentileri (VS Code) için uzun ömürlü NDJSON protokolü (v1). stdin'den komut (`prompt`, `cancel`, `approval_response`, `ask_user_response`, `set_model`, `set_mode`, `list_sessions`, `resume`, `new_session`, `list_models`, `quota`, `slash`), stdout'a olay (`ready`, `turn_start`, `assistant_delta`, `reasoning_delta`, `tool_call`, `tool_result`, `file_change_proposed`, `approval_request`, `ask_user`, `todos`, `usage`, `turn_end`, `error`). stdout yalnız protokol içindir; diğer çıktı ve alt süreçler stderr'e gider. Ajan ayrı thread'de çalışır, `cancel` mevcut Esc mekanizmasını (`interrupt.STOP`) kullanır. Belge: `docs/stdio-protocol.md`.
+- `src/ui.py`: tek onay/soru kancası (`set_approval_handler`, `confirm_action`, `ask_text`) ve olay çıkışı (`set_event_sink`). Kanca yokken terminal ve başsız kip aynen çalışır.
+- Dosya düzenleyen araçlar (`edit_file`, `write_file`) onaydan önce önerilen içeriği kancaya verir; eklentide düzeltilen içerik (`edited_content`) diske yazılır.
+- `@yol#L10-20` bahsetme biçimi (`@yol:10-20` ile aynı).
+
+### Düzeltildi
+- Reddedilen onaylar ("İPTAL EDİLDİ: ...") araç sonucu satırında artık başarı (✔) olarak görünmüyor.
+
 ## [3.9.10] - 2026-10-28
 
 ### Düzeltildi

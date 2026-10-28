@@ -327,6 +327,7 @@ def _stream_to_terminal() -> bool:
 
 def print_markdown_stream(chunk: str):
     """Shows one streamed content delta (see _stream for the three modes)."""
+    emit("assistant_delta", text=chunk)
     _stream()["buffer"].append(chunk)
     if _stream_to_terminal():
         if _stream()["live"] is None:
@@ -372,6 +373,7 @@ def markdown_stream_active() -> bool:
 
 def print_reasoning(text: str, is_chunk: bool = False):
     """Prints model reasoning / chain-of-thought tokens."""
+    emit("reasoning_delta", text=text)
     if is_chunk:
         if HAVE_RICH:
             console.print(Text(text, style="reasoning"), end="", highlight=False)
@@ -459,6 +461,7 @@ def print_tool_call(tool_name: str, arguments: dict, auto_approved: bool = False
     printed separately only when a real confirmation is required).
     """
     arg_summary = format_tool_args(tool_name, arguments)
+    emit("tool_call", call_id=_TOOL_CALL_ID, name=tool_name, args=_masked(arguments))
     if HAVE_RICH:
         console.print(
             f"[tool]⚡ Araç Çağrısı:[/tool] [bold white]{escape(str(tool_name))}[/bold white]"
@@ -468,8 +471,17 @@ def print_tool_call(tool_name: str, arguments: dict, auto_approved: bool = False
         print(f">> [Araç] {tool_name}({arg_summary})")
 
 
-def print_tool_result(tool_name: str, result_summary: str, is_error: bool = False):
-    """Displays the result of a tool execution."""
+def print_tool_result(tool_name: str, result_summary: str, is_error: bool = False,
+                      detail: str | None = None):
+    """Displays the result of a tool execution. `detail` (the full tool output)
+    only goes to the event sink, clipped to TOOL_RESULT_LIMIT."""
+    if _EVENT_SINK is not None:
+        text = str(detail if detail is not None else result_summary)
+        clipped = len(text.encode("utf-8")) > TOOL_RESULT_LIMIT
+        if clipped:
+            text = text.encode("utf-8")[:TOOL_RESULT_LIMIT].decode("utf-8", errors="ignore")
+        emit("tool_result", call_id=_TOOL_CALL_ID, name=tool_name, ok=not is_error,
+             summary=_masked(text), output_truncated=clipped)
     if is_error:
         if HAVE_RICH:
             console.print(f"  [error]✖ {escape(str(tool_name))} hatası:[/error] {escape(str(result_summary))}")
@@ -521,12 +533,101 @@ def print_run_summary(steps: int, seconds: float, tokens: int):
         print(line)
 
 
+# ------------------------------------------------------------------ hooks
+# A front end other than the terminal (`evren --stdio`, used by the VS Code
+# extension) plugs in here. Without a handler/sink everything below behaves
+# exactly as before: prompts go to the terminal and emit() is a no-op.
+_APPROVAL_HANDLER = None
+_EVENT_SINK = None
+_TOOL_CALL_ID: str | None = None
+TOOL_RESULT_LIMIT = 4096
+
+
+def set_approval_handler(handler) -> None:
+    """handler(request: dict) -> dict; request["kind"] is edit|write|command|
+    ssh|other|ask_user. Reply: {"decision": allow|deny|always, "edited_content"?}
+    or, for ask_user, {"answer": str | None}."""
+    global _APPROVAL_HANDLER
+    _APPROVAL_HANDLER = handler
+
+
+def set_event_sink(sink) -> None:
+    """sink(event_type: str, data: dict); None turns events off."""
+    global _EVENT_SINK
+    _EVENT_SINK = sink
+
+
+def emit(event_type: str, **data) -> None:
+    sink = _EVENT_SINK
+    if sink is None:
+        return
+    try:
+        sink(event_type, data)
+    except Exception:
+        pass
+
+
+def set_tool_call_id(call_id: str | None) -> None:
+    global _TOOL_CALL_ID
+    _TOOL_CALL_ID = call_id
+
+
+def _masked(obj):
+    from src.sessions import _mask
+
+    return _mask(obj)
+
+
+def confirm_action(kind: str, title: str, detail: str = "", default: bool = False,
+                   proposal: dict | None = None) -> bool:
+    """Single approval point for tools. `proposal` ({path, old, new}) is a file
+    change shown before writing; a handler may replace proposal["new"] with the
+    content the user edited."""
+    handler = _APPROVAL_HANDLER
+    if handler is None:
+        return prompt_confirm(title, default=default)
+    try:
+        reply = handler({"kind": kind, "title": title, "detail": detail,
+                         "default": default, "proposal": proposal}) or {}
+    except Exception:
+        return False
+    decision = reply.get("decision")
+    if decision == "always":
+        from src import settings as _settings
+
+        _settings.remember_current()
+    ok = decision in ("allow", "always")
+    edited = reply.get("edited_content")
+    if ok and proposal is not None and isinstance(edited, str):
+        proposal["new"] = edited
+    return ok
+
+
+def ask_text(question: str, options: list[str] | None = None) -> str | None:
+    """Free-text question to the user; None when nobody answered."""
+    handler = _APPROVAL_HANDLER
+    if handler is not None:
+        try:
+            reply = handler({"kind": "ask_user", "question": question, "options": options}) or {}
+        except Exception:
+            return None
+        answer = reply.get("answer")
+        return answer if isinstance(answer, str) else None
+    try:
+        return input(f"\n[Model sorusu] {question}\n> ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+
+
 def prompt_confirm(prompt_msg: str, default: bool = False) -> bool:
     """Asks user for yes/no confirmation in terminal safely without spinner interference."""
     global _ACTIVE_STATUS
     active = _ACTIVE_STATUS
     if active:
         active.stop()
+
+    if _APPROVAL_HANDLER is not None:
+        return confirm_action("other", prompt_msg, default=default)
 
     if os.environ.get("EVREN_HEADLESS") == "1" or not sys.stdin or not sys.stdin.isatty():
         # Başsız/borulu kipte soruyu yanıtlayacak kimse yok: input() takılır. Varsayılan geçerli olur

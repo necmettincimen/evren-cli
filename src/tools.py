@@ -29,6 +29,8 @@ from src.tool_args import (
 )
 from src.proc_utils import run_with_tree_kill, stream_with_tree_kill
 from src.ui import (
+    ask_text,
+    confirm_action,
     print_diff,
     prompt_confirm,
     print_warning,
@@ -627,6 +629,17 @@ def _is_probe_target(target: object) -> bool:
     return isinstance(target, str) and bool(_PROBE_TARGET_RE.match(target))
 
 
+def _confirm(kind: str, title: str, detail: str = "", default: bool = False,
+             proposal: dict | None = None) -> bool:
+    """Terminal: this module's prompt_confirm (tests patch it); a front end
+    with an approval handler (--stdio) gets the full request."""
+    from src import ui
+
+    if ui._APPROVAL_HANDLER is None:
+        return prompt_confirm(title, default=default)
+    return confirm_action(kind, title, detail=detail, default=default, proposal=proposal)
+
+
 def request_approval(kind: str, auto_approve: bool = False, **info) -> str | None:
     """Central approval gate for every tool that needs user consent.
 
@@ -636,29 +649,35 @@ def request_approval(kind: str, auto_approve: bool = False, **info) -> str | Non
     if auto_approve or EVREN_AUTO_APPROVE:
         return None
     if kind == "edit":
-        ok = prompt_confirm(f"'{info['path']}' dosyasındaki değişiklik uygulansın mı?", default=True)
+        ok = _confirm("edit", f"'{info['path']}' dosyasındaki değişiklik uygulansın mı?",
+                            detail=info['path'], default=True, proposal=info.get('proposal'))
         deny = "İPTAL EDİLDİ: Kullanıcı bu değişikliği onaylamadı. Lütfen aynı değişikliği tekrar denemeyin ve kullanıcıya ne yapmak istediğini sorun."
     elif kind == "write":
-        ok = prompt_confirm(f"'{info['path']}' dosyası {info['action']} mı?", default=True)
+        ok = _confirm("edit", f"'{info['path']}' dosyası {info['action']} mı?",
+                            detail=info['path'], default=True, proposal=info.get('proposal'))
         deny = "İPTAL EDİLDİ: Kullanıcı dosya yazma işlemini onaylamadı. Lütfen aynı işlemi tekrar denemeyin."
     elif kind == "command":
         print_warning(f"Ajan terminal komutu çalıştırmak istiyor:\n  > {info['shown']}")
-        ok = prompt_confirm("Bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
+        ok = _confirm("command", "Bu komutun çalıştırılmasına izin veriyor musunuz?",
+                            detail=info['shown'], default=False)
         deny = "İPTAL EDİLDİ: Kullanıcı terminal komutunun çalıştırılmasını reddetti."
     elif kind == "background":
         print_warning(f"Ajan arka planda terminal komutu çalıştırmak istiyor:\n  > {info['shown']}")
-        ok = prompt_confirm("Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?", default=False)
+        ok = _confirm("command", "Bu komutun arka planda çalıştırılmasına izin veriyor musunuz?",
+                            detail=info['shown'], default=False)
         deny = "İPTAL EDİLDİ: Kullanıcı arka plan komutunun çalıştırılmasını reddetti."
     elif kind == "plan":
-        ok = prompt_confirm(f"'{info['path']}' planı kaydedilsin mi?", default=True)
+        ok = _confirm("other", f"'{info['path']}' planı kaydedilsin mi?", detail=info['path'], default=True)
         deny = "İPTAL EDİLDİ: Kullanıcı plan kaydını onaylamadı."
     elif kind == "ssh_run":
         print_warning(f"Ajan uzak sunucuda komut çalıştırmak istiyor:\n  [{info['alias']}] > {info['shown']}")
-        ok = prompt_confirm(f"'{info['alias']}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?", default=False)
+        ok = _confirm("ssh", f"'{info['alias']}' sunucusunda bu komutun çalıştırılmasına izin veriyor musunuz?",
+                            detail=f"[{info['alias']}] {info['shown']}", default=False)
         deny = "İPTAL EDİLDİ: Kullanıcı uzak komutun çalıştırılmasını reddetti."
     elif kind == "ssh_write":
         print_warning(f"Ajan uzak sunucuda dosya yazmak istiyor:\n  [{info['alias']}] > {info['remote_path']} ({info['size']} karakter)")
-        ok = prompt_confirm(f"'{info['alias']}:{info['remote_path']}' uzak dosyası yazılsın mı?", default=False)
+        ok = _confirm("ssh", f"'{info['alias']}:{info['remote_path']}' uzak dosyası yazılsın mı?",
+                            detail=f"[{info['alias']}] {info['remote_path']} ({info['size']} karakter)", default=False)
         deny = "İPTAL EDİLDİ: Kullanıcı uzak dosya yazma işlemini onaylamadı."
     else:
         return None
@@ -752,9 +771,11 @@ def tool_edit_file(
     print_diff(diff, filename=path)
 
     # Prompt user for confirmation unless auto_approve
-    denied = request_approval("edit", auto_approve, path=path)
+    proposal = {"path": path, "old": old_content, "new": new_content}
+    denied = request_approval("edit", auto_approve, path=path, proposal=proposal)
     if denied:
         return denied
+    new_content = proposal["new"]
 
     # Diff-based write: only the changed line range is rewritten, so a large
     # file is never re-emitted in full for a one-line edit.
@@ -829,9 +850,11 @@ def tool_write_file(
         print_info(f"Yeni dosya oluşturuluyor: {path} ({len(content)} karakter)")
 
     action_name = "üzerine yazılsın" if resolved.exists() else "oluşturulsun"
-    denied = request_approval("write", auto_approve, path=path, action=action_name)
+    proposal = {"path": path, "old": old_content if resolved.exists() else "", "new": content}
+    denied = request_approval("write", auto_approve, path=path, action=action_name, proposal=proposal)
     if denied:
         return denied
+    content = proposal["new"]
 
     write_ok, backup_path, write_err = safe_write_file(path, content, root)
     if not write_ok:
@@ -1448,14 +1471,19 @@ def tool_ask_user(
     confirm answer (used to trigger plan -> normal transition).
     """
     if kind == "text":
-        try:
-            answer = input(f"\n[Model sorusu] {question}\n> ").strip()
-        except (KeyboardInterrupt, EOFError):
+        answer = ask_text(question)
+        if answer is None:
             return "İPTAL EDİLDİ: Kullanıcı yanıt vermedi.", False
         return f"Kullanıcı yanıtı: {answer}", False
 
     # confirm
-    confirmed = prompt_confirm(f"[Model sorusu] {question}", default=False)
+    from src import ui
+
+    if ui._APPROVAL_HANDLER is not None:
+        answer = (ask_text(question, options=["evet", "hayır"]) or "").strip().lower()
+        confirmed = answer in ("evet", "e", "yes", "y")
+    else:
+        confirmed = prompt_confirm(f"[Model sorusu] {question}", default=False)
     if confirmed:
         return "Kullanıcı ONAYLADI.", True
     return "Kullanıcı REDDETTİ.", False

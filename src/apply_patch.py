@@ -76,7 +76,7 @@ def _apply(orig: list[str], hunks: list[dict]) -> list[str]:
 
 def tool_apply_patch(patch: str, workspace_root: Path, auto_approve: bool = False) -> str:
     from src.config import EVREN_AUTO_APPROVE
-    from src.ui import print_info, prompt_confirm
+    from src.ui import confirm_action, print_info
 
     files = parse_patch(patch or "")
     if not files:
@@ -105,7 +105,8 @@ def tool_apply_patch(patch: str, workspace_root: Path, auto_approve: bool = Fals
         plan.append((target, rel, text, f["old"] is not None))
     print_info("Yama önizlemesi:\n" + (patch if len(patch) < 6000 else patch[:6000] + "\n..."))
     if not (auto_approve or EVREN_AUTO_APPROVE):
-        if not prompt_confirm(f"{len(plan)} dosyaya yama uygulansın mı?", default=False):
+        if not confirm_action("edit", f"{len(plan)} dosyaya yama uygulansın mı?",
+                              detail=patch[:6000], default=False):
             return "İPTAL EDİLDİ: Kullanıcı yamayı onaylamadı."
     done = []
     for target, rel, text, existed in plan:

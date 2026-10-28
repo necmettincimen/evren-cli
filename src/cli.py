@@ -561,6 +561,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allowed-tools", default=None, help="Başsız kip: onaysız çalışacak araçlar (virgülle: edit_file,run_command)")
     parser.add_argument("--yes", action="store_true", help="Başsız kip: tüm onayları otomatik ver")
     parser.add_argument("--continue", dest="continue_last", action="store_true", help="Son oturumu devam ettir")
+    parser.add_argument(
+        "--stdio", action="store_true",
+        help="Editör eklentisi kipi: stdin/stdout üzerinden NDJSON protokolü (docs/stdio-protocol.md)",
+    )
 
     _add_backup_arg(parser)
 
@@ -722,6 +726,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.stdio and not args.subcommand:
+        from src.stdio_server import run_stdio
+
+        sys.exit(run_stdio(args))
 
     if args.print_prompt and not args.subcommand:
         from src.extras import run_headless

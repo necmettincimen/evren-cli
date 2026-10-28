@@ -148,7 +148,8 @@ def resume_last_task(session, run_agent: Callable) -> None:
 # --------------------------------------------------------------------------- #
 
 MENTION_MAX_LINES = 400
-_MENTION_RE = re.compile(r"(?<![\w@])@([\w./\\-]+)(?::(\d+)-(\d+))?")
+# @path, @path:10-40 and the editor form @path#L10-40 (VS Code extension).
+_MENTION_RE = re.compile(r"(?<![\w@])@([\w./\\-]+)(?:(?::|#L)(\d+)-L?(\d+))?")
 
 
 def expand_mentions(text: str, workspace_root) -> tuple[str, list[str]]:
