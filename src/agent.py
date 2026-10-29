@@ -1143,6 +1143,7 @@ class AgentSession:
         )
         self._listing_done = False
         self._reset_repeat_guard()
+        self._todo_mark = self._todo_writes()
         # Outputs of earlier tasks in this session are re-sent on every step of
         # the new one; keep only their head and tail (a REPL session reached 270
         # messages of old grep output and ~70k prompt tokens per step).
@@ -1491,6 +1492,7 @@ class AgentSession:
         self._loop_releases = 0
         self._loop_exhausted = False
         self._approval_nudges = 0
+        self._todo_nudges = 0
         # Verification gate (plan 3.3): code written, no test/build ran since.
         self._code_written = False
         self._verified_since_write = False
@@ -1895,6 +1897,24 @@ class AgentSession:
             self._probe_note = ""
         return step_notes
 
+    @staticmethod
+    def _todo_writes() -> int:
+        try:
+            from src.todos import get_store
+
+            return get_store().writes
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _open_todos() -> list[dict]:
+        try:
+            from src.todos import get_store
+
+            return [t for t in get_store().snapshot() if t["status"] != "completed"]
+        except Exception:
+            return []
+
     def _idle_note(self) -> str:
         """Nudges a planned change task that keeps reading/testing without editing.
 
@@ -1906,12 +1926,7 @@ class AgentSession:
             self._idle_steps = 0
             return ""
         self._idle_steps = getattr(self, "_idle_steps", 0) + 1
-        try:
-            from src.todos import get_store
-
-            open_items = [t for t in get_store().snapshot() if t["status"] != "completed"]
-        except Exception:
-            open_items = []
+        open_items = self._open_todos()
         if not open_items:
             # No plan. A create/change task that keeps exploring (a Dockerfile
             # task read 15 files first) gets "write now"; others "conclude".
@@ -2372,6 +2387,30 @@ class AgentSession:
                 self._verify_note = (
                     "[EVREN] Kullanıcı görevde zaten düzelt/ekle/uygula dedi; onay bekleme. "
                     "Önerdiğin değişikliği şimdi uygula ve doğrula."
+                )
+                continue
+            # Only a list written during this task: a leftover from an earlier
+            # task must not push an unrelated new one.
+            open_todos = self._open_todos() if self._todo_writes() != getattr(self, "_todo_mark", 0) else []
+            if (
+                effective_mode == AgentMode.NORMAL
+                and open_todos
+                and getattr(self, "_todo_nudges", 0) < 2
+                and not getattr(self, "_loop_exhausted", False)
+                and step_count < max_steps
+                and _IMPERATIVE_RE.search(self.task_goal or "")
+            ):
+                # The editor showed "Yapılacaklar 0/6" while the model stopped
+                # with "devam de": the list was never updated and the task
+                # was handed back with steps still open.
+                self._todo_nudges = getattr(self, "_todo_nudges", 0) + 1
+                self._loop_blocks = 0
+                listing = "; ".join(f"[{t['status']}] {t['content'][:80]}" for t in open_todos[:6])
+                self._verify_note = (
+                    "[EVREN] Yapılacaklar listesinde açık maddeler var: " + listing + ". "
+                    "Biten maddeleri todo_write ile completed yap ve sıradakine geç; kullanıcıdan "
+                    "'devam' bekleme. Yalnız kullanıcı girdisi/sır gerçekten gerekiyorsa listeyi "
+                    "güncelleyip engeli tek cümleyle bildir."
                 )
                 continue
             # Content was already streamed live; only render markdown if it

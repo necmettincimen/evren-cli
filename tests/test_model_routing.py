@@ -64,9 +64,11 @@ class RoutingTest(unittest.TestCase):
         self.client.chat_stream_assembled.side_effect = reply
 
     def test_large_brief_is_planned_then_executed_without_thinking(self):
-        self._script([response("1. a.py içinde f'yi düzelt\n2. pytest"), response("bitti")])
+        self._script([response("1. a.py içinde f'yi düzelt\n2. pytest")] + [response("bitti")] * 3)
         self.assertEqual(self.session.run_step(BIG_BRIEF), "bitti")
-        planner, executor = self.calls
+        # The planned steps stay open, so the executor is nudged twice (open todos).
+        planner, executor = self.calls[:2]
+        self.assertEqual(len(self.calls), 4)
         self.assertEqual(planner["model"], "planner-m")
         self.assertIsNone(planner["thinking"])
         self.assertNotIn("edit_file", planner["tools"])  # planner is read-only

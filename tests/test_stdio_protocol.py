@@ -69,7 +69,7 @@ class Harness:
         self.cond = threading.Condition()
         client = _client(replies)
         self.server = StdioServer(
-            lambda: AgentSession(client, workspace_root=workspace), self._write, workspace, "3.10.0",
+            lambda: AgentSession(client, workspace_root=workspace), self._write, workspace, "3.11.0",
         )
         self.server.install()
 

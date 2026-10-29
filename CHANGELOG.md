@@ -5,6 +5,15 @@ Bu projedeki tüm önemli değişiklikler bu dosyada belgelenir.
 Format [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) standardına,
 sürümleme ise [Semantic Versioning](https://semver.org/lang/tr/) (SemVer) kurallarına dayanır.
 
+## [3.11.0] - 2026-10-29
+
+### Eklendi
+- Doğrulama kapısı: `plan_agent.report_ready_for_test()` — kart "test"e ancak raporda dolu bir `## KANIT` bölümü varsa ve `SONUÇ` GEÇTİ / ZATEN ÇÖZÜLMÜŞ ise geçer. Rapor adı `dogrula-` ile başlıyorsa (ya da adımda `require_evidence: true` varsa) KANIT'sız rapor sözleşmeyi karşılamaz, ajan yeniden denenir. `SONUÇ: GEÇTİ` ve `SONUÇ: KALDI` tanınır.
+- Açık todo dürtmesi: görev listesinde açık madde varken model durursa en çok iki kez "biten maddeleri completed yap, sıradakine geç" notu verilir. Önceki görevden kalan liste sayılmaz (`TodoStore.writes`).
+
+### Değişti
+- Paralellik tavanı `EVREN_MAX_PARALLEL` (varsayılan 6): `parallel` adımı `max_workers` değerini bununla sınırlar. Ayrıca `~/.evren/slots/` dosya kilitleriyle aynı makinedeki tüm evren süreçleri toplamda bu kadar ajan koşturur. Ölçüm (usage.jsonl, 2026-10-29): 8 ve altı eşzamanlı istekte medyan 5-6 sn, 9 ve üstünde 16 sn / p90 61 sn.
+
 ## [3.10.0] - 2026-10-28
 
 ### Eklendi

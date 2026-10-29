@@ -31,6 +31,9 @@ class TodoStore:
 
     def __init__(self) -> None:
         self._items: list[TodoItem] = []
+        # Bumped on every successful write: lets the agent tell a list written
+        # during the current task from one left over by an earlier task.
+        self.writes = 0
 
     def write(self, items: list[dict] | list[TodoItem]) -> None:
         """Replaces the whole list with `items` (dicts or TodoItems).
@@ -63,6 +66,7 @@ class TodoStore:
                 f"Aynı anda yalnızca bir madde in_progress olabilir ({len(in_progress)} verildi)."
             )
         self._items = parsed
+        self.writes += 1
 
     def render(self) -> str:
         """Returns the compact checklist text (empty string when no items)."""

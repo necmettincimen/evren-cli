@@ -329,3 +329,30 @@ def test_previous_findings_without_headings_uses_tail():
     out = plan_agent._previous_findings("a" * 10000 + "SON")
     assert out.endswith("SON") and len(out) < 4000
     assert plan_agent._previous_findings("") == ""
+
+
+def test_report_ready_for_test_needs_evidence_and_pass(tmp_path):
+    ok = tmp_path / "dogrula-a.md"
+    ok.write_text("SONUÇ: GEÇTİ\n\n## KANIT\n\nGET /api/x -> 200 totalCount 16\n", encoding="utf-8")
+    done = tmp_path / "dogrula-b.md"
+    done.write_text("SONUÇ: ZATEN ÇÖZÜLMÜŞ\n\n## KANIT\n\nlog satırı\n", encoding="utf-8")
+    empty = tmp_path / "dogrula-c.md"
+    empty.write_text("SONUÇ: GEÇTİ\n\n## KANIT\n\n## Sonra\n", encoding="utf-8")
+    failed = tmp_path / "dogrula-d.md"
+    failed.write_text("SONUÇ: KALDI\n\n## KANIT\n\n500 döndü\n", encoding="utf-8")
+    assert plan_agent.report_ready_for_test(ok)
+    assert plan_agent.report_ready_for_test(done)
+    assert not plan_agent.report_ready_for_test(empty)
+    assert not plan_agent.report_ready_for_test(failed)
+    assert plan_agent.report_outcome(failed) == "failed"
+    assert not plan_agent.report_ready_for_test(tmp_path / "yok.md")
+
+
+def test_parallel_cap_and_cross_process_slot(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_agent.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setenv("EVREN_MAX_PARALLEL", "2")
+    assert plan_agent._parallel_cap() == 2
+    with plan_agent._agent_slot() as a, plan_agent._agent_slot() as b:
+        assert {a, b} == {0, 1}
+    with plan_agent._agent_slot() as c:
+        assert c == 0  # slotlar bırakıldı

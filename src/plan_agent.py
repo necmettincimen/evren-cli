@@ -15,6 +15,7 @@ adımları eşzamanlı koşturur (agent alt adımlarında worktree varsayılan a
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -107,9 +108,28 @@ _OUTCOME_RE = re.compile(
     r"(?P<front>FRONTEND)|"
     r"(?P<lib>K[ÜüUu]T[ÜüUu]PHANE)|"
     r"(?P<unk>BEL.RS.Z)|"
-    r"(?P<partial>K.SM.))", re.I | re.M)  # KISMİ: kod değişti ama iş tamamen bitmedi (KALAN yazılır); değişiklik sözleşmesi geçerli
+    r"(?P<partial>K.SM.)|"  # KISMİ: kod değişti ama iş tamamen bitmedi (KALAN yazılır); değişiklik sözleşmesi geçerli
+    r"(?P<passed>GE[ÇçCc]T.)|"  # doğrulama raporu: test ortamında uçtan uca geçti
+    r"(?P<failed>KALDI))", re.I | re.M)  # doğrulama raporu: hata sürüyor
 # Kod değişikliği gerektirmeyen GEÇERLİ sonuçlar: değişiklik/commit sözleşmesinden muaf, rapor şartı korunur.
-NO_CHANGE_OUTCOMES = {"done", "front", "lib", "unk"}
+NO_CHANGE_OUTCOMES = {"done", "front", "lib", "unk", "passed", "failed"}
+# KANIT bölümü: başlık + en az bir dolu satır (istek/yanıt, kayıt, log).
+_EVIDENCE_RE = re.compile(r"^#+\s*KANIT\b[^\n]*\n+(?!\s*(?:#|$))\s*\S", re.I | re.M)
+_NOTE_NO_EVIDENCE = ("\n\n[UYARI] Doğrulama raporunda dolu bir `## KANIT` bölümü olmalı: test ortamındaki istek/yanıt, "
+                     "kayıt ya da log çıktısını olduğu gibi yaz. Derleme geçti demek kanıt değildir.")
+
+
+def report_has_evidence(path: Path) -> bool:
+    try:
+        return bool(_EVIDENCE_RE.search(path.read_text(encoding="utf-8", errors="replace")))
+    except OSError:
+        return False
+
+
+def report_ready_for_test(path: Path) -> bool:
+    """Kart "test"e ancak KANIT'lı ve SONUÇ'u GEÇTİ / ZATEN ÇÖZÜLMÜŞ olan raporla geçer (2026-10: derleme geçti
+    diye "çözüldü" denen kartlar "hata devam ediyor" ile geri açıldı)."""
+    return report_outcome(path) in ("passed", "done") and report_has_evidence(path)
 
 
 def report_outcome(path: Path) -> str | None:
@@ -423,6 +443,10 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
             elif report and outcome is None and want_outcome:
                 missing.append("rapor sonuç satırı yok")
                 notes = notes + [_NOTE_NO_OUTCOME]
+            elif report and (step.get("require_evidence") or "dogrula" in Path(report).name) \
+                    and not report_has_evidence(root / report):
+                missing.append("KANIT bölümü yok")
+                notes = notes + [_NOTE_NO_EVIDENCE]
             elif want_trace and outcome in ("fixed", "partial") and not report_has_trace(root / report):
                 missing.append("VERİ YOLU bölümü yok")
                 notes = notes + [_NOTE_NO_TRACE]
@@ -496,12 +520,60 @@ def op_agent(step: dict, root: Path, dry: bool, resolve) -> str:
         raise
 
 
+def _parallel_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("EVREN_MAX_PARALLEL", "6")))
+    except ValueError:
+        return 6
+
+
+@contextlib.contextmanager
+def _agent_slot():
+    """Süreçler arası ajan slotu: aynı makinedeki tüm evren süreçleri toplam EVREN_MAX_PARALLEL ajan koşturur.
+
+    2026-10-29 ölçümü (usage.jsonl): ≤8 eşzamanlı istekte medyan 5-6 sn, ≥9'da 16 sn / p90 61 sn;
+    sağlayıcı yük altında yavaşlıyor, fazla paralellik toplam süreyi uzatıyordu.
+    """
+    cap = _parallel_cap()
+    slots = Path.home() / ".evren" / "slots"
+    slots.mkdir(parents=True, exist_ok=True)
+    while True:
+        for i in range(cap):
+            fh = open(slots / f"slot-{i}.lock", "a+b")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                fh.close()
+                continue
+            try:
+                yield i
+            finally:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                finally:
+                    fh.close()
+            return
+        time.sleep(2)
+
+
 def op_parallel(step: dict, root: Path, dry: bool, ops: dict, resolve, expand_fn, ctx: dict) -> str:
-    """Alt adımları eşzamanlı koşturur (`max_workers`, varsayılan 3). Hepsi bitince hataları toplayıp bildirir."""
+    """Alt adımları eşzamanlı koşturur (`max_workers`, varsayılan 3; tavan EVREN_MAX_PARALLEL=6). Hepsi bitince hataları toplayıp bildirir."""
     from concurrent.futures import ThreadPoolExecutor
 
     subs = step["steps"]
-    workers = max(1, int(step.get("max_workers", 3)))
+    workers = min(max(1, int(step.get("max_workers", 3))), _parallel_cap())
     base_label = step.get("_label", "parallel")
 
     def run(j_sub):
@@ -513,8 +585,9 @@ def op_parallel(step: dict, root: Path, dry: bool, ops: dict, resolve, expand_fn
         fn = ops.get(sub.get("op"))
         if fn is None:
             raise ValueError(f"parallel içinde desteklenmeyen adım: {sub.get('op')}")
-        if sub.get("op") == "agent":
-            return fn(sub, root, dry)
+        if sub.get("op") == "agent" and not dry:
+            with _agent_slot():
+                return fn(sub, root, dry)
         return fn(sub, root, dry)
 
     results: list[str] = []

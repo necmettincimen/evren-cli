@@ -62,6 +62,25 @@ class TestAgentLoop(unittest.TestCase):
         self.assertIn("unfinished", str(requests[1]))
         self.assertIn("kaldığın yerden", str(requests[1]).casefold())
 
+    def test_open_todos_keep_the_turn_going_at_most_twice(self):
+        from src.todos import get_store
+
+        requests = []
+
+        def reply(**kwargs):
+            requests.append(deepcopy(kwargs["messages"]))
+            if len(requests) == 1:
+                get_store().write([{"content": "runner yaz", "status": "in_progress"},
+                                   {"content": "paneli ekle", "status": "pending"}])
+            return response("Bir sonraki adım için devam deyin.")
+
+        self.addCleanup(get_store().clear)
+        self.client.chat_stream_assembled.side_effect = reply
+        self.session.run_step("e2e hub'ı kur ve uygula")
+        self.assertEqual(len(requests), 3)
+        self.assertIn("Yapılacaklar listesinde açık maddeler", str(requests[1]))
+        self.assertIn("paneli ekle", str(requests[1]))
+
     def test_unproductive_loops_stop_explicitly(self):
         cases = (
             (response("", "length"), "HATA:", 4),
